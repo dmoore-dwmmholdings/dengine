@@ -40,6 +40,8 @@ u32 de__ed_show_flags(const de_ep_list_str *names);
 
 void de__ed_gizmo_set_tool(const de_ep_gizmo_tool_params *q);
 void de__ed_gizmo_set_selection(const u64 *entities, u32 count);
+/** The selected entities into `out` (room for `cap`); returns how many are selected. */
+u32 de__ed_gizmo_selection(u64 *out, u32 cap);
 /** A pointer or key event of editor view `view`; `x`, `y` in source pixels. */
 void de__ed_gizmo_input(de__editor *ed, u32 view, const de__ed_cam *c, const de_ep_input_event *e,
                         f32 x, f32 y);
@@ -85,6 +87,9 @@ void de__ed_each_bounds(de__editor *ed,
 bool de__ed_entity_bounds(de__editor *ed, u64 e, de_dvec3 *min, de_dvec3 *max);
 /** True for a 2D view: orthographic, looking along a world axis. */
 bool de__ed_cam_flat(const de__ed_cam *c);
+/** The world-space ray through the view pixel (x, y): origin and unit direction (DENG-785: the
+ * scene view's UI world-panel pick). */
+void de__ed_cam_ray(const de__ed_cam *c, f32 x, f32 y, f64 origin[3], f32 direction[3]);
 /** A connection ended: no drag, no hover. */
 void de__ed_gizmo_reset(de__editor *ed);
 

@@ -2,6 +2,7 @@
 module rt_opacity;
 import bindless;
 import sprite_opacity;
+import "../sprite/sprite_vis";
 __exported import rt_types;
 import "../visbuffer/resolve_common";
 import "../visbuffer/vis_decode";
@@ -63,7 +64,7 @@ public bool de_rt_opacity(DeRtContext q,uint instance,uint primitive,float2 bary
 }
 
 public bool de_rt_material_opacity(DeResolvePoint r,DeGpuMaterial m,uint sampler) {
-    if(m.model==DE_GPU_MATERIAL_MODEL_SPRITE) {float3 p=de_resolve_object_pos(r);return de_sprite_opacity(m,float2(p.x,1-p.y),sampler);}
+    if(de_sprite_is(m)) {float3 p=de_resolve_object_pos(r);return de_sprite_opacity(m,float2(p.x,1-p.y),sampler);}
     if(m.alpha_mode!=DE_GPU_MATERIAL_ALPHA_MASK)return true;
     float a=m.base_color.a;
     uint tex=de_material_texture(m,0);

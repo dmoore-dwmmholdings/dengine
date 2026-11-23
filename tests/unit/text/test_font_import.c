@@ -2,7 +2,52 @@
 #define _CRT_SECURE_NO_WARNINGS /* Optional raw font evidence uses getenv/fopen. */
 #endif
 #include "font_test_util.h"
+#include "font_import_diagnostic.h"
 #include <stdlib.h>
+
+TEST(font, diagnostic_msdf_matches_original_buffers) {
+    const de__msdf_vertex shapes[][10] = {
+        {{DE_MSDF_MOVE, 0, 0, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 12, 0, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 12, 12, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 0, 12, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 0, 0, 0, 0, 0, 0}},
+        {{DE_MSDF_MOVE, 0, 0, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 12, 0, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 12, 12, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 0, 12, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 0, 0, 0, 0, 0, 0},
+         {DE_MSDF_MOVE, 6, 6, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 18, 6, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 18, 18, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 6, 18, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 6, 6, 0, 0, 0, 0}},
+    };
+    const u32 counts[] = {5, 10};
+    float original[32 * 32 * 4], traced[32 * 32 * 4];
+    u8 original_rgba[32 * 32 * 4], traced_rgba[32 * 32 * 4];
+    for (u32 i = 0; i < 2; ++i) {
+        memset(original, 0, sizeof original);
+        memset(traced, 0, sizeof traced);
+        memset(original_rgba, 0, sizeof original_rgba);
+        memset(traced_rgba, 0, sizeof traced_rgba);
+        ASSERT_EQ(
+            de__msdf_generate(shapes[i], counts[i], 1, 5, 5, 6, 32, 32, original, original_rgba),
+            DE_OK);
+        de_test_msdf_trace_reset(0);
+        EXPECT_FALSE(de_test_msdf_kernel_split_complete());
+        EXPECT_FALSE(de_test_msdf_distance_split_complete());
+        EXPECT_EQ(de_test_msdf_distance_queries(), 0);
+        ASSERT_EQ(
+            de_test_msdf_generate(shapes[i], counts[i], 1, 5, 5, 6, 32, 32, traced, traced_rgba),
+            DE_OK);
+        EXPECT_TRUE(de_test_msdf_kernel_split_complete());
+        EXPECT_TRUE(de_test_msdf_distance_split_complete());
+        EXPECT_EQ(de_test_msdf_distance_queries(), 32 * 32);
+        EXPECT_MEMEQ(original, traced, sizeof original);
+        EXPECT_MEMEQ(original_rgba, traced_rgba, sizeof original_rgba);
+    }
+}
 
 /* Optional full-byte artifacts for matched generator controls; never changes the oracle. */
 static void font_evidence(const char *name, const de_cook_result *cooked) {
@@ -92,6 +137,19 @@ static f32 getf(const u8 *p) {
     memcpy(&f, &u, 4);
     return f;
 }
+/* Flush each boundary so an ordinary CTest timeout still identifies the active cook. */
+static u64 determinism_cook_begin(u32 index) {
+    fprintf(stderr, "[font-determinism] cook=%u begin\n", index);
+    fflush(stderr);
+    return de_time_now_ns();
+}
+static void determinism_cook_end(u32 index, u64 start, de_result result,
+                                 const de_cook_result *cooked) {
+    u64 elapsed = de_time_now_ns() - start;
+    fprintf(stderr, "[font-determinism] cook=%u end result=%d elapsed_ns=%llu bytes=%llu\n", index,
+            (int)result, (unsigned long long)elapsed, (unsigned long long)cooked->size);
+    fflush(stderr);
+}
 TEST(font, charset_expansion) {
     u8 bits[0x110000 / 8] = {0};
     ASSERT_EQ(de__font_charset("latin-ext", bits, sizeof bits), DE_OK);
@@ -111,8 +169,15 @@ TEST(font, latin_metrics_and_determinism) {
     de_cook_result r = {0}, r2 = {0};
     /* This case compares independent complete cooks itself. Nested verification would do four
      * expensive imports; keep the same two-cook byte and metadata oracle without duplicating it. */
-    ASSERT_EQ(font_cook_with_verify("NotoSans.ttf", &s, 1, &r, DE_COOK_VERIFY_OFF), DE_OK);
-    ASSERT_EQ(font_cook_with_verify("NotoSans.ttf", &s, 1, &r2, DE_COOK_VERIFY_OFF), DE_OK);
+    u64 start = determinism_cook_begin(1);
+    de_result first_result = font_cook_diagnostic(1, "NotoSans.ttf", &s, 1, &r, DE_COOK_VERIFY_OFF);
+    determinism_cook_end(1, start, first_result, &r);
+    ASSERT_EQ(first_result, DE_OK);
+    start = determinism_cook_begin(2);
+    de_result second_result =
+        font_cook_diagnostic(2, "NotoSans.ttf", &s, 1, &r2, DE_COOK_VERIFY_OFF);
+    determinism_cook_end(2, start, second_result, &r2);
+    ASSERT_EQ(second_result, DE_OK);
     ASSERT_EQ(r.output_hash, r2.output_hash); /* Includes dependencies/subassets/extra sources. */
     ASSERT_EQ(r.dependency_count, r2.dependency_count);
     ASSERT_EQ(r.subasset_count, r2.subasset_count);

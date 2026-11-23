@@ -1,0 +1,5 @@
+# DENG-789 fixture: the shader_game manifest. Engine asset types only, so `de-cook cook` cooks it
+# without the game library. de_add_game(ASSETS) cooks it into game.dpak in Release and Shipping;
+# Debug and Dev cook tint.slang in-process from the copy in the game directory.
+[assets]
+"shaders/shader_game_tint" = { type = "shader", source = "tint.slang" }

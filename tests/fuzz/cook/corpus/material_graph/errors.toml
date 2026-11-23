@@ -1,0 +1,17 @@
+kind = "material"
+version = 1
+[[node]]
+id = "n1"
+type = "input.uv"
+[[node]]
+id = "n2"
+type = "math.add"
+[[node]]
+id = "n3"
+type = "output.base"
+[[link]]
+from = "n1.out"
+to = "n2.a"
+[[link]]
+from = "n2.out"
+to = "n2.b"

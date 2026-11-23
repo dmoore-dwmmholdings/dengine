@@ -31,6 +31,10 @@ typedef struct snap_field {
     u32 off, len;
 } snap_field;
 
+/* Every entity has one marker row (component 0, this field index, no bytes), so an entity with no
+ * components still shows in a diff as spawned or despawned. Never a changed field. */
+#define SNAP_MARK 0xFFFFFFFEu
+
 typedef struct ed_snap {
     u32 id; /* 0: free */
     de_world_snapshot ecs;
@@ -43,7 +47,7 @@ typedef struct ed_snap {
 typedef struct de__ed_session {
     ed_snap snaps[ED_MAX_SNAPS];
     u32 next_snap;
-    de_world_snapshot play;  /* taken on entering Play/Simulate from Edit */
+    de_world_snapshot play; /* taken on entering Play/Simulate from Edit */
     bool has_play;
     de_world_snapshot initial; /* at service start, for session.restart */
     bool has_initial;
@@ -88,13 +92,11 @@ static void send_state(de__editor *ed) {
     de__ed_send(ed, &w, DE_EP_KIND_NOTIFICATION);
 }
 
-/* Reload telemetry is main-thread only. A failed transport is left for the normal pump to
- * drop: dropping here runs area resets that can erase the reload's thread-local error chain. */
+/* Reload telemetry is main-thread only. It is queued to the IPC thread, which never drops the
+ * connection here: a failed transport reaches the next pump, so the area resets cannot erase the
+ * reload's thread-local error chain. */
 static void reload_send(de__editor *ed, mpack_writer_t *writer) {
-    const size_t bytes = mpack_writer_buffer_used(writer);
-    const mpack_error_t error = mpack_writer_destroy(writer);
-    if (error == mpack_ok)
-        (void)de__ed_crash_send(&ed->conn, DE_EP_KIND_NOTIFICATION, ed->note, bytes, ed->seq + 1);
+    (void)de__ed_send(ed, writer, DE_EP_KIND_NOTIFICATION);
 }
 
 void de__ed_game_reloading(de__host *h) {
@@ -178,7 +180,7 @@ static bool snap_encode(de__editor *ed, ed_snap *s) {
                 (void)de_type_fields(ed->e->types, ci->type, &fc);
             per += fc > 0 ? fc : 1u;
         }
-        cap += a->count * per;
+        cap += a->count * (per + 1u); /* + the entity's marker row */
     }
     s->fields = (snap_field *)DE_ALLOC(al, sizeof(snap_field) * (cap + 1), 8, DE_MEM_GENERAL);
     if (s->fields == NULL)
@@ -195,6 +197,7 @@ static bool snap_encode(de__editor *ed, ed_snap *s) {
             const ecs_chunk *ch = ecs_table_chunk(a, ci_);
             for (u32 r = 0; r < ch->count; ++r) {
                 const u64 ent = ecs_chunk_entities(ch)[r].bits;
+                s->fields[n++] = (snap_field){ent, 0, SNAP_MARK, 0, 0};
                 for (u32 i = 0; i < a->component_count; ++i) {
                     const ecs_component_info *ci = ecs_component_get(w, a->components[i]);
                     if (ci == NULL)
@@ -207,11 +210,13 @@ static bool snap_encode(de__editor *ed, ed_snap *s) {
                         s->fields[n++] = (snap_field){ent, a->components[i], 0xFFFFFFFFu, 0, 0};
                         continue;
                     }
-                    const u8 *data = (const u8 *)ecs_chunk_column(a, ch, col) + (size_t)r * ci->size;
+                    const u8 *data =
+                        (const u8 *)ecs_chunk_column(a, ch, col) + (size_t)r * ci->size;
                     for (u32 f = 0; f < fc && n < cap; ++f) {
                         mpack_writer_t mw;
                         mpack_writer_init(&mw, ed->note, ed->note_cap);
-                        de__ed_write_field(ed, &mw, ci->type, f, &fields[f], data + fields[f].offset);
+                        de__ed_write_field(ed, &mw, ci->type, f, &fields[f],
+                                           data + fields[f].offset);
                         const size_t len = mpack_writer_buffer_used(&mw);
                         if (mpack_writer_destroy(&mw) != mpack_ok)
                             continue;
@@ -240,7 +245,8 @@ static bool snap_encode(de__editor *ed, ed_snap *s) {
     qsort(s->fields, n, sizeof(snap_field), cmp_field);
     /* Keep the allocation sizes the free uses. */
     if (n != cap + 1) {
-        snap_field *exact = (snap_field *)DE_ALLOC(al, sizeof(snap_field) * (n + 1), 8, DE_MEM_GENERAL);
+        snap_field *exact =
+            (snap_field *)DE_ALLOC(al, sizeof(snap_field) * (n + 1), 8, DE_MEM_GENERAL);
         if (exact != NULL) {
             memcpy(exact, s->fields, sizeof(snap_field) * n);
             DE_FREE(al, s->fields, sizeof(snap_field) * (cap + 1));
@@ -327,6 +333,7 @@ static void on_set_mode(de__editor *ed, const de_ep_request *req, de_ep_arena *a
     }
     if (to == DE_EP_WORLD_MODE_EDIT && g_session.has_play) {
         (void)restore_world(ed, &g_session.play);
+        de__ed_edit_forget(ed); /* the inverses were captured in the play-time world */
         de_world_snapshot_free(de_heap_allocator(), &g_session.play);
         g_session.has_play = false;
     }
@@ -411,6 +418,7 @@ static void on_snap_restore(de__editor *ed, const de_ep_request *req, de_ep_aren
         de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "restore failed");
         return;
     }
+    de__ed_edit_forget(ed);
     de_ep_empty e;
     memset(&e, 0, sizeof e);
     de_ep_write_response_snapshot_restore(w, req->id, &e);
@@ -465,7 +473,8 @@ static void on_snap_diff(de__editor *ed, const de_ep_request *req, de_ep_arena *
     memset(&d, 0, sizeof d);
     d.spawned.items = (u64 *)de__ed_alloc(a, sizeof(u64) * (nb + 1));
     d.despawned.items = (u64 *)de__ed_alloc(a, sizeof(u64) * (na + 1));
-    d.changed.items = (de_ep_field_change *)de__ed_alloc(a, sizeof(de_ep_field_change) * (na + nb + 1));
+    d.changed.items =
+        (de_ep_field_change *)de__ed_alloc(a, sizeof(de_ep_field_change) * (na + nb + 1));
     de_ep_kv_raw *kv = (de_ep_kv_raw *)de__ed_alloc(a, sizeof(de_ep_kv_raw) * (na + nb + 1));
     if (!d.spawned.items || !d.despawned.items || !d.changed.items || !kv) {
         de__ed_error(w, req->id, DE_EP_ERR_BUSY, "snapshot.diff: too large for scratch memory");
@@ -493,9 +502,17 @@ static void on_snap_diff(de__editor *ed, const de_ep_request *req, de_ep_arena *
             ++i;
             continue;
         }
+        if (key->field == SNAP_MARK) { /* the entity is on both sides */
+            if (c <= 0)
+                ++i;
+            if (c >= 0)
+                ++j;
+            continue;
+        }
         bool differs = c != 0;
         if (c == 0)
-            differs = fa->len != fb->len || memcmp(sa->bytes + fa->off, sb->bytes + fb->off, fa->len) != 0;
+            differs = fa->len != fb->len ||
+                      memcmp(sa->bytes + fa->off, sb->bytes + fb->off, fa->len) != 0;
         if (differs) {
             const ecs_component_info *ci = ecs_component_get(ed->e->world, key->comp);
             if (cur == NULL || cur->entity != key->entity ||
@@ -515,7 +532,7 @@ static void on_snap_diff(de__editor *ed, const de_ep_request *req, de_ep_arena *
                 if (c == 0)
                     kv[nkv].value = (de_ep_raw){(const char *)sb->bytes + fb->off, fb->len};
                 else if (c > 0)
-                    kv[nkv].value = de__ed_raw_bool(a, true);  /* added */
+                    kv[nkv].value = de__ed_raw_bool(a, true); /* added */
                 else
                     kv[nkv].value = de__ed_raw_bool(a, false); /* removed */
                 ++nkv;
@@ -541,8 +558,22 @@ static void tick(de__editor *ed) {
     }
 }
 
+/* The connection ended. IPC: the engine "stops Play or Simulate and returns to Edit (restoring the
+ * pre-play snapshot, as Stop does)". Open transactions are the edit area's reset, which runs after
+ * this one, so this one must not forget them. */
 static void reset(de__editor *ed) {
-    (void)ed;
+    if (g_session.has_play) {
+        (void)restore_world(ed, &g_session.play);
+        de_world_snapshot_free(de_heap_allocator(), &g_session.play);
+        g_session.has_play = false;
+    }
+    if (ed->mode != DE_EP_WORLD_MODE_EDIT) {
+        DE_INFO(ed->log, "editor: mode %s -> Edit (IDE disconnected)",
+                de_ep_world_mode_name(ed->mode));
+        ed->mode = DE_EP_WORLD_MODE_EDIT;
+        game_systems(ed, false);
+    }
+    g_session.step_frames = 0;
     for (u32 i = 0; i < ED_MAX_SNAPS; ++i)
         if (g_session.snaps[i].id != 0)
             snap_free(&g_session.snaps[i]);

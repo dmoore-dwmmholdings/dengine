@@ -570,6 +570,8 @@ struct de_gpu_device {
      * the crash diagnostics state (report, breadcrumb rings, names, callback). */
     de_atomic_u32 lost;
     struct de__gpu_crash *crash;
+    /** DENG-432: global GPU drains (de_gpu_wait_idle and the deferred-push fallback). */
+    de_atomic_u64 wait_idles;
 };
 
 static inline void *de__gpu_device_payload(de_gpu_device *d) {
@@ -613,6 +615,8 @@ de_gpu_texture de__gpu_texture_create_placed(de_gpu_device *d, const de_gpu_text
 u32 de__gpu_collect(de_gpu_device *d);
 /** Objects waiting for the GPU before they are released. */
 u32 de__gpu_deferred_count(de_gpu_device *d);
+/** Global GPU drains since device creation (DENG-432 evidence: retirement needs none). */
+u64 de__gpu_wait_idle_count(de_gpu_device *d);
 /** Live objects of one kind (created, not destroyed). */
 u32 de__gpu_live_count(de_gpu_device *d, de__gpu_kind kind);
 /** Indices handed out in one bindless space. */
