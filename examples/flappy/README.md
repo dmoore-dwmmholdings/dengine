@@ -42,6 +42,11 @@ them. They are in `assets.toml` so the editor lists prefab assets and the prefab
 `editor_dide_conformance` run. Those checks write the source files and undo again, so a Debug or
 Dev build mounts the checkout writable.
 
+`--dev-dir <dir>` (DENG-796): when `<dir>/assets.toml` exists, the game loads that manifest as
+`dev:/assets.toml` instead of the checkout's. Pass a scratch copy of `examples/flappy` to let a
+test place `flappy/prefab/marker_pair` (two entities, each with a `Name`) without touching the
+checkout.
+
 ## Shipping it
 
 Debug and Dev load the checkout's sources (`assets.toml`, which names only files under this

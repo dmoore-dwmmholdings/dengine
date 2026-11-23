@@ -274,8 +274,15 @@ static de_result init(de_engine *e) {
 #if DE_HAS_COOKER
     /* Debug and Dev: the checkout's sources, cooked in-process. Writable so the editor can apply
      * a prefab override to its source (DENG-813); the game itself never writes there. */
-    DE_TRY(de_fs_mount("flappy", FLAPPY_ROOT, DE_MOUNT_WRITABLE, 0));
-    DE_TRY(de_asset_manifest_load(e->assets, "flappy:/examples/flappy/assets.toml"));
+    /* DENG-796: `--dev-dir <dir>` mounts a project copy as dev:/ (the host does it). When it holds
+     * an assets.toml, load that instead, so DIDE tests can place prefabs in a scratch copy of
+     * examples/flappy without touching the checkout. */
+    if (de_path_exists("dev:/assets.toml")) {
+        DE_TRY(de_asset_manifest_load(e->assets, "dev:/assets.toml"));
+    } else {
+        DE_TRY(de_fs_mount("flappy", FLAPPY_ROOT, DE_MOUNT_WRITABLE, 0));
+        DE_TRY(de_asset_manifest_load(e->assets, "flappy:/examples/flappy/assets.toml"));
+    }
 #elif !defined(DE_SHIPPING)
     /* Release has no cooker: it loads flappy.dpak beside the executable, which the flappy_pack
      * target cooks in a Dev build (Publish puts it there). The host mounts game:/'s packs. */
