@@ -484,6 +484,22 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_compile_definitions(test_editor_prefab PRIVATE
         DE_EDITOR_SAFETY_DATA_DIR="${DE_ROOT_DIR}/tests/unit/asset/data/scenes"
         DE_EDITOR_PREFAB_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/editor_prefab_tmp")
+    # DENG-814: the tests above run one per process; these run them all in one process, in the
+    # declared order and in two shuffled ones, so state one test leaves behind (a mount, a static)
+    # fails here. Each failing order is reproducible: the seed is in the command.
+    foreach(_seed 0 1 7)
+        if(_seed EQUAL 0)
+            set(_order "")
+            set(_suffix "")
+        else()
+            set(_order "--shuffle" "--seed=${_seed}")
+            set(_suffix "_shuffled_${_seed}")
+        endif()
+        add_test(NAME editor_prefab_one_process${_suffix}
+            COMMAND test_editor_prefab ${_order})
+        set_tests_properties(editor_prefab_one_process${_suffix} PROPERTIES
+            LABELS "unit;host;editor" TIMEOUT 120)
+    endforeach()
 endif()
 
 # DENG-676: production CPU gizmo paths, with no native graphics.

@@ -272,8 +272,9 @@ static de_result init(de_engine *e) {
     DE_TRY(de_text_attach(e->text, e->renderer, e->world));
 
 #if DE_HAS_COOKER
-    /* Debug and Dev: the checkout's sources, cooked in-process. */
-    DE_TRY(de_fs_mount("flappy", FLAPPY_ROOT, DE_MOUNT_READ_ONLY, 0));
+    /* Debug and Dev: the checkout's sources, cooked in-process. Writable so the editor can apply
+     * a prefab override to its source (DENG-813); the game itself never writes there. */
+    DE_TRY(de_fs_mount("flappy", FLAPPY_ROOT, DE_MOUNT_WRITABLE, 0));
     DE_TRY(de_asset_manifest_load(e->assets, "flappy:/examples/flappy/assets.toml"));
 #elif !defined(DE_SHIPPING)
     /* Release has no cooker: it loads flappy.dpak beside the executable, which the flappy_pack
