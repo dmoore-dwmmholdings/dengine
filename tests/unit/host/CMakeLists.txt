@@ -776,6 +776,19 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_NAV AND DE_HAS_P
     target_include_directories(test_editor_nav PRIVATE "${DE_ROOT_DIR}/src")
 endif()
 
+# DENG-831: world.streaming (protocol 1.26, DIDE-R173): stream.* and the topic stream.cells over
+# the world partition, on the world_small fixture (cooker builds).
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND TARGET de_streaming)
+    de_add_test(NAME editor_stream SOURCES test_editor_stream.c
+        LIBS de_host de_streaming de_asset de_task de_tp_dide_protocol LABELS unit host
+        TIMEOUT 120 CONFIGURATIONS Debug Dev Release)
+    if(TARGET test_editor_stream)
+        target_include_directories(test_editor_stream PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_definitions(test_editor_stream PRIVATE
+            "DE_EDSTREAM_FIXTURE_DIR=\"${DE_ROOT_DIR}/tests/assets/world_small\"")
+    endif()
+endif()
+
 # DENG-828: input.loadActionMaps and input.monitor.subscribe (protocol 1.24, DIDE-137).
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     de_add_test(NAME editor_input SOURCES test_editor_input.c

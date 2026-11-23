@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.25"
-#define DE_EP_SCHEMA_HASH "4385c062eff4110b"
+#define DE_EP_PROTOCOL_VERSION "1.26"
+#define DE_EP_SCHEMA_HASH "5e3a10dacd5d4be2"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -150,6 +150,40 @@ typedef enum de_ep_physics_asset_kind {
 } de_ep_physics_asset_kind;
 const char *de_ep_physics_asset_kind_name(de_ep_physics_asset_kind v);
 bool de_ep_physics_asset_kind_parse(de_ep_str s, de_ep_physics_asset_kind *out);
+
+typedef enum de_ep_stream_cell_state {
+    DE_EP_STREAM_CELL_STATE_UNLOADED,
+    DE_EP_STREAM_CELL_STATE_LOADING,
+    DE_EP_STREAM_CELL_STATE_LOADED,
+    DE_EP_STREAM_CELL_STATE_FAILED,
+} de_ep_stream_cell_state;
+const char *de_ep_stream_cell_state_name(de_ep_stream_cell_state v);
+bool de_ep_stream_cell_state_parse(de_ep_str s, de_ep_stream_cell_state *out);
+
+typedef enum de_ep_stream_force {
+    DE_EP_STREAM_FORCE_NONE,
+    DE_EP_STREAM_FORCE_LOAD,
+    DE_EP_STREAM_FORCE_UNLOAD,
+} de_ep_stream_force;
+const char *de_ep_stream_force_name(de_ep_stream_force v);
+bool de_ep_stream_force_parse(de_ep_str s, de_ep_stream_force *out);
+
+typedef enum de_ep_stream_job_state {
+    DE_EP_STREAM_JOB_STATE_RUNNING,
+    DE_EP_STREAM_JOB_STATE_DONE,
+    DE_EP_STREAM_JOB_STATE_CANCELED,
+    DE_EP_STREAM_JOB_STATE_FAILED,
+} de_ep_stream_job_state;
+const char *de_ep_stream_job_state_name(de_ep_stream_job_state v);
+bool de_ep_stream_job_state_parse(de_ep_str s, de_ep_stream_job_state *out);
+
+typedef enum de_ep_stream_source_kind {
+    DE_EP_STREAM_SOURCE_KIND_ENTITY,
+    DE_EP_STREAM_SOURCE_KIND_EDITOR,
+    DE_EP_STREAM_SOURCE_KIND_GAME,
+} de_ep_stream_source_kind;
+const char *de_ep_stream_source_kind_name(de_ep_stream_source_kind v);
+bool de_ep_stream_source_kind_parse(de_ep_str s, de_ep_stream_source_kind *out);
 
 typedef enum de_ep_ui_text_align {
     DE_EP_UI_TEXT_ALIGN_START,
@@ -361,6 +395,32 @@ typedef struct de_ep_spline_samples de_ep_spline_samples;
 typedef struct de_ep_stats_sample de_ep_stats_sample;
 typedef struct de_ep_stats_subscribe_params de_ep_stats_subscribe_params;
 typedef struct de_ep_step_params de_ep_step_params;
+typedef struct de_ep_stream_assignment de_ep_stream_assignment;
+typedef struct de_ep_stream_assignments de_ep_stream_assignments;
+typedef struct de_ep_stream_assignments_params de_ep_stream_assignments_params;
+typedef struct de_ep_stream_bounds de_ep_stream_bounds;
+typedef struct de_ep_stream_cancel_proxy_params de_ep_stream_cancel_proxy_params;
+typedef struct de_ep_stream_cell de_ep_stream_cell;
+typedef struct de_ep_stream_cell_key de_ep_stream_cell_key;
+typedef struct de_ep_stream_cell_rect de_ep_stream_cell_rect;
+typedef struct de_ep_stream_cells de_ep_stream_cells;
+typedef struct de_ep_stream_cells_changed de_ep_stream_cells_changed;
+typedef struct de_ep_stream_cells_params de_ep_stream_cells_params;
+typedef struct de_ep_stream_editor_sources_params de_ep_stream_editor_sources_params;
+typedef struct de_ep_stream_force_params de_ep_stream_force_params;
+typedef struct de_ep_stream_info de_ep_stream_info;
+typedef struct de_ep_stream_open_params de_ep_stream_open_params;
+typedef struct de_ep_stream_overlay_params de_ep_stream_overlay_params;
+typedef struct de_ep_stream_preview de_ep_stream_preview;
+typedef struct de_ep_stream_preview_cell de_ep_stream_preview_cell;
+typedef struct de_ep_stream_preview_params de_ep_stream_preview_params;
+typedef struct de_ep_stream_proxy_job de_ep_stream_proxy_job;
+typedef struct de_ep_stream_proxy_progress de_ep_stream_proxy_progress;
+typedef struct de_ep_stream_regenerate_proxy_params de_ep_stream_regenerate_proxy_params;
+typedef struct de_ep_stream_source de_ep_stream_source;
+typedef struct de_ep_stream_source_spec de_ep_stream_source_spec;
+typedef struct de_ep_stream_stats de_ep_stream_stats;
+typedef struct de_ep_stream_world de_ep_stream_world;
 typedef struct de_ep_subscribe_params de_ep_subscribe_params;
 typedef struct de_ep_subscribe_result de_ep_subscribe_result;
 typedef struct de_ep_surface de_ep_surface;
@@ -613,6 +673,11 @@ typedef struct de_ep_list_nav_tile_key {
     uint32_t count;
 } de_ep_list_nav_tile_key;
 
+typedef struct de_ep_list_stream_cell {
+    de_ep_stream_cell *items;
+    uint32_t count;
+} de_ep_list_stream_cell;
+
 typedef struct de_ep_list_system_info {
     de_ep_system_info *items;
     uint32_t count;
@@ -648,6 +713,11 @@ typedef struct de_ep_list_foliage_cell {
     uint32_t count;
 } de_ep_list_foliage_cell;
 
+typedef struct de_ep_list_stream_world {
+    de_ep_stream_world *items;
+    uint32_t count;
+} de_ep_list_stream_world;
+
 typedef struct de_ep_list_ui_theme_info {
     de_ep_ui_theme_info *items;
     uint32_t count;
@@ -667,6 +737,11 @@ typedef struct de_ep_list_peer_checksum {
     de_ep_peer_checksum *items;
     uint32_t count;
 } de_ep_list_peer_checksum;
+
+typedef struct de_ep_list_stream_source {
+    de_ep_stream_source *items;
+    uint32_t count;
+} de_ep_list_stream_source;
 
 typedef struct de_ep_list_terrain_layer {
     de_ep_terrain_layer *items;
@@ -688,6 +763,11 @@ typedef struct de_ep_list_loc_locale_info {
     uint32_t count;
 } de_ep_list_loc_locale_info;
 
+typedef struct de_ep_list_stream_cell_key {
+    de_ep_stream_cell_key *items;
+    uint32_t count;
+} de_ep_list_stream_cell_key;
+
 typedef struct de_ep_list_animation_joint {
     de_ep_animation_joint *items;
     uint32_t count;
@@ -708,6 +788,16 @@ typedef struct de_ep_list_input_action_state {
     uint32_t count;
 } de_ep_list_input_action_state;
 
+typedef struct de_ep_list_stream_assignment {
+    de_ep_stream_assignment *items;
+    uint32_t count;
+} de_ep_list_stream_assignment;
+
+typedef struct de_ep_list_stream_source_spec {
+    de_ep_stream_source_spec *items;
+    uint32_t count;
+} de_ep_list_stream_source_spec;
+
 typedef struct de_ep_list_debug_draw_category {
     de_ep_debug_draw_category *items;
     uint32_t count;
@@ -722,6 +812,11 @@ typedef struct de_ep_list_input_gamepad_state {
     de_ep_input_gamepad_state *items;
     uint32_t count;
 } de_ep_list_input_gamepad_state;
+
+typedef struct de_ep_list_stream_preview_cell {
+    de_ep_stream_preview_cell *items;
+    uint32_t count;
+} de_ep_list_stream_preview_cell;
 
 typedef struct de_ep_list_material_graph_param {
     de_ep_material_graph_param *items;
@@ -2208,6 +2303,221 @@ struct de_ep_step_params {
     uint32_t ticks;
 };
 
+struct de_ep_stream_cell_key {
+    int32_t cx;
+    int32_t cy;
+};
+
+/* Where an entity goes when the scene is saved and the world is cooked: the pinned cell if pinned, else the cell that holds its root's position. Children follow their root. */
+struct de_ep_stream_assignment {
+    uint64_t entity;
+    uint64_t root; /* the root entity whose position decides; the entity itself for a root */
+    int32_t cx;
+    int32_t cy;
+    de_ep_stream_cell_key auto_; /* the cell its position gives */
+    bool pinned; /* the root has the pin component */
+};
+
+struct de_ep_stream_assignments {
+    uint64_t revision; /* the world (ECS) revision these were computed at */
+    de_ep_list_stream_assignment items;
+};
+
+/* not_found while no world is open, or for an entity that does not exist. */
+struct de_ep_stream_assignments_params {
+    bool has_entities;
+    de_ep_list_u64 entities; /* absent: every root entity of the world's scenes */
+};
+
+/* A world-space box. */
+struct de_ep_stream_bounds {
+    de_ep_list_f64 min; /* [x, y, z] */
+    de_ep_list_f64 max; /* [x, y, z] */
+};
+
+/* Stops a proxy job; regenerated cells keep their new proxy. not_found when the job is over. */
+struct de_ep_stream_cancel_proxy_params {
+    uint32_t job;
+};
+
+struct de_ep_stream_cell {
+    int32_t cx;
+    int32_t cy;
+    de_ep_stream_cell_state state;
+    de_ep_stream_force force;
+    uint64_t bytes; /* resident bytes of the cell's bundle (every category); 0 unless loaded */
+    uint32_t entities; /* entities in the cell's scene data */
+    de_ep_stream_bounds bounds; /* the cell content's box: the cell square across the grid axes, the content's extent along the third */
+    bool has_distance;
+    double distance; /* m from the nearest source to the cell square; absent without sources */
+    bool proxy_visible; /* de_world_partition_proxy: the far proxy shows */
+    float proxy_alpha; /* the proxy's crossfade alpha, 1 -> 0 after the cell loads */
+    uint64_t proxy_revision; /* bumps when the proxy is regenerated; 0: none baked */
+    bool has_error;
+    de_ep_str error; /* state failed: why */
+};
+
+/* Cells with minX <= cx <= maxX and minY <= cy <= maxY. */
+struct de_ep_stream_cell_rect {
+    int32_t min_x;
+    int32_t min_y;
+    int32_t max_x;
+    int32_t max_y;
+};
+
+/* de_world_partition_stats, plus failed cells and resident bytes. */
+struct de_ep_stream_stats {
+    uint32_t cell_count; /* cells the world has (non-empty) */
+    uint32_t cells_loaded;
+    uint32_t cells_loading;
+    uint32_t cells_failed;
+    uint32_t loads_started; /* in the last update */
+    uint32_t unloads; /* in the last update */
+    uint64_t total_loads;
+    uint64_t total_unloads;
+    uint64_t bytes_resident; /* the sum of StreamCell.bytes */
+};
+
+struct de_ep_stream_cells {
+    de_ep_str world;
+    uint64_t revision;
+    de_ep_list_stream_cell cells; /* cells the world has, by cx then cy */
+    de_ep_list_stream_source sources; /* every source of the last update */
+    de_ep_stream_stats stats;
+};
+
+/* Topic stream.cells: at most once a frame, with the cells whose state, force, bytes, entities, bounds or proxy changed since the last one. */
+struct de_ep_stream_cells_changed {
+    de_ep_str world;
+    uint64_t revision;
+    de_ep_list_stream_cell cells;
+    de_ep_stream_stats stats;
+};
+
+/* not_found while no world is open. */
+struct de_ep_stream_cells_params {
+    bool has_region;
+    de_ep_stream_cell_rect region; /* absent: every cell the world has */
+};
+
+/* Replaces the editor's sources: the camera for "load around camera", a point for "simulate player here". They join the entity and game sources at the next update. invalid_params over maxEditorSources or for a bad point; wrong_mode in Play. A disconnect clears them. */
+struct de_ep_stream_editor_sources_params {
+    de_ep_list_stream_source_spec sources;
+};
+
+/* Edit mode only (wrong_mode otherwise). The forces belong to this IDE session: a disconnect or stream.open drops them. not_found for a cell the world does not have (nothing changes); invalid_params when forced loads would pass maxResidentCells. */
+struct de_ep_stream_force_params {
+    de_ep_list_stream_cell_key cells;
+    de_ep_stream_force force;
+};
+
+/* What the engine draws over editor viewports (debug draw, Edit and Simulate). The IDE sends the whole state each time. */
+struct de_ep_stream_overlay_params {
+    bool grid; /* cell borders, coloured by StreamCellState */
+    bool memory; /* each loaded cell's resident memory as a label */
+    bool sources; /* every source with its load and unload radius */
+    bool proxies; /* far-proxy bounds of the cells that show a proxy */
+    bool has_load_order;
+    de_ep_list_stream_cell_key load_order; /* cells to number 1, 2, ... (a stream.preview result) */
+};
+
+struct de_ep_stream_info {
+    uint64_t revision; /* bumps on every cell state, force, source or proxy change */
+    de_ep_list_stream_world worlds; /* every [worlds.<name>] of the active manifest; may be empty */
+    bool has_open;
+    de_ep_str open; /* the world whose partition is open; absent: none */
+    de_ep_list_u32 axes; /* the two world axes the cell grid spans, as indices into [x, y, z]: [0, 1] in DEngine (z up) */
+    uint32_t max_editor_sources; /* most sources stream.setEditorSources takes (the engine keeps 16 in all) */
+    uint32_t max_resident_cells; /* most cells loaded or loading at once; loads stop at the cap */
+    de_ep_str source_component; /* the reflected streaming source component */
+    de_ep_str cell_component; /* the component on a loaded cell's root entity */
+    de_ep_str pin_component; /* the reflected component that pins an entity to a cell */
+    bool proxy_bake; /* stream.regenerateProxy works; false until the engine bakes proxy meshes (DENG-830) */
+    de_ep_list_stream_source_spec editor_sources;
+    de_ep_stream_overlay_params overlay;
+    bool has_stats;
+    de_ep_stream_stats stats; /* absent while no world is open */
+};
+
+/* Opens the partition of world `world` for the editor (de_world_partition_open), closing the one that was open; its cells then stream around the sources every frame. Absent world: close. not_found for a world the manifest does not have; wrong_mode outside Edit (in Play the game opens its own). */
+struct de_ep_stream_open_params {
+    bool has_world;
+    de_ep_str world;
+};
+
+struct de_ep_stream_preview {
+    de_ep_list_stream_preview_cell loads; /* cells that would start loading, in order; cells already loaded or loading are not listed */
+    de_ep_list_stream_cell_key keep; /* loaded or loading cells that would stay */
+    de_ep_list_stream_cell_key unloads; /* loaded, loading or failed cells that would unload (outside every unload radius) */
+    bool capped; /* maxResidentCells stops some loads; they are not listed */
+};
+
+struct de_ep_stream_preview_cell {
+    int32_t cx;
+    int32_t cy;
+    uint32_t order; /* 1 = loads first: nearest first, then cx, then cy */
+    uint32_t frame; /* the update that starts its load, 1 = the next (maxLoadsPerFrame per update) */
+    double distance; /* m from the nearest source to the cell square */
+};
+
+/* What the partition would do if `sources` were the only sources, from the current cell states, without loading anything. not_found while no world is open; invalid_params for a bad point. */
+struct de_ep_stream_preview_params {
+    de_ep_list_stream_source_spec sources;
+    bool has_ignore_forces;
+    bool ignore_forces; /* absent: false; forced cells keep their force */
+};
+
+struct de_ep_stream_proxy_job {
+    uint32_t job;
+    uint32_t cells; /* cells queued */
+};
+
+/* Topic stream.proxy: sent as cells finish (at most once a frame) and once at the end. */
+struct de_ep_stream_proxy_progress {
+    uint32_t job;
+    de_ep_stream_job_state state;
+    uint32_t done;
+    uint32_t total;
+    de_ep_list_stream_cell_key cells; /* cells finished since the last stream.proxy of this job */
+    float ms; /* time since the job started */
+    bool has_error;
+    de_ep_str error; /* state failed: why, naming the cell */
+};
+
+/* Bakes the far-proxy mesh of cells again (simplified to proxyTriangleRatio) in the background; progress on topic stream.proxy. unsupported when StreamInfo.proxyBake is false; conflict while another proxy job runs; not_found for a cell the world does not have; invalid_params when the world has proxies off. */
+struct de_ep_stream_regenerate_proxy_params {
+    bool has_cells;
+    de_ep_list_stream_cell_key cells; /* absent: every cell */
+};
+
+struct de_ep_stream_source {
+    de_ep_stream_source_kind kind;
+    bool has_entity;
+    uint64_t entity; /* kind entity: the entity */
+    de_ep_list_f64 position; /* world space [x, y, z] */
+    float radius; /* m: the load radius in use (0 resolved to the world's) */
+};
+
+/* A point that wants the world around it loaded (de_streaming_source). */
+struct de_ep_stream_source_spec {
+    de_ep_list_f64 position; /* world space [x, y, z], m */
+    float radius; /* m; 0 = the world's loadRadius. Its unload radius is radius * unloadRadius / loadRadius */
+};
+
+/* One [worlds.<name>] of the active manifest with defaults applied (de_asset_world_info). */
+struct de_ep_stream_world {
+    de_ep_str name;
+    de_ep_str cells_dir; /* where de-cook world writes the cells */
+    uint32_t cell_size; /* m; always 256 */
+    float load_radius; /* m: a cell starts loading inside this distance of a source */
+    float unload_radius; /* m: and unloads outside this one (above loadRadius) */
+    uint32_t max_loads_per_frame; /* 1 to 64 */
+    uint32_t scene_count; /* scene assets the world cook splits into cells */
+    bool proxy_enabled; /* far proxies for unloaded cells */
+    float proxy_triangle_ratio; /* proxy simplification target, (0, 1] */
+    float proxy_fade_seconds; /* proxy-to-cell crossfade, 0 to 60 */
+};
+
 struct de_ep_subscribe_params {
     de_ep_str topic;
     bool has_filter;
@@ -3087,6 +3397,58 @@ void de_ep_write_stats_subscribe_params(mpack_writer_t *w, const de_ep_stats_sub
 void de_ep_read_stats_subscribe_params(mpack_reader_t *r, de_ep_arena *a, de_ep_stats_subscribe_params *out);
 void de_ep_write_step_params(mpack_writer_t *w, const de_ep_step_params *v);
 void de_ep_read_step_params(mpack_reader_t *r, de_ep_arena *a, de_ep_step_params *out);
+void de_ep_write_stream_assignment(mpack_writer_t *w, const de_ep_stream_assignment *v);
+void de_ep_read_stream_assignment(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_assignment *out);
+void de_ep_write_stream_assignments(mpack_writer_t *w, const de_ep_stream_assignments *v);
+void de_ep_read_stream_assignments(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_assignments *out);
+void de_ep_write_stream_assignments_params(mpack_writer_t *w, const de_ep_stream_assignments_params *v);
+void de_ep_read_stream_assignments_params(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_assignments_params *out);
+void de_ep_write_stream_bounds(mpack_writer_t *w, const de_ep_stream_bounds *v);
+void de_ep_read_stream_bounds(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_bounds *out);
+void de_ep_write_stream_cancel_proxy_params(mpack_writer_t *w, const de_ep_stream_cancel_proxy_params *v);
+void de_ep_read_stream_cancel_proxy_params(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_cancel_proxy_params *out);
+void de_ep_write_stream_cell(mpack_writer_t *w, const de_ep_stream_cell *v);
+void de_ep_read_stream_cell(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_cell *out);
+void de_ep_write_stream_cell_key(mpack_writer_t *w, const de_ep_stream_cell_key *v);
+void de_ep_read_stream_cell_key(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_cell_key *out);
+void de_ep_write_stream_cell_rect(mpack_writer_t *w, const de_ep_stream_cell_rect *v);
+void de_ep_read_stream_cell_rect(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_cell_rect *out);
+void de_ep_write_stream_cells(mpack_writer_t *w, const de_ep_stream_cells *v);
+void de_ep_read_stream_cells(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_cells *out);
+void de_ep_write_stream_cells_changed(mpack_writer_t *w, const de_ep_stream_cells_changed *v);
+void de_ep_read_stream_cells_changed(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_cells_changed *out);
+void de_ep_write_stream_cells_params(mpack_writer_t *w, const de_ep_stream_cells_params *v);
+void de_ep_read_stream_cells_params(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_cells_params *out);
+void de_ep_write_stream_editor_sources_params(mpack_writer_t *w, const de_ep_stream_editor_sources_params *v);
+void de_ep_read_stream_editor_sources_params(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_editor_sources_params *out);
+void de_ep_write_stream_force_params(mpack_writer_t *w, const de_ep_stream_force_params *v);
+void de_ep_read_stream_force_params(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_force_params *out);
+void de_ep_write_stream_info(mpack_writer_t *w, const de_ep_stream_info *v);
+void de_ep_read_stream_info(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_info *out);
+void de_ep_write_stream_open_params(mpack_writer_t *w, const de_ep_stream_open_params *v);
+void de_ep_read_stream_open_params(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_open_params *out);
+void de_ep_write_stream_overlay_params(mpack_writer_t *w, const de_ep_stream_overlay_params *v);
+void de_ep_read_stream_overlay_params(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_overlay_params *out);
+void de_ep_write_stream_preview(mpack_writer_t *w, const de_ep_stream_preview *v);
+void de_ep_read_stream_preview(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_preview *out);
+void de_ep_write_stream_preview_cell(mpack_writer_t *w, const de_ep_stream_preview_cell *v);
+void de_ep_read_stream_preview_cell(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_preview_cell *out);
+void de_ep_write_stream_preview_params(mpack_writer_t *w, const de_ep_stream_preview_params *v);
+void de_ep_read_stream_preview_params(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_preview_params *out);
+void de_ep_write_stream_proxy_job(mpack_writer_t *w, const de_ep_stream_proxy_job *v);
+void de_ep_read_stream_proxy_job(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_proxy_job *out);
+void de_ep_write_stream_proxy_progress(mpack_writer_t *w, const de_ep_stream_proxy_progress *v);
+void de_ep_read_stream_proxy_progress(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_proxy_progress *out);
+void de_ep_write_stream_regenerate_proxy_params(mpack_writer_t *w, const de_ep_stream_regenerate_proxy_params *v);
+void de_ep_read_stream_regenerate_proxy_params(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_regenerate_proxy_params *out);
+void de_ep_write_stream_source(mpack_writer_t *w, const de_ep_stream_source *v);
+void de_ep_read_stream_source(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_source *out);
+void de_ep_write_stream_source_spec(mpack_writer_t *w, const de_ep_stream_source_spec *v);
+void de_ep_read_stream_source_spec(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_source_spec *out);
+void de_ep_write_stream_stats(mpack_writer_t *w, const de_ep_stream_stats *v);
+void de_ep_read_stream_stats(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_stats *out);
+void de_ep_write_stream_world(mpack_writer_t *w, const de_ep_stream_world *v);
+void de_ep_read_stream_world(mpack_reader_t *r, de_ep_arena *a, de_ep_stream_world *out);
 void de_ep_write_subscribe_params(mpack_writer_t *w, const de_ep_subscribe_params *v);
 void de_ep_read_subscribe_params(mpack_reader_t *r, de_ep_arena *a, de_ep_subscribe_params *out);
 void de_ep_write_subscribe_result(mpack_writer_t *w, const de_ep_subscribe_result *v);
@@ -3319,6 +3681,16 @@ typedef enum de_ep_method {
     DE_EP_METHOD_SPLINE_INSTANCES,
     DE_EP_METHOD_SPLINE_SAMPLE,
     DE_EP_METHOD_STATS_SUBSCRIBE,
+    DE_EP_METHOD_STREAM_ASSIGNMENTS,
+    DE_EP_METHOD_STREAM_CANCEL_PROXY,
+    DE_EP_METHOD_STREAM_CELLS,
+    DE_EP_METHOD_STREAM_FORCE,
+    DE_EP_METHOD_STREAM_INFO,
+    DE_EP_METHOD_STREAM_OPEN,
+    DE_EP_METHOD_STREAM_OVERLAY,
+    DE_EP_METHOD_STREAM_PREVIEW,
+    DE_EP_METHOD_STREAM_REGENERATE_PROXY,
+    DE_EP_METHOD_STREAM_SET_EDITOR_SOURCES,
     DE_EP_METHOD_SUBSCRIBE,
     DE_EP_METHOD_TERRAIN_EXPORT_HEIGHTMAP,
     DE_EP_METHOD_TERRAIN_INFO,
@@ -3383,6 +3755,8 @@ const char *de_ep_method_capability(de_ep_method m);
 #define DE_EP_TOPIC_SESSION_RELOADING "session.reloading"
 #define DE_EP_TOPIC_SESSION_STATE "session.state"
 #define DE_EP_TOPIC_STATS_SAMPLE "stats.sample"
+#define DE_EP_TOPIC_STREAM_CELLS "stream.cells"
+#define DE_EP_TOPIC_STREAM_PROXY "stream.proxy"
 #define DE_EP_TOPIC_VIEW_FRAME "view.frame"
 #define DE_EP_TOPIC_VIEW_LOST "view.lost"
 #define DE_EP_TOPIC_WORLD_DELTA "world.delta"
@@ -3602,6 +3976,26 @@ bool de_ep_read_params_spline_sample(const de_ep_request *req, de_ep_arena *a, d
 void de_ep_write_response_spline_sample(mpack_writer_t *w, uint64_t id, const de_ep_spline_samples *result);
 bool de_ep_read_params_stats_subscribe(const de_ep_request *req, de_ep_arena *a, de_ep_stats_subscribe_params *out);
 void de_ep_write_response_stats_subscribe(mpack_writer_t *w, uint64_t id, const de_ep_subscribe_result *result);
+bool de_ep_read_params_stream_assignments(const de_ep_request *req, de_ep_arena *a, de_ep_stream_assignments_params *out);
+void de_ep_write_response_stream_assignments(mpack_writer_t *w, uint64_t id, const de_ep_stream_assignments *result);
+bool de_ep_read_params_stream_cancel_proxy(const de_ep_request *req, de_ep_arena *a, de_ep_stream_cancel_proxy_params *out);
+void de_ep_write_response_stream_cancel_proxy(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_stream_cells(const de_ep_request *req, de_ep_arena *a, de_ep_stream_cells_params *out);
+void de_ep_write_response_stream_cells(mpack_writer_t *w, uint64_t id, const de_ep_stream_cells *result);
+bool de_ep_read_params_stream_force(const de_ep_request *req, de_ep_arena *a, de_ep_stream_force_params *out);
+void de_ep_write_response_stream_force(mpack_writer_t *w, uint64_t id, const de_ep_stream_cells *result);
+bool de_ep_read_params_stream_info(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
+void de_ep_write_response_stream_info(mpack_writer_t *w, uint64_t id, const de_ep_stream_info *result);
+bool de_ep_read_params_stream_open(const de_ep_request *req, de_ep_arena *a, de_ep_stream_open_params *out);
+void de_ep_write_response_stream_open(mpack_writer_t *w, uint64_t id, const de_ep_stream_info *result);
+bool de_ep_read_params_stream_overlay(const de_ep_request *req, de_ep_arena *a, de_ep_stream_overlay_params *out);
+void de_ep_write_response_stream_overlay(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_stream_preview(const de_ep_request *req, de_ep_arena *a, de_ep_stream_preview_params *out);
+void de_ep_write_response_stream_preview(mpack_writer_t *w, uint64_t id, const de_ep_stream_preview *result);
+bool de_ep_read_params_stream_regenerate_proxy(const de_ep_request *req, de_ep_arena *a, de_ep_stream_regenerate_proxy_params *out);
+void de_ep_write_response_stream_regenerate_proxy(mpack_writer_t *w, uint64_t id, const de_ep_stream_proxy_job *result);
+bool de_ep_read_params_stream_set_editor_sources(const de_ep_request *req, de_ep_arena *a, de_ep_stream_editor_sources_params *out);
+void de_ep_write_response_stream_set_editor_sources(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_subscribe(const de_ep_request *req, de_ep_arena *a, de_ep_subscribe_params *out);
 void de_ep_write_response_subscribe(mpack_writer_t *w, uint64_t id, const de_ep_subscribe_result *result);
 bool de_ep_read_params_terrain_export_heightmap(const de_ep_request *req, de_ep_arena *a, de_ep_heightmap_export_params *out);
@@ -3696,6 +4090,8 @@ void de_ep_write_notify_session_reloaded(mpack_writer_t *w, uint64_t seq, const 
 void de_ep_write_notify_session_reloading(mpack_writer_t *w, uint64_t seq, const de_ep_reloading *data);
 void de_ep_write_notify_session_state(mpack_writer_t *w, uint64_t seq, const de_ep_session_state *data);
 void de_ep_write_notify_stats_sample(mpack_writer_t *w, uint64_t seq, const de_ep_stats_sample *data);
+void de_ep_write_notify_stream_cells(mpack_writer_t *w, uint64_t seq, const de_ep_stream_cells_changed *data);
+void de_ep_write_notify_stream_proxy(mpack_writer_t *w, uint64_t seq, const de_ep_stream_proxy_progress *data);
 void de_ep_write_notify_view_frame(mpack_writer_t *w, uint64_t seq, const de_ep_view_frame *data);
 void de_ep_write_notify_view_lost(mpack_writer_t *w, uint64_t seq, const de_ep_view_lost *data);
 void de_ep_write_notify_world_delta(mpack_writer_t *w, uint64_t seq, const de_ep_world_delta *data);

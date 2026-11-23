@@ -5,6 +5,7 @@
  * The fixture tests/assets/world_small/ holds a world "small" of 2 scenes and 7 entities, and its
  * committed cook output assets/worlds/small/ (4 cells and cells.toml). The tests cook it into two
  * scratch directories (build tree) and compare the bytes with each other and with the golden.
+ * world_cook_pin (DENG-831) cooks a scratch world whose roots carry DeWorldCellPin.
  * To refresh the golden after an intended format change:
  *   de-cook world tests/assets/world_small/assets.toml --world small
  */
@@ -132,6 +133,97 @@ TEST(streaming, world_cook_deterministic) {
     far[n] = '\0';
     EXPECT_TRUE(strstr(far, "position = [160.0, 160.125, 3.0]") != NULL);
     free(far);
+}
+
+/* ---- test_world_cook_pin (DENG-831) --------------------------------------------------------- */
+
+/* Writes a world "pin" of one scene `scene` into <TMP>/<dir>/ and cooks it into <TMP>/<dir>/out. */
+static int cook_pin_world(const char *dir, const char *scene, wc_cap *cap) {
+    tmp_mount();
+    static const char manifest[] =
+        "[project]\nasset_root = \".\"\n"
+        "[assets]\n\"levels/p\" = { type = \"scene\", source = \"p.scene.toml\" }\n"
+        "[worlds.pin]\nscenes = [\"levels/p\"]\n";
+    char vp[256], out[1024], toml[1024];
+    snprintf(vp, sizeof vp, "wctmp:/%s", dir);
+    if (de_dir_create(vp) != DE_OK)
+        return -1;
+    snprintf(vp, sizeof vp, "wctmp:/%s/out", dir);
+    if (de_dir_create(vp) != DE_OK)
+        return -1;
+    snprintf(vp, sizeof vp, "wctmp:/%s/assets.toml", dir);
+    if (de_file_write_all_atomic(vp, manifest, sizeof manifest - 1) != DE_OK)
+        return -1;
+    snprintf(vp, sizeof vp, "wctmp:/%s/p.scene.toml", dir);
+    if (de_file_write_all_atomic(vp, scene, strlen(scene)) != DE_OK)
+        return -1;
+    snprintf(toml, sizeof toml, "%s/%s/assets.toml", TMP, dir);
+    snprintf(out, sizeof out, "%s/%s/out", TMP, dir);
+    memset(cap, 0, sizeof *cap);
+    const char *argv[] = {toml, "--world", "pin", "--out", out};
+    de_cook_io io = {wc_cap_write, cap};
+    return de_cook_world_main(5, argv, &io);
+}
+
+/* Reads <TMP>/<dir>/out/<file> as a C string; NULL when missing. */
+static char *slurp_out(const char *dir, const char *file) {
+    char path[1024];
+    snprintf(path, sizeof path, "%s/%s/out/%s", TMP, dir, file);
+    size_t n = 0;
+    char *s = slurp(path, &n);
+    if (s == NULL)
+        return NULL;
+    char *z = (char *)realloc(s, n + 1);
+    if (z == NULL) {
+        free(s);
+        return NULL;
+    }
+    z[n] = '\0';
+    return z;
+}
+
+#define PIN_ENT(id, extra, x)                                                                      \
+    "[[entity]]\nid = \"" id "\"\n" extra "[entity.DeTransform]\nposition = [" x                    \
+    ", 10.0, 0.0]\nrotation = [0.0, 0.0, 0.0, 1.0]\nscale = [1.0, 1.0, 1.0]\n"
+
+TEST(streaming, world_cook_pin) {
+    /* 0x10 at (10, 10) is pinned to (3, -2) and takes its child 0x11 (at 300 m, cell (1, 0)
+     * alone) along; 0x12 (pin only, no transform) goes to (-4, 7); 0x13 stays by position. */
+    static const char scene[] =
+        PIN_ENT("0x0000000000000010", "", "10.0")
+        "[entity.DeWorldCellPin]\ncx = 3\ncy = -2\n"
+        PIN_ENT("0x0000000000000011", "parent = \"0x0000000000000010\"\n", "300.0")
+        "[[entity]]\nid = \"0x0000000000000012\"\n[entity.DeWorldCellPin]\ncx = -4\ncy = 7\n"
+        PIN_ENT("0x0000000000000013", "", "20.0");
+    wc_cap c;
+    ASSERT_EQ(cook_pin_world("pin_ok", scene, &c), DE_COOK_EXIT_OK);
+    if (strstr(c.out, "0 warnings") == NULL)
+        printf("%s", c.out);
+    EXPECT_TRUE(strstr(c.out, "4 entities in 3 cells, 0 warnings") != NULL);
+    char *pinned = slurp_out("pin_ok", "cell_3_-2.scene.toml");
+    char *pin_only = slurp_out("pin_ok", "cell_-4_7.scene.toml");
+    char *plain = slurp_out("pin_ok", "cell_0_0.scene.toml");
+    char *none = slurp_out("pin_ok", "cell_1_0.scene.toml");
+    ASSERT_TRUE(pinned != NULL && pin_only != NULL && plain != NULL);
+    EXPECT_TRUE(none == NULL);
+    EXPECT_TRUE(strstr(pinned, "0x0000000000000010") != NULL);
+    EXPECT_TRUE(strstr(pinned, "0x0000000000000011") != NULL);
+    EXPECT_TRUE(strstr(pin_only, "0x0000000000000012") != NULL);
+    EXPECT_TRUE(strstr(plain, "0x0000000000000013") != NULL);
+    EXPECT_TRUE(strstr(plain, "0x0000000000000010") == NULL);
+    free(pinned);
+    free(pin_only);
+    free(plain);
+    free(none);
+
+    /* A malformed pin is an error; the root falls back to its position. */
+    static const char bad[] =
+        PIN_ENT("0x0000000000000020", "", "10.0") "[entity.DeWorldCellPin]\ncx = \"a\"\ncy = 0\n";
+    EXPECT_EQ(cook_pin_world("pin_bad", bad, &c), DE_COOK_EXIT_ERRORS);
+    if (strstr(c.out, "DeWorldCellPin needs integer cx and cy") == NULL) {
+        printf("%s", c.out);
+        EXPECT_TRUE(false);
+    }
 }
 
 /* Bad arguments are a usage error and write nothing. */

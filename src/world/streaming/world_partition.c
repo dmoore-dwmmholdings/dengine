@@ -19,7 +19,14 @@
  *     cx, cy); loads start in that order, at most max_loads_per_frame and up to
  *     max_resident_cells cells loaded or loading.
  *  5. Far proxies step.
+ *
+ * DENG-831 (the editor's world.streaming, partition_editor.h): editor sources join the sources
+ * after the entity ones; a cell forced to load is a candidate and never unloads whatever the
+ * sources, a cell forced to unload never loads and unloads at the next update. A loaded cell
+ * records its resident bytes (de_asset_status_list), its entity count and its content's z extent
+ * when it is instantiated; a failed cell records why.
  */
+#include "partition_editor.h"
 #include "streaming_internal.h"
 
 #include <dengine/de_asset.h>
@@ -30,7 +37,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define WP_MAX_SOURCES (DE_ASSET_MAX_STREAMING_SOURCES + 48u)
+#define WP_MAX_SOURCES (DE_ASSET_MAX_STREAMING_SOURCES + 48u + DE__WP_MAX_EDITOR_SOURCES)
+#define WP_STATUS_MAX 1024u /* assets summed per cell bundle */
+#define WP_ERROR_MAX 96
+#define WP_TREE_DEPTH 32u
 #define WP_NAME_MAX 64
 #define WP_DEFAULT_MAX_RESIDENT 256u
 
@@ -42,6 +52,11 @@ typedef struct wp_cell {
     de_entity root;
     de_world_cell_state state;
     de__far_proxy proxy;
+    de__wp_force force;
+    u64 bytes;
+    u32 entities;
+    f64 zmin, zmax;
+    char error[WP_ERROR_MAX]; /* "" unless FAILED */
 } wp_cell;
 
 struct de_world_partition {
@@ -55,9 +70,13 @@ struct de_world_partition {
     size_t names_bytes;
     de__cell_key *cand;
     de_streaming_source src[WP_MAX_SOURCES];
+    de__wp_source src_info[WP_MAX_SOURCES];
     u32 src_count;
+    de_streaming_source ed_src[DE__WP_MAX_EDITOR_SOURCES];
+    u32 ed_src_count;
+    de_asset_status_entry *status; /* WP_STATUS_MAX */
     de_query q_src;
-    de_component c_src, c_cell, c_tf, c_gtf;
+    de_component c_src, c_cell, c_pin, c_tf, c_gtf;
     f32 load_r, unload_r;
     u32 max_loads, max_resident;
     bool proxy_enabled;
@@ -93,7 +112,8 @@ static de_result wp_component(de_world *w, de_type_desc d, de_component *out) {
     return DE_OK;
 }
 
-static de_result wp_register(de_world_partition *p) {
+de_result de__wp_register_components(de_world *w, de_component *src, de_component *cell,
+                                     de_component *pin) {
     static const de_field_info k_src[] = {
         DE_FIELD(DeStreamingSource, radius, DE_FK_F32, DE_FIELD_DEFAULT),
     };
@@ -101,8 +121,25 @@ static de_result wp_register(de_world_partition *p) {
         DE_FIELD(DeWorldCell, cx, DE_FK_I32, DE_FIELD_SNAPSHOT),
         DE_FIELD(DeWorldCell, cy, DE_FK_I32, DE_FIELD_SNAPSHOT),
     };
-    DE_TRY(wp_component(p->world, DE_TYPE_DESC(DeStreamingSource, 1, k_src), &p->c_src));
-    DE_TRY(wp_component(p->world, DE_TYPE_DESC(DeWorldCell, 1, k_cell), &p->c_cell));
+    static const de_field_info k_pin[] = {
+        DE_FIELD(DeWorldCellPin, cx, DE_FK_I32, DE_FIELD_DEFAULT),
+        DE_FIELD(DeWorldCellPin, cy, DE_FK_I32, DE_FIELD_DEFAULT),
+    };
+    de_component c[3];
+    DE_TRY(wp_component(w, DE_TYPE_DESC(DeStreamingSource, 1, k_src), &c[0]));
+    DE_TRY(wp_component(w, DE_TYPE_DESC(DeWorldCell, 1, k_cell), &c[1]));
+    DE_TRY(wp_component(w, DE_TYPE_DESC(DeWorldCellPin, 1, k_pin), &c[2]));
+    if (src != NULL)
+        *src = c[0];
+    if (cell != NULL)
+        *cell = c[1];
+    if (pin != NULL)
+        *pin = c[2];
+    return DE_OK;
+}
+
+static de_result wp_register(de_world_partition *p) {
+    DE_TRY(de__wp_register_components(p->world, &p->c_src, &p->c_cell, &p->c_pin));
     de_builtin_component_ids b = de_builtin_components(p->world);
     p->c_tf = b.transform;
     p->c_gtf = b.global_transform;
@@ -150,6 +187,8 @@ static const wp_cell *wp_find(const de_world_partition *p, i32 cx, i32 cy) {
 
 static void wp_free(de_world_partition *p) {
     const de_allocator *a = p->a;
+    if (p->status != NULL)
+        DE_FREE(a, p->status, sizeof *p->status * WP_STATUS_MAX);
     if (p->cand != NULL)
         DE_FREE(a, p->cand, sizeof *p->cand * p->cell_count);
     if (p->cells != NULL)
@@ -195,6 +234,12 @@ de_result de_world_partition_open(de_asset_system *assets, de_world *world, cons
     p->user = d.user;
     p->log = de_log_register_category("streaming", DE_LOG_INFO);
 
+    p->status = (de_asset_status_entry *)DE_ALLOC(a, sizeof *p->status * WP_STATUS_MAX,
+                                                  DE_ALIGNOF(de_asset_status_entry), DE_MEM_ASSET);
+    if (p->status == NULL) {
+        wp_free(p);
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de_world_partition_open: out of memory");
+    }
     de_result r = wp_register(p);
     if (r != DE_OK) {
         wp_free(p);
@@ -264,6 +309,8 @@ static void wp_unload(de_world_partition *p, wp_cell *c) {
     c->h = (de_load_handle){0};
     c->root = DE_ENTITY_NULL;
     c->state = DE_WORLD_CELL_UNLOADED;
+    c->bytes = 0;
+    c->error[0] = '\0';
 }
 
 void de_world_partition_close(de_world_partition *p) {
@@ -272,6 +319,15 @@ void de_world_partition_close(de_world_partition *p) {
     for (u32 i = 0; i < p->cell_count; ++i)
         wp_unload(p, &p->cells[i]);
     de_query_destroy(p->world, p->q_src);
+    wp_free(p);
+}
+
+void de__wp_abandon(de_world_partition *p) {
+    if (p == NULL)
+        return;
+    for (u32 i = 0; i < p->cell_count; ++i)
+        if (DE_HANDLE_VALID(p->cells[i].h))
+            de_asset_release(p->assets, p->cells[i].h);
     wp_free(p);
 }
 
@@ -286,12 +342,45 @@ static void wp_gather_chunk(const de_query_chunk *ch, void *user) {
         const de_transform *x = g != NULL ? &g[i] : (t != NULL ? &t[i] : NULL);
         if (x == NULL)
             continue;
+        de__wp_source *info = &p->src_info[p->src_count];
         de_streaming_source *o = &p->src[p->src_count++];
         o->x = x->position.x;
         o->y = x->position.y;
         o->z = x->position.z;
         o->radius = s[i].radius;
+        info->kind = DE__WP_SOURCE_ENTITY;
+        info->entity = ch->entities[i];
     }
+}
+
+/* Entities and z extent under `e`, whose parent sits at world z `z0`. Only translations are
+ * composed (rotation and scale are left out): the extent is for the editor's cell boxes. */
+static void wp_walk(de_world_partition *p, wp_cell *c, de_entity e, f64 z0, u32 depth) {
+    for (de_entity ch = de_entity_children_first(p->world, e); ch.bits != 0;
+         ch = de_entity_children_next(p->world, ch)) {
+        const de_transform *tf = (const de_transform *)de_entity_get(p->world, ch, p->c_tf);
+        const f64 z = z0 + (tf != NULL ? tf->position.z : 0.0);
+        if (c->entities == 0 || z < c->zmin)
+            c->zmin = z;
+        if (c->entities == 0 || z > c->zmax)
+            c->zmax = z;
+        c->entities++;
+        if (depth + 1 < WP_TREE_DEPTH)
+            wp_walk(p, c, ch, z, depth + 1);
+    }
+}
+
+static void wp_measure(de_world_partition *p, wp_cell *c) {
+    c->entities = 0;
+    c->zmin = c->zmax = 0.0;
+    wp_walk(p, c, c->root, 0.0, 0);
+    u32 n = de_asset_status_list(p->assets, c->h, p->status, WP_STATUS_MAX);
+    n = n < WP_STATUS_MAX ? n : WP_STATUS_MAX;
+    u64 bytes = 0;
+    for (u32 i = 0; i < n; ++i)
+        if (p->status[i].state == DE_LOAD_READY)
+            bytes += p->status[i].bytes;
+    c->bytes = bytes;
 }
 
 static void wp_instantiate(de_world_partition *p, wp_cell *c) {
@@ -305,6 +394,7 @@ static void wp_instantiate(de_world_partition *p, wp_cell *c) {
         de_entity_despawn_recursive(p->world, root);
         DE_WARN(p->log, "world %s: cannot spawn the root of cell (%d, %d)", p->name, (int)c->cx,
                 (int)c->cy);
+        snprintf(c->error, sizeof c->error, "cannot spawn the cell root");
         c->state = DE_WORLD_CELL_FAILED;
         return;
     }
@@ -320,11 +410,14 @@ static void wp_instantiate(de_world_partition *p, wp_cell *c) {
         de_entity_despawn_recursive(p->world, root);
         DE_WARN(p->log, "world %s: cannot instantiate cell (%d, %d): %s", p->name, (int)c->cx,
                 (int)c->cy, de_result_str(r));
+        snprintf(c->error, sizeof c->error, "cannot instantiate the cell scene: %s",
+                 de_result_str(r));
         c->state = DE_WORLD_CELL_FAILED;
         return;
     }
     c->root = root;
     c->state = DE_WORLD_CELL_LOADED;
+    wp_measure(p, c);
     p->stats.total_loads++;
     if (p->on_cell != NULL)
         p->on_cell(p->user, c->cx, c->cy, root, true);
@@ -340,9 +433,22 @@ de_result de_world_partition_update(de_world_partition *p, f32 dt) {
     const de_streaming_source *as = NULL;
     u32 an = de_asset_get_streaming_sources(p->assets, &as);
     p->src_count = 0;
-    for (u32 i = 0; i < an && p->src_count < WP_MAX_SOURCES; ++i)
+    for (u32 i = 0; i < an && p->src_count < WP_MAX_SOURCES; ++i) {
+        p->src_info[p->src_count].kind = DE__WP_SOURCE_GAME;
+        p->src_info[p->src_count].entity = DE_ENTITY_NULL;
         p->src[p->src_count++] = as[i];
+    }
     de_query_each(p->world, p->q_src, wp_gather_chunk, p);
+    for (u32 i = 0; i < p->ed_src_count && p->src_count < WP_MAX_SOURCES; ++i) {
+        p->src_info[p->src_count].kind = DE__WP_SOURCE_EDITOR;
+        p->src_info[p->src_count].entity = DE_ENTITY_NULL;
+        p->src[p->src_count++] = p->ed_src[i];
+    }
+    for (u32 i = 0; i < p->src_count; ++i) {
+        p->src_info[i].s = p->src[i];
+        if (!(p->src_info[i].s.radius > 0.0f))
+            p->src_info[i].s.radius = p->load_r;
+    }
     f64 ratio = (f64)p->unload_r / (f64)p->load_r;
 
     /* 2-4. */
@@ -354,8 +460,14 @@ de_result de_world_partition_update(de_world_partition *p, f32 dt) {
             if (st == DE_LOAD_READY) {
                 wp_instantiate(p, c);
             } else if (st != DE_LOAD_PENDING && st != DE_LOAD_LOADING) {
+                de_load_info li;
+                memset(&li, 0, sizeof li);
+                (void)de_asset_status(p->assets, c->h, &li);
                 DE_WARN(p->log, "world %s: cell (%d, %d) failed to load", p->name, (int)c->cx,
                         (int)c->cy);
+                snprintf(c->error, sizeof c->error, "%s",
+                         li.first_error_msg[0] != '\0' ? li.first_error_msg
+                                                       : "the cell bundle failed to load");
                 c->state = DE_WORLD_CELL_FAILED;
             }
         }
@@ -373,6 +485,13 @@ de_result de_world_partition_update(de_world_partition *p, f32 dt) {
             if (best < 0.0 || d2 < best)
                 best = d2;
         }
+        if (c->force == DE__WP_FORCE_LOAD) {
+            in_load = in_unload = true;
+            if (best < 0.0)
+                best = 0.0;
+        } else if (c->force == DE__WP_FORCE_UNLOAD) {
+            in_load = in_unload = false;
+        }
         if (c->state != DE_WORLD_CELL_UNLOADED && !in_unload)
             wp_unload(p, c);
         if (c->state == DE_WORLD_CELL_UNLOADED && in_load)
@@ -387,6 +506,7 @@ de_result de_world_partition_update(de_world_partition *p, f32 dt) {
         wp_cell *c = (wp_cell *)wp_find(p, p->cand[i].cx, p->cand[i].cy);
         c->h = de_asset_load_bundle(p->assets, c->bundle, DE_LOAD_NO_EVENTS);
         if (!DE_HANDLE_VALID(c->h)) {
+            snprintf(c->error, sizeof c->error, "the cell bundle could not be requested");
             c->state = DE_WORLD_CELL_FAILED;
             continue;
         }
@@ -428,4 +548,176 @@ bool de_world_partition_proxy(const de_world_partition *p, i32 cx, i32 cy, bool 
     if (alpha != NULL)
         *alpha = c != NULL ? c->proxy.alpha : 0.0f;
     return c != NULL;
+}
+
+/* ---- Editor (DENG-831, partition_editor.h) ------------------------------------------------- */
+
+u32 de__wp_cell_count(const de_world_partition *p) {
+    return p != NULL ? p->cell_count : 0;
+}
+
+bool de__wp_cell_index(const de_world_partition *p, i32 cx, i32 cy, u32 *out) {
+    const wp_cell *c = p != NULL ? wp_find(p, cx, cy) : NULL;
+    if (c != NULL && out != NULL)
+        *out = (u32)(c - p->cells);
+    return c != NULL;
+}
+
+bool de__wp_cell_info_at(const de_world_partition *p, u32 i, de__wp_cell_info *out) {
+    if (p == NULL || i >= p->cell_count || out == NULL)
+        return false;
+    const wp_cell *c = &p->cells[i];
+    memset(out, 0, sizeof *out);
+    out->cx = c->cx;
+    out->cy = c->cy;
+    out->state = c->state;
+    out->force = c->force;
+    out->bytes = c->state == DE_WORLD_CELL_LOADED ? c->bytes : 0;
+    out->entities = c->entities;
+    out->zmin = c->zmin;
+    out->zmax = c->zmax;
+    out->proxy_visible = p->proxy_enabled && c->proxy.active;
+    out->proxy_alpha = p->proxy_enabled ? c->proxy.alpha : 0.0f;
+    out->error = c->state == DE_WORLD_CELL_FAILED && c->error[0] != '\0' ? c->error : NULL;
+    return true;
+}
+
+void de__wp_set_force(de_world_partition *p, u32 i, de__wp_force f) {
+    if (p != NULL && i < p->cell_count)
+        p->cells[i].force = f;
+}
+
+void de__wp_clear_forces(de_world_partition *p) {
+    for (u32 i = 0; p != NULL && i < p->cell_count; ++i)
+        p->cells[i].force = DE__WP_FORCE_NONE;
+}
+
+u32 de__wp_forced_loads(const de_world_partition *p) {
+    u32 n = 0;
+    for (u32 i = 0; p != NULL && i < p->cell_count; ++i)
+        n += p->cells[i].force == DE__WP_FORCE_LOAD;
+    return n;
+}
+
+void de__wp_set_editor_sources(de_world_partition *p, const de_streaming_source *s, u32 n) {
+    if (p == NULL)
+        return;
+    n = n < DE__WP_MAX_EDITOR_SOURCES ? n : DE__WP_MAX_EDITOR_SOURCES;
+    for (u32 i = 0; i < n; ++i)
+        p->ed_src[i] = s[i];
+    p->ed_src_count = s != NULL ? n : 0;
+}
+
+u32 de__wp_sources(const de_world_partition *p, const de__wp_source **out) {
+    if (out != NULL)
+        *out = p != NULL ? p->src_info : NULL;
+    return p != NULL ? p->src_count : 0;
+}
+
+u32 de__wp_max_resident(const de_world_partition *p) {
+    return p != NULL ? p->max_resident : 0;
+}
+
+u32 de__wp_max_loads(const de_world_partition *p) {
+    return p != NULL ? p->max_loads : 0;
+}
+
+f32 de__wp_load_radius(const de_world_partition *p) {
+    return p != NULL ? p->load_r : 0.0f;
+}
+
+f32 de__wp_unload_radius(const de_world_partition *p) {
+    return p != NULL ? p->unload_r : 0.0f;
+}
+
+void de__wp_extra_stats(const de_world_partition *p, u32 *cells_failed, u64 *bytes_resident) {
+    u32 failed = 0;
+    u64 bytes = 0;
+    for (u32 i = 0; p != NULL && i < p->cell_count; ++i) {
+        failed += p->cells[i].state == DE_WORLD_CELL_FAILED;
+        if (p->cells[i].state == DE_WORLD_CELL_LOADED)
+            bytes += p->cells[i].bytes;
+    }
+    if (cells_failed != NULL)
+        *cells_failed = failed;
+    if (bytes_resident != NULL)
+        *bytes_resident = bytes;
+}
+
+bool de__wp_cell_distance(const de_world_partition *p, u32 i, f64 *out) {
+    if (p == NULL || i >= p->cell_count || p->src_count == 0)
+        return false;
+    f64 best = -1.0;
+    for (u32 s = 0; s < p->src_count; ++s) {
+        f64 d2 = de__cell_dist2(p->cells[i].cx, p->cells[i].cy, p->src[s].x, p->src[s].y);
+        if (best < 0.0 || d2 < best)
+            best = d2;
+    }
+    if (out != NULL)
+        *out = sqrt(best);
+    return true;
+}
+
+static int wp_preview_cmp(const void *a, const void *b) {
+    const de__wp_preview_cell *x = (const de__wp_preview_cell *)a;
+    const de__wp_preview_cell *y = (const de__wp_preview_cell *)b;
+    if (x->distance != y->distance)
+        return x->distance < y->distance ? -1 : 1;
+    if (x->cx != y->cx)
+        return x->cx < y->cx ? -1 : 1;
+    if (x->cy != y->cy)
+        return x->cy < y->cy ? -1 : 1;
+    return 0;
+}
+
+void de__wp_preview_run(const de_world_partition *p, const de_streaming_source *src, u32 n,
+                        bool ignore_forces, de__wp_preview *out) {
+    out->load_count = out->keep_count = out->unload_count = 0;
+    out->capped = false;
+    if (p == NULL)
+        return;
+    const f64 ratio = (f64)p->unload_r / (f64)p->load_r;
+    for (u32 i = 0; i < p->cell_count; ++i) {
+        const wp_cell *c = &p->cells[i];
+        f64 best = -1.0;
+        bool load = false, stay = false;
+        for (u32 s = 0; s < n; ++s) {
+            const f64 rl = src[s].radius > 0.0f ? (f64)src[s].radius : (f64)p->load_r;
+            const f64 ru = rl * ratio;
+            const f64 d2 = de__cell_dist2(c->cx, c->cy, src[s].x, src[s].y);
+            load = load || d2 <= rl * rl;
+            stay = stay || d2 <= ru * ru;
+            if (best < 0.0 || d2 < best)
+                best = d2;
+        }
+        const de__wp_force f = ignore_forces ? DE__WP_FORCE_NONE : c->force;
+        if (f == DE__WP_FORCE_LOAD)
+            load = stay = true;
+        else if (f == DE__WP_FORCE_UNLOAD)
+            load = stay = false;
+        const de__wp_preview_cell pc = {c->cx, c->cy, best < 0.0 ? 0.0 : sqrt(best)};
+        switch (c->state) {
+        case DE_WORLD_CELL_LOADED:
+        case DE_WORLD_CELL_LOADING:
+            if (stay)
+                out->keep[out->keep_count++] = pc;
+            else
+                out->unloads[out->unload_count++] = pc;
+            break;
+        case DE_WORLD_CELL_FAILED:
+            if (!stay)
+                out->unloads[out->unload_count++] = pc;
+            break;
+        default:
+            if (load)
+                out->loads[out->load_count++] = pc;
+            break;
+        }
+    }
+    qsort(out->loads, out->load_count, sizeof *out->loads, wp_preview_cmp);
+    const u32 room = p->max_resident > out->keep_count ? p->max_resident - out->keep_count : 0;
+    if (out->load_count > room) {
+        out->capped = true;
+        out->load_count = room;
+    }
 }

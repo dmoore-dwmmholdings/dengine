@@ -197,7 +197,7 @@ TEST_F(editor_input, advertises_the_capabilities, in_fx) {
     }
     EXPECT_TRUE(maps);
     EXPECT_TRUE(monitor);
-    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.25"); /* pinned dide 6b91fb57 (DENG-582) */
+    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.26"); /* pinned dide 8ba115b0 (DENG-831) */
 }
 
 /* The DIDE conformance probes at 1.24. */

@@ -11,6 +11,8 @@
  *   far_origin    world_small: the entity at (100000, 100000.125, 3) lands within 1 mm.
  *   proxy_fade    world_small: the far proxy shows for unloaded cells and fades out on load.
  *   no_alloc      steady update frames allocate nothing.
+ *   editor        world_small, the editor extensions (DENG-831, partition_editor.h): editor
+ *                 sources, forces, the dry-run preview, per-cell bytes and entities.
  */
 #include "de_test.h"
 #include <dengine/de_asset.h>
@@ -20,6 +22,7 @@
 #include <dengine/de_platform.h>
 #include <dengine/de_reflect.h>
 #include <dengine/de_task.h>
+#include "world/streaming/partition_editor.h"
 #include "world/streaming/streaming_internal.h"
 
 #if defined(DE_STREAMING_HAS_WORLD_COOK)
@@ -537,4 +540,102 @@ TEST_F(streaming, world_partition_no_alloc, wp_fx) {
     EXPECT_EQ(a1.alloc_count + a1.realloc_count, a0.alloc_count + a0.realloc_count);
     EXPECT_EQ(w1.alloc_count + w1.realloc_count, w0.alloc_count + w0.realloc_count);
     EXPECT_EQ(p1.alloc_count + p1.realloc_count, p0.alloc_count + p0.realloc_count);
+}
+
+/* ---- test_world_partition_editor (DENG-831) -------------------------------------------------- */
+
+static de__wp_cell_info cell_at(wp_fx *f, i32 cx, i32 cy) {
+    u32 i = 0;
+    de__wp_cell_info c;
+    memset(&c, 0, sizeof c);
+    EXPECT_TRUE(de__wp_cell_index(f->p, cx, cy, &i));
+    EXPECT_TRUE(de__wp_cell_info_at(f->p, i, &c));
+    return c;
+}
+
+TEST_F(streaming, world_partition_editor, wp_fx) {
+#if !DE_HAS_COOKER
+    SKIP(NO_COOKER_MSG);
+#endif
+    small_open(f, 0);
+    ASSERT_EQ(de__wp_cell_count(f->p), 4u);
+    u32 i = 0;
+    EXPECT_FALSE(de__wp_cell_index(f->p, 5, 5, &i));
+    ASSERT_TRUE(de__wp_cell_index(f->p, 390, 390, &i));
+    EXPECT_EQ(i, 3u); /* sorted by cx, then cy */
+
+    /* Preview with one source in cell (0, 0): (0, 0) then (1, 0) (128 m), nothing else. */
+    de__wp_preview_cell buf[12];
+    de__wp_preview pv = {.loads = &buf[0], .keep = &buf[4], .unloads = &buf[8]};
+    const de_streaming_source at00 = {128.0, 128.0, 0.0, 0.0f};
+    de__wp_preview_run(f->p, &at00, 1, false, &pv);
+    ASSERT_EQ(pv.load_count, 2u);
+    EXPECT_EQ(pv.loads[0].cx, 0);
+    EXPECT_EQ(pv.loads[0].cy, 0);
+    EXPECT_FLOAT_EQ(pv.loads[0].distance, 0.0, 1e-9);
+    EXPECT_EQ(pv.loads[1].cx, 1);
+    EXPECT_FLOAT_EQ(pv.loads[1].distance, 128.0, 1e-9);
+    EXPECT_EQ(pv.keep_count, 0u);
+    EXPECT_EQ(pv.unload_count, 0u);
+    EXPECT_FALSE(pv.capped);
+    EXPECT_EQ(de_world_partition_get_stats(f->p).loads_started, 0u); /* a dry run loads nothing */
+
+    /* An editor source streams like any other, and is reported as one. */
+    de__wp_set_editor_sources(f->p, &at00, 1);
+    de_world_partition_stats st = settle(f, 0.016f);
+    EXPECT_EQ(st.cells_loaded, 2u);
+    const de__wp_source *src = NULL;
+    ASSERT_EQ(de__wp_sources(f->p, &src), 1u);
+    EXPECT_EQ(src[0].kind, DE__WP_SOURCE_EDITOR);
+    EXPECT_FLOAT_EQ(src[0].s.radius, 384.0f, 0.0f); /* radius 0: the world's load radius */
+    de__wp_cell_info c = cell_at(f, 0, 0);
+    EXPECT_EQ(c.state, DE_WORLD_CELL_LOADED);
+    EXPECT_GT(c.bytes, 0u);
+    EXPECT_GT(c.entities, 0u);
+    EXPECT_TRUE(c.error == NULL);
+    f64 d = -1.0;
+    ASSERT_TRUE(de__wp_cell_distance(f->p, 2, &d)); /* (1, 0) */
+    EXPECT_FLOAT_EQ(d, 128.0, 1e-9);
+    u32 failed = 9;
+    u64 bytes = 0;
+    de__wp_extra_stats(f->p, &failed, &bytes);
+    EXPECT_EQ(failed, 0u);
+    EXPECT_EQ(bytes, c.bytes + cell_at(f, 1, 0).bytes);
+
+    /* Preview from the current state: both cells are kept. */
+    de__wp_preview_run(f->p, &at00, 1, false, &pv);
+    EXPECT_EQ(pv.load_count, 0u);
+    EXPECT_EQ(pv.keep_count, 2u);
+
+    /* Force (0, 0) out and (390, 390) in. */
+    de__wp_set_force(f->p, 1, DE__WP_FORCE_UNLOAD);
+    de__wp_set_force(f->p, 3, DE__WP_FORCE_LOAD);
+    EXPECT_EQ(de__wp_forced_loads(f->p), 1u);
+    de__wp_preview_run(f->p, &at00, 1, false, &pv);
+    EXPECT_EQ(pv.unload_count, 1u);
+    EXPECT_EQ(pv.load_count, 1u);
+    EXPECT_EQ(pv.loads[0].cx, 390);
+    de__wp_preview_run(f->p, &at00, 1, true, &pv); /* ignoring forces: as before */
+    EXPECT_EQ(pv.load_count, 0u);
+    EXPECT_EQ(pv.unload_count, 0u);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_UNLOADED);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 390, 390), DE_WORLD_CELL_LOADED);
+    EXPECT_EQ(cell_at(f, 0, 0).bytes, 0u);
+    EXPECT_EQ(cell_at(f, 0, 0).force, DE__WP_FORCE_UNLOAD);
+    for (u32 k = 0; k < 10; ++k) /* forces hold */
+        st = frame(f, 0.016f);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_UNLOADED);
+
+    /* Clear the forces and the sources: the far cell goes, (0, 0) comes back, then all go. */
+    de__wp_clear_forces(f->p);
+    EXPECT_EQ(de__wp_forced_loads(f->p), 0u);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 390, 390), DE_WORLD_CELL_UNLOADED);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_LOADED);
+    de__wp_set_editor_sources(f->p, NULL, 0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(st.cells_loaded, 0u);
+    de__wp_extra_stats(f->p, &failed, &bytes);
+    EXPECT_EQ(bytes, 0u);
 }

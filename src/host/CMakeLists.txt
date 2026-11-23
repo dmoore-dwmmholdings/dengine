@@ -120,7 +120,8 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
         editor/editor_debugdraw.c
         editor/editor_extra.c
         editor/editor_input.c
-        editor/editor_spline.c)
+        editor/editor_spline.c
+        editor/editor_stream.c) # DENG-831: world.streaming (DIDE protocol 1.26)
     target_link_libraries(de_host PRIVATE de_tp_dide_protocol)
     set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS de_tp_dide_protocol)
     target_compile_definitions(de_host PRIVATE DE_HAS_EDITOR_SERVICE=1)

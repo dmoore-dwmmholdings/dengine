@@ -191,7 +191,7 @@ TEST_F(editor_ui, advertises_ui_editor_and_registers_ui_layout, ui_ed_fx) {
         found = found || strcmp(f->ed.caps[i], "ui.editor") == 0;
     EXPECT_TRUE(found);
     EXPECT_TRUE(f->ed.handlers[DE_EP_METHOD_UI_LAYOUT] != NULL);
-    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.25"); /* pinned dide 6b91fb57 (DENG-582) */
+    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.26"); /* pinned dide 8ba115b0 (DENG-831) */
 }
 
 TEST_F(editor_ui, layout_reports_pre_order_rects_at_the_preview_viewport, ui_ed_fx) {
