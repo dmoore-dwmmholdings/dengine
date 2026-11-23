@@ -2,13 +2,28 @@
 #
 # de_add_game(NAME <name>
 #             SOURCES <file>...
-#             [GAME_TOML <file>])
+#             [GAME_TOML <file>]
+#             [ASSETS <assets.toml> [PACK_NAME <name>]])
 #
 #   NAME       The game's target name (lower_snake_case is usual).
 #   SOURCES    The game's sources, relative to the calling CMakeLists.txt. One of them defines
 #                  DE_GAME_EXPORT const de_game_api *de_game_get_api(void);
 #   GAME_TOML  The project file. It is copied to the game directory as game.toml, which is
 #              `game:/game.toml` when the game runs.
+#   ASSETS     DENG-789: a manifest of assets the game ships cooked, such as its own `.slang`
+#              shaders. Release and Shipping have no in-process cooker, so there the build runs
+#              `de-cook cook` on it and writes <game dir>/<PACK_NAME>.dpak, which the host mounts
+#              from game:/ (Shipping: PACKED mode; Release: over the manifest, see
+#              src/host/host_packs.h). Debug and Dev cook in-process and make no pack. The
+#              manifest may use engine asset types only (shader, texture, model, material, ...):
+#              the cook does not load the game library, so a type the game registers is an
+#              error. Shaders are cooked for the targets of this platform (shader_importer.h).
+#              Needs DE_BUILD_TOOLS=ON and a build host that runs what it builds (no cross
+#              build); otherwise configure warns and no pack is made. The pack is rebuilt when
+#              the manifest or a file below its directory changes (re-run configure after adding
+#              files). The target <name>_pack builds it; the game target depends on it.
+#   PACK_NAME  The pack file name without .dpak (default: game). Packs mount in file-name order,
+#              later names override earlier ones.
 #
 # The game directory is <current binary dir>/<name>. It holds the game binary and game.toml, and
 # it is `game:/` at run time: `dengine --game` mounts the library's directory, and a Shipping
@@ -92,7 +107,7 @@ function(de__game_library target dir)
 endfunction()
 
 function(de_add_game)
-    cmake_parse_arguments(PARSE_ARGV 0 G "" "NAME;GAME_TOML" "SOURCES")
+    cmake_parse_arguments(PARSE_ARGV 0 G "" "NAME;GAME_TOML;ASSETS;PACK_NAME" "SOURCES")
     if(G_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "de_add_game: unknown arguments: ${G_UNPARSED_ARGUMENTS}")
     endif()
@@ -159,4 +174,76 @@ function(de_add_game)
         set(form static)
     endif()
     set_target_properties(${G_NAME} PROPERTIES DE_GAME_DIR "${dir}" DE_GAME_FORM ${form})
+    if(G_ASSETS)
+        de__game_pack(${G_NAME} "${dir}" "${G_ASSETS}" "${G_PACK_NAME}")
+    elseif(G_PACK_NAME)
+        message(FATAL_ERROR "de_add_game(${G_NAME}): PACK_NAME needs ASSETS")
+    endif()
+endfunction()
+
+# DENG-789: the build-time cook of de_add_game(ASSETS): `de-cook cook <manifest>` into
+# <dir>/<pack>.dpak, in the build types without the in-process cooker (Release, Shipping). The
+# target <game>_pack runs it and the game target depends on it. de-cook is a host tool: tools/
+# may be added after this call (the engine's own tests), so it is named in generator expressions
+# and target-level dependencies only. The cook cache is in the binary dir, never the source tree.
+function(de__game_pack game dir manifest pack)
+    cmake_path(ABSOLUTE_PATH manifest BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" NORMALIZE)
+    if(NOT EXISTS "${manifest}" OR IS_DIRECTORY "${manifest}")
+        message(FATAL_ERROR "de_add_game(${game}): ASSETS '${manifest}' is not a file")
+    endif()
+    if(NOT pack)
+        set(pack game)
+    endif()
+    if(NOT pack MATCHES "^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+        message(FATAL_ERROR "de_add_game(${game}): PACK_NAME must be 1 to 64 of A-Z a-z 0-9 _ - . "
+                            "(not first), got '${pack}'")
+    endif()
+    set_target_properties(${game} PROPERTIES DE_GAME_ASSETS "${manifest}" DE_GAME_PACK "")
+
+    # Only the build types without the in-process cooker (src/asset/CMakeLists.txt). The presets
+    # are single-config (Ninja). A multi-config generator is not supported: it gets a status line
+    # and no pack. Global property, not DE_MULTI_CONFIG: a game calls this from its own
+    # directory, where the engine's directory variables are not set.
+    get_property(multi GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if(multi)
+        message(STATUS "de_add_game(${game}): ASSETS is not cooked with a multi-config "
+                       "generator; use a single-config generator (the presets use Ninja)")
+        return()
+    endif()
+    if(NOT CMAKE_BUILD_TYPE MATCHES "^([Rr][Ee][Ll][Ee][Aa][Ss][Ee]|[Ss][Hh][Ii][Pp][Pp][Ii][Nn][Gg])$")
+        return() # Debug, Dev: the in-process cooker cooks the sources
+    endif()
+    if(NOT DE_BUILD_TOOLS OR (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR))
+        message(WARNING "de_add_game(${game}): ASSETS is not cooked (DE_BUILD_TOOLS is OFF or "
+                        "this is a cross build): this ${CMAKE_BUILD_TYPE} build has no "
+                        "${pack}.dpak, so the game's own shaders will not load")
+        return()
+    endif()
+    if(APPLE)
+        set(platform macos)
+    elseif(WIN32)
+        set(platform windows)
+    else()
+        set(platform linux)
+    endif()
+
+    cmake_path(GET manifest PARENT_PATH manifest_dir)
+    file(GLOB_RECURSE inputs CONFIGURE_DEPENDS LIST_DIRECTORIES false "${manifest_dir}/*")
+    list(FILTER inputs EXCLUDE REGEX "/\\.decache/|/\\.git/|/\\.DS_Store$")
+    set(out "${dir}/${pack}.dpak")
+    set(cache "${CMAKE_CURRENT_BINARY_DIR}/${game}_decache")
+    add_custom_command(
+        OUTPUT "${out}"
+        COMMAND "$<TARGET_FILE:de-cook>" cook "${manifest}" --platform ${platform}
+                --out "${dir}" --pack-name "${pack}" --cache "${cache}" --quiet
+        DEPENDS de-cook ${inputs}
+        COMMENT "Cooking ${game} assets into ${pack}.dpak"
+        VERBATIM)
+    add_custom_target(${game}_pack DEPENDS "${out}")
+    set_target_properties(${game}_pack PROPERTIES FOLDER "dengine/games")
+    add_dependencies(${game} ${game}_pack)
+    if(TARGET ${game}_static)
+        add_dependencies(${game}_static ${game}_pack)
+    endif()
+    set_target_properties(${game} PROPERTIES DE_GAME_PACK "${out}")
 endfunction()

@@ -16,25 +16,56 @@ static f32 clamp_axis(f32 value, de_ui_len min, de_ui_len max, f32 available, f3
         hi = lo;
     return fmaxf(0, fminf(fmaxf(value, lo), hi));
 }
+/* Shared by node measuring and de_ui_measure_text, so the editor sees the widget's size. */
+static de_result build_text(de_ui *ui, de_str utf8, const de_text_style *source, de_text_align align,
+                            f32 wrap, f32 scale, de_text_layout **out) {
+    de_text_style style = *source;
+    style.size_px = (style.size_px > 0 ? style.size_px : 16) * scale;
+    style.letter_spacing *= scale;
+    de_text_layout_desc desc = {.utf8 = utf8,
+                                .style = &style,
+                                .max_width = wrap > 0 && isfinite(wrap) ? wrap : 0,
+                                .align = align,
+                                .direction = DE_DIR_AUTO};
+    return de_text_layout_build(ui->desc.text, &desc, ui->alloc, out);
+}
 de_vec2 de_ui__measure_text(de_ui *ui, de_entity entity, de_vec2 available) {
     const DeUiText *text = de_entity_get_const(ui->world, entity, ui->ids.text);
     if (!text || !ui->desc.text || !text->style.font.id)
         return (de_vec2){0};
-    de_text_style style = text->style;
-    style.size_px = (style.size_px > 0 ? style.size_px : 16) * ui->scale;
-    style.letter_spacing *= ui->scale;
-    de_text_layout_desc desc = {.utf8 = de_ui__text_content(ui, text),
-                                .style = &style,
-                                .max_width =
-                                    available.x > 0 && isfinite(available.x) ? available.x : 0,
-                                .align = text->align,
-                                .direction = DE_DIR_AUTO};
     de_text_layout *layout = NULL;
-    if (de_text_layout_build(ui->desc.text, &desc, ui->alloc, &layout) != DE_OK)
+    if (build_text(ui, de_ui__text_content(ui, text), &text->style, text->align, available.x,
+                   ui->scale, &layout) != DE_OK)
         return (de_vec2){0};
     de_vec2 size = de_text_layout_size(layout);
     de_text_layout_free(layout);
     return size;
+}
+de_result de_ui_measure_text(de_ui *ui, const de_ui_text_measure_desc *desc, de_text_line *lines,
+                             u32 capacity, de_ui_text_metrics *out) {
+    if (!ui || !desc || !desc->style || !out || (!lines && capacity))
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_ui_measure_text: NULL argument");
+    if (!isfinite(desc->wrap_width) || desc->wrap_width < 0 || !isfinite(desc->box_height) ||
+        desc->box_height < 0 || !isfinite(desc->scale))
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                       "de_ui_measure_text: wrap_width, box_height or scale is not valid");
+    if (!ui->desc.text)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_ui_measure_text: the UI has no text system");
+    /* ui->scale is zero until the first layout runs. */
+    f32 scale = desc->scale > 0 ? desc->scale : ui->scale > 0 ? ui->scale : 1;
+    de_text_layout *layout = NULL;
+    DE_TRY(build_text(ui, desc->utf8, desc->style, desc->align, desc->wrap_width, scale, &layout));
+    de_vec2 size = de_text_layout_size(layout);
+    u32 count = de_text_layout_lines(layout, lines, capacity);
+    de_text_layout_free(layout);
+    *out = (de_ui_text_metrics){
+        .size = size,
+        .line_height = count ? size.y / count : 0,
+        .scale = scale,
+        .line_count = count,
+        .overflow_x = desc->wrap_width > 0 && size.x > desc->wrap_width + .001f,
+        .overflow_y = desc->box_height > 0 && size.y > desc->box_height + .001f};
+    return DE_OK;
 }
 de_vec2 de_ui__measure_image(de_ui *ui, de_entity entity, de_vec2 available) {
     (void)available;
@@ -103,8 +134,8 @@ de_vec2 de_ui__measure_assigned(de_ui_layout *layout, u32 index, de_vec2 availab
     for (u32 child = record->first_child; child != DE_UI_NONE_INDEX;
          child = ui->records[child].next_sibling) {
         de_ui_record *r = &ui->records[child];
-        if (r->node.display == DE_UI_NONE || de_entity_has(ui->world, r->entity, ui->ids.anchor) ||
-            de_entity_has(ui->world, r->entity, ui->ids.popup))
+        if (r->node.display == DE_UI_NONE ||
+            (r->component_mask & (DE_UI_HAS_ANCHOR | DE_UI_HAS_POPUP)))
             continue;
         de_vec2 size = de_ui__measure(layout, child, content);
         f32 mt = de_ui__length(r->node.margin[0], content.y, ui->scale, 0),

@@ -1,0 +1,13 @@
+kind = "material"
+version = 1
+[[node]]
+id = "n1"
+type = "param.color"
+values = { name = "tint", r = 0.5, g = 0.25, b = 1.0 }
+[[node]]
+id = "n2"
+type = "output.base"
+values = { roughness = 0.75 }
+[[link]]
+from = "n1.out"
+to = "n2.base_color"

@@ -80,6 +80,12 @@ de_result de__material_load(de_asset_load_ctx *ctx) {
         if (r != DE_OK)
             return de_asset_load_ctx_fail(ctx, r, "cannot declare its textures");
     }
+    if (v.model_asset != 0) {
+        /* A material graph's #material: the graph asset registers the model (DENG-774). */
+        de_result r = de_asset_load_ctx_add_dependency(ctx, (de_asset_id){v.model_asset});
+        if (r != DE_OK)
+            return de_asset_load_ctx_fail(ctx, r, "cannot declare its material graph");
+    }
     de_render_material *m = (de_render_material *)DE_ALLOC(
         u->alloc, sizeof *m, DE_ALIGNOF(de_render_material), DE_MEM_RENDER);
     if (m == NULL)

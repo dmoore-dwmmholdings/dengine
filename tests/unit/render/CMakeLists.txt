@@ -375,6 +375,18 @@ if(TARGET test_render_meshlet_cull)
     endif()
 endif()
 
+# DENG-434: the perspective and orthographic CPU reference again under Metal API and shader (GPU)
+# validation. With shader validation on, the Metal compiler read the orthographic forward
+# direction (DeVisCullView.planes[4]) inside cone_culled as zero, so the GPU cone test culled
+# nothing in orthographic views. Skips (77) without a Metal device, like the plain test.
+if(TARGET test_render_meshlet_cull AND DE_HAS_GPU_METAL)
+    add_test(NAME render_meshlet_cull.meshlet_cull.frustum_cpu_ref_metal_gpu_validation
+        COMMAND test_render_meshlet_cull --filter=meshlet_cull.frustum_cpu_ref_metal)
+    set_tests_properties(render_meshlet_cull.meshlet_cull.frustum_cpu_ref_metal_gpu_validation
+        PROPERTIES ENVIRONMENT "MTL_DEBUG_LAYER=1;MTL_SHADER_VALIDATION=1"
+        LABELS "unit;gpu;render" TIMEOUT 300 SKIP_RETURN_CODE 77)
+endif()
+
 # DENG-233: the HZB and two-phase occlusion culling (src/render/passes/vis/hzb.c, occlusion.c),
 # executable test_render_occlusion; CTest names render_occlusion.<suite>.<test>. test_hzb.c: the
 # HZB against a CPU min/max reduction for odd and non-power-of-two sizes, the grouped and the
@@ -772,6 +784,29 @@ if(TARGET test_render_material_instances)
         "DE_RMI_TEST_TEXTURE_DIR=\"${DE_ROOT_DIR}/tests/unit/import/data/texture\"")
     target_link_libraries(test_render_material_instances PRIVATE
         "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:de_cooker>")
+endif()
+
+# DENG-770: the runtime `material_graph` asset type (src/render/loaders/material_graph_loader.c),
+# executable test_render_material_graph; CTest names render_material_graph.material_graph.<test>.
+# A null-backend renderer with a SOURCE-mode asset system cooks a graph in-process: the model
+# registers, parameter edits keep its pipeline, a hot reload replaces the pipeline under the same
+# id, name conflicts and graph errors fail the load. SKIP without Slang or the cooker.
+de_add_test(NAME render_material_graph
+    SOURCES test_material_graph_asset.c
+    LIBS de_render de_asset de_gpu de_ecs de_reflect de_task de_platform
+    LABELS unit render cook
+    TIMEOUT 300)
+if(TARGET test_render_material_graph)
+    target_include_directories(test_render_material_graph PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_render_material_graph_tmp")
+    target_compile_definitions(test_render_material_graph PRIVATE
+        "DE_RMG_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_render_material_graph_tmp\"")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_render_material_graph PRIVATE de_cook_shader
+            "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:de_cooker>")
+        target_include_directories(test_render_material_graph PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_render_material_graph PRIVATE DE_RMG_TEST_COOK=1)
+    endif()
 endif()
 
 # DENG-305: the forward transparent pass (src/render/passes/forward/; engine shader
@@ -1260,6 +1295,13 @@ de_add_test(NAME render_palette_dither SOURCES test_palette_dither.c render_d3d1
     LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
 if(TARGET test_render_palette_dither)
     target_include_directories(test_render_palette_dither PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
+# DENG-763 unlit sprites: exact texel colours (256 greys + palette) through the Unlit model.
+de_add_test(NAME render_sprite_unlit SOURCES test_sprite_unlit.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_sprite_unlit)
+    target_include_directories(test_render_sprite_unlit PRIVATE "${DE_ROOT_DIR}/src")
 endif()
 
 # DENG-322 bounded public forward-participant provider contract.

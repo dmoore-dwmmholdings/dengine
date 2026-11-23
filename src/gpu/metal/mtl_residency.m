@@ -150,11 +150,24 @@ void de__mtl_residency_encoder(de_gpu_device *d, void *encoder, de__mtl_encoder_
         return;
     }
     de_mutex_lock(&m->heap_lock);
-    for (u32 first = 0; m->use_heaps && first < m->heap_count; first += HEAP_CHUNK) {
+    /* DENG-432: the command buffer does not retain what it names. Retirement fences capture only
+     * submitted work, so a list recorded before a retirement but submitted after it keeps every
+     * native object it named (heaps on this path, storage textures below) until it completes.
+     * The set is emptied when the list is recycled; no global drain is needed before recording. */
+    const u32 extra = m->use_heaps ? 1u : 0u;
+    const u32 total = m->storage_count + extra;
+    const u32 heap_total = m->use_heaps ? m->heap_count : 0u;
+    mtl_cmd *mc = c ? de__gpu_cmd_payload(c) : NULL;
+    if (mc && (total || heap_total) && !mc->accel_keep)
+        mc->accel_keep = (void *)CFBridgingRetain([NSMutableSet new]);
+    NSMutableSet *keep = (__bridge NSMutableSet *)(mc ? mc->accel_keep : NULL);
+    for (u32 first = 0; first < heap_total; first += HEAP_CHUNK) {
         __unsafe_unretained id<MTLHeap> heaps[HEAP_CHUNK];
         u32 n = 0;
-        for (; n < HEAP_CHUNK && first + n < m->heap_count; ++n)
+        for (; n < HEAP_CHUNK && first + n < heap_total; ++n) {
             heaps[n] = (__bridge id<MTLHeap>)m->heaps[first + n]->heap;
+            [keep addObject:heaps[n]];
+        }
         if (kind == DE__MTL_ENC_RENDER)
             [(__bridge id<MTLRenderCommandEncoder>)encoder
                 useHeaps:heaps
@@ -165,13 +178,7 @@ void de__mtl_residency_encoder(de_gpu_device *d, void *encoder, de__mtl_encoder_
     }
     /* DENG-407: write usage for the storage-texture list (with useHeaps:, the null storage
      * texture first). */
-    const u32 extra = m->use_heaps ? 1u : 0u;
-    const u32 total = m->storage_count + extra;
     const MTLResourceUsage rw = MTLResourceUsageRead | MTLResourceUsageWrite;
-    mtl_cmd *mc = c ? de__gpu_cmd_payload(c) : NULL;
-    if (mc && total && !mc->accel_keep)
-        mc->accel_keep = (void *)CFBridgingRetain([NSMutableSet new]);
-    NSMutableSet *keep = (__bridge NSMutableSet *)(mc ? mc->accel_keep : NULL);
     for (u32 first = 0; first < total; first += HEAP_CHUNK) {
         __unsafe_unretained id<MTLResource> tex[HEAP_CHUNK];
         u32 n = 0;
@@ -201,4 +208,11 @@ bool de__mtl_residency_sets_built(void) {
 
 bool de__mtl_residency_uses_heaps(de_gpu_device *d) {
     return de__mtl_device_object(d) ? de__mtl_dev(d)->use_heaps : false;
+}
+
+bool de__mtl_residency_retains(de_gpu_cmd *c, void *obj) {
+    mtl_cmd *mc = c ? de__gpu_cmd_payload(c) : NULL;
+    if (!mc || !mc->accel_keep || !obj)
+        return false;
+    return [(__bridge NSMutableSet *)mc->accel_keep containsObject:(__bridge id)obj];
 }

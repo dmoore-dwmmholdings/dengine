@@ -93,3 +93,38 @@ TEST(editor_headless, malformed_gpu_requests_still_validate_the_protocol_schema)
     }
     reset_handlers(&ed);
 }
+
+TEST(editor_headless, render_mode_discovery_reports_no_graphics_support) {
+    const char *const *names = NULL;
+    EXPECT_EQ(de__ed_views_render_modes(&names), 0u);
+
+    de_engine engine;
+    de__editor ed;
+    register_handlers(&ed, &engine);
+    de__ed_reflect_register(&ed);
+    const u64 id = UINT64_C(0x1122334455667788);
+    const de_ep_request req = {
+        .id = id, .method = de_ep_cstr(de_ep_method_name(DE_EP_METHOD_REFLECT_DEBUG_OUTPUTS))};
+    unsigned char storage[8192];
+    de_ep_arena arena = {storage, sizeof storage, 0};
+    char response[2048];
+    mpack_writer_t writer;
+    mpack_writer_init(&writer, response, sizeof response);
+    ASSERT_TRUE(ed.handlers[DE_EP_METHOD_REFLECT_DEBUG_OUTPUTS] != NULL);
+    ed.handlers[DE_EP_METHOD_REFLECT_DEBUG_OUTPUTS](&ed, &req, &arena, &writer);
+    const size_t bytes = mpack_writer_buffer_used(&writer);
+    ASSERT_EQ(mpack_writer_destroy(&writer), mpack_ok);
+    EXPECT_FALSE(ed.deferred);
+
+    mpack_tree_t tree;
+    mpack_tree_init_data(&tree, response, bytes);
+    mpack_tree_parse(&tree);
+    mpack_node_t root = mpack_tree_root(&tree);
+    EXPECT_EQ(mpack_node_map_count(root), 2u);
+    EXPECT_EQ(mpack_node_u64(mpack_node_map_cstr(root, "id")), id);
+    EXPECT_FALSE(mpack_node_map_contains_cstr(root, "error"));
+    mpack_node_t result = mpack_node_map_cstr(root, "result");
+    EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(result, "outputs")), 0u);
+    EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
+    reset_handlers(&ed);
+}

@@ -341,6 +341,8 @@ void de_text__integrate_glyphs(de_text_system *t) {
             }
             j->status = GLYPH_INTEGRATED;
             ++live->generation;
+            /* Retain the integrated revision even if this font is replaced before a lookup. */
+            de__text_watch_font(t, f->handle);
             ++c->stats.runtime_generated;
         } else {
             j->status = GLYPH_REJECTED;

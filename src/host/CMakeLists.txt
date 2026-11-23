@@ -14,7 +14,7 @@ de_add_module(
         loop.c
         game_module.c
     DEPS
-        core platform task reflect ecs asset anim input text sky terrain water decal streaming
+        core platform task reflect ecs asset anim input text sky terrain water decal streaming spline
         tilemap crash mods save
     OPTIONAL_DEPS gpu gpu_d3d12 gpu_vulkan gpu_metal render physics audio net ui vfx nav video steam
 )
@@ -86,7 +86,8 @@ target_sources(de_host PRIVATE hot_reload.h hot_reload.c)
 # `quit` console command, wired into engine create and de_host_run (host_crash.c).
 target_sources(de_host PRIVATE host_crash.h host_crash.c)
 
-# DENG-213: in PACKED mode (Shipping) engine create mounts every game:/*.dpak (host_packs.c).
+# DENG-213: in PACKED mode (Shipping) engine create mounts every game:/*.dpak (host_packs.c);
+# DENG-789: so does Release, which has no cooker.
 target_sources(de_host PRIVATE host_packs.h host_packs.c)
 
 # DENG-285: the D3D12 Agility SDK runtime (D3D12Core.dll, d3d12SDKLayers.dll) goes into D3D12/
@@ -102,19 +103,23 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_sources(de_host PRIVATE
         editor/editor_internal.h
         editor/editor.c
+        editor/editor_ipc.c
+        editor/editor_ipc.h
         editor/editor_session.c
         editor/editor_value.c
         editor/editor_reflect.c
         editor/editor_world.c
         editor/editor_edit.c
         editor/editor_scene.c
+        editor/editor_prefab_source.c
         editor/editor_assets.c
         editor/editor_logs.c
         editor/editor_views.c
         editor/editor_gizmo.c
         editor/editor_gizmo.h
         editor/editor_debugdraw.c
-        editor/editor_extra.c)
+        editor/editor_extra.c
+        editor/editor_spline.c)
     target_link_libraries(de_host PRIVATE de_tp_dide_protocol)
     set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS de_tp_dide_protocol)
     target_compile_definitions(de_host PRIVATE DE_HAS_EDITOR_SERVICE=1)
@@ -158,6 +163,26 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER AND DE_BU
     target_include_directories(de_host PRIVATE "${DE_ROOT_DIR}/tools")
 endif()
 
+# DENG-776: water.info/surface/flowMap/probes/showProbes (DIDE protocol 1.13, world.water). DeWater
+# is a render component, so the service is in render builds only.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
+    target_sources(de_host PRIVATE editor/editor_water.c)
+endif()
+
+# DENG-580: terrain.info/sample/exportHeightmap and the terrain.* edit ops (DIDE protocol 1.11,
+# world.terrain). DeTerrain is a render component. png16 uses stb_image (linked with render below);
+# exr heightmaps use tinyexr in Debug and Dev only, as the path tracer export does.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
+    target_sources(de_host PRIVATE editor/editor_terrain.c)
+    target_link_libraries(de_host PRIVATE "$<$<CONFIG:Debug,Dev>:de_tp_tinyexr>")
+    set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS "$<$<CONFIG:Debug,Dev>:de_tp_tinyexr>")
+endif()
+
+# DENG-778: ui.layout (DIDE protocol 1.14, ui.editor) reads the UI module's layout preview.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_UI)
+    target_sources(de_host PRIVATE editor/editor_ui.c)
+endif()
+
 # DENG-701: fatal notifications never reuse the blocking main-thread transport.
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_sources(de_host PRIVATE editor/editor_crash.c editor/editor_crash.h)
@@ -176,4 +201,19 @@ endif()
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_sources(de_host PRIVATE editor/editor_animation.c
         editor/editor_animation_pose.c editor/editor_animation_pose.h)
+endif()
+
+# DENG-769: the material graph over the editor IPC (materialGraph.*, capability
+# assets.materialGraph; DIDE-R161). Debug and Dev with the cooker and Slang only: there the host
+# links de_cooker (tools/check_layers/layers.toml: host -> cook/importers) and the handlers serve
+# Slang imports from the engine shader root (DE_ENGINE_SHADER_ROOT overrides it, as in render).
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND TARGET de_tp_slang)
+    set(_de_host_mg "$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>")
+    target_sources(de_host PRIVATE editor/editor_material_graph.c)
+    target_compile_definitions(de_host PRIVATE
+        "$<${_de_host_mg}:DE_ED_MATERIAL_GRAPH=1>"
+        "DE_ED_ENGINE_SHADER_ROOT=\"${DE_ROOT_DIR}/shaders\"")
+    target_link_libraries(de_host PRIVATE "$<${_de_host_mg}:de_cooker>")
+    set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS "$<${_de_host_mg}:de_cooker>")
+    target_include_directories(de_host PRIVATE "${DE_ROOT_DIR}/tools")
 endif()

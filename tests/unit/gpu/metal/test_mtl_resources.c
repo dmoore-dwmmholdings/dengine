@@ -7,6 +7,7 @@
 
 #include <dengine/de_debug.h>
 #include <dengine/de_gpu.h>
+#include <dengine/de_platform.h>
 
 #include "gpu/metal/mtl_internal.h"
 #include "mtl_test_helpers.h"
@@ -259,6 +260,117 @@ static void recorded_storage_body(de_gpu_device *d) {
         DE_OK);
     de_gpu_wait_idle(d);
     ASSERT_FALSE(de_gpu_device_is_lost(d));
+}
+
+/* DENG-432: streaming retirement with several recorded command chunks and no global drain. Each
+ * round records chunks A and B (both name a storage texture and, on the useHeaps: path, a
+ * dedicated heap), retires both resources, submits A (the submit collects completed retirements
+ * and may release the heap), records C, then submits B and C. B must own what it named until it
+ * completes; C must not name the retired objects; nothing waits for the whole GPU. */
+static void *new_heap(de_gpu_device *d, void *const *before, u32 before_count) {
+    void *heaps[256];
+    const u32 n = de__mtl_heap_list(d, heaps, 256);
+    for (u32 i = 0; i < n && i < 256; ++i) {
+        bool old = false;
+        for (u32 j = 0; j < before_count && !old; ++j)
+            old = heaps[i] == before[j];
+        if (!old)
+            return heaps[i];
+    }
+    return NULL;
+}
+static bool heap_listed(de_gpu_device *d, void *heap) {
+    void *heaps[256];
+    const u32 n = de__mtl_heap_list(d, heaps, 256);
+    for (u32 i = 0; i < n && i < 256; ++i)
+        if (heaps[i] == heap)
+            return true;
+    return false;
+}
+static bool queues_settled(de_gpu_device *d) {
+    for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q)
+        if (d->vt->queue_completed(d, (de_gpu_queue)q) <
+            de_atomic_load_u64(&d->submitted[q], DE_ATOMIC_ACQUIRE))
+            return false;
+    return true;
+}
+static void streaming_retirement_body(de_gpu_device *d) {
+    const bool uses_heaps = de__mtl_residency_uses_heaps(d);
+    const u64 waits = de__gpu_wait_idle_count(d);
+    bool pending = false;
+    for (u32 round = 0; round < 4; ++round) {
+        /* Poll (no wait_idle) until earlier rounds completed, so A's submit reclaims at once. */
+        for (u32 spin = 0; spin < 5000 && !queues_settled(d); ++spin)
+            de_sleep_ns(1000000);
+        ASSERT_TRUE(queues_settled(d));
+        (void)de__gpu_collect(d);
+        ASSERT_EQ(de__gpu_deferred_count(d), 0u);
+        void *before[256];
+        const u32 before_count = de__mtl_heap_list(d, before, 256);
+        ASSERT_TRUE(before_count < 256);
+        /* Above the shared class's dedicated threshold: a heap of its own, freed on reclaim. */
+        de_gpu_buffer big = de_gpu_buffer_create(
+            d, &(de_gpu_buffer_desc){.size = DE__MTL_SHARED_DEDICATED_SIZE + (1u << 20),
+                                     .usage = DE_USAGE_COPY_SRC,
+                                     .memory = DE_MEM_UPLOAD,
+                                     .name = "deng432.stream"});
+        ASSERT_TRUE(big.id);
+        void *heap = new_heap(d, before, before_count);
+        ASSERT_TRUE(heap != NULL);
+        de_gpu_texture texture = de_gpu_texture_create(
+            d, &(de_gpu_texture_desc){.width = 8,
+                                      .height = 8,
+                                      .mip_count = 2,
+                                      .format = DE_FMT_RGBA8_UNORM,
+                                      .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED});
+        ASSERT_TRUE(texture.id);
+        void *view = de__mtl_texture_object(d, texture, 1);
+        de_gpu_cmd *a = de_gpu_cmd_begin(d, DE_QUEUE_COMPUTE, "deng432.a");
+        de_gpu_cmd *b = de_gpu_cmd_begin(d, DE_QUEUE_COMPUTE, "deng432.b");
+        ASSERT_TRUE(a && b);
+        ASSERT_TRUE(de__mtl_cmd_encoder(a, DE__MTL_ENC_COMPUTE));
+        ASSERT_TRUE(de__mtl_cmd_encoder(b, DE__MTL_ENC_COMPUTE));
+        EXPECT_TRUE(de__mtl_residency_retains(b, view));
+        if (uses_heaps)
+            EXPECT_TRUE(de__mtl_residency_retains(b, heap));
+        de_gpu_buffer_destroy(d, big);
+        de_gpu_texture_destroy(d, texture);
+        pending |= de__gpu_deferred_count(d) != 0;
+        ASSERT_EQ(
+            de_gpu_queue_submit(d, DE_QUEUE_COMPUTE, &(de_gpu_submit){.cmds = &a, .cmd_count = 1}),
+            DE_OK);
+        de_gpu_cmd *c = de_gpu_cmd_begin(d, DE_QUEUE_COMPUTE, "deng432.c");
+        ASSERT_TRUE(c);
+        ASSERT_TRUE(de__mtl_cmd_encoder(c, DE__MTL_ENC_COMPUTE));
+        /* Reclaimed by A's submit while B is still unsubmitted. B still holds both, so neither
+         * address can have been reused for a new object. */
+        EXPECT_FALSE(heap_listed(d, heap));
+        EXPECT_FALSE(de__mtl_residency_retains(c, view));
+        EXPECT_FALSE(de__mtl_residency_retains(c, heap));
+        de_gpu_cmd *rest[2] = {b, c};
+        ASSERT_EQ(de_gpu_queue_submit(d, DE_QUEUE_COMPUTE,
+                                      &(de_gpu_submit){.cmds = rest, .cmd_count = 2}),
+                  DE_OK);
+        ASSERT_FALSE(de_gpu_device_is_lost(d));
+    }
+    EXPECT_TRUE(pending);
+    EXPECT_EQ(de__gpu_wait_idle_count(d), waits);
+    de_gpu_wait_idle(d);
+    EXPECT_EQ(de__gpu_wait_idle_count(d), waits + 1u);
+    ASSERT_FALSE(de_gpu_device_is_lost(d));
+}
+TEST_F(gpu_metal, streaming_retirement_across_recorded_chunks_without_wait_idle, mtl_fx) {
+    streaming_retirement_body(f->d);
+}
+TEST(gpu_metal, streaming_retirement_across_recorded_chunks_forced_use_heap) {
+    static const char force[] = "gpu.metal.force_use_heap = true\n";
+    ASSERT_EQ(de_cvar_load_from_memory(force, sizeof force - 1), DE_OK);
+    mtl_fx fixture = {0};
+    mtl_fx_setup(&fixture);
+    de_cvar_set(de_cvar_find("gpu.metal.force_use_heap"), "0");
+    EXPECT_TRUE(de__mtl_residency_uses_heaps(fixture.d));
+    streaming_retirement_body(fixture.d);
+    mtl_fx_teardown(&fixture);
 }
 
 TEST_F(gpu_metal, retired_storage_excluded_from_future_encoders_without_clearing_descriptors,

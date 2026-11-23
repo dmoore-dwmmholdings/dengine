@@ -15,5 +15,11 @@ version = 1
 # The level (DENG-215 scene format).
 "flappy/level" = {type="scene", source="flappy.scene"}
 
+# Prefab fixture for the dide conformance suite (DENG-813): a base, a variant of it and a prefab
+# that nests it. Not part of the game or its bundles.
+"flappy/prefab/marker" = {type="prefab", source="prefabs/marker.prefab.toml"}
+"flappy/prefab/marker_variant" = {type="prefab", source="prefabs/marker_variant.prefab.toml"}
+"flappy/prefab/marker_pair" = {type="prefab", source="prefabs/marker_pair.prefab.toml"}
+
 [bundles.flappy_art]
 assets = ["flappy/tex/*"]

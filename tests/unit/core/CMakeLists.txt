@@ -148,6 +148,7 @@ add_test(NAME prof_no_tracy_in_shipping
 set_tests_properties(prof_no_tracy_in_shipping PROPERTIES
     LABELS "check;core"
     SKIP_REGULAR_EXPRESSION "prof_no_tracy_in_shipping: SKIPPED"
+    RESOURCE_LOCK prof_shipping # shared with editor_service_absent_in_shipping (DENG-555)
     TIMEOUT 900)
 if(DE_IS_SHIPPING)
     # It builds this build's dengine: no other test may drive the build at the same time.

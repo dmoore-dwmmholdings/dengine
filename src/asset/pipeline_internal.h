@@ -229,6 +229,10 @@ struct de_asset_load_ctx {
     de_result result;
     bool msg_set;
     char msg[DE__LOAD_MSG_MAX];
+    /* Cook failure location resolved while the cook task still owns its asset-root snapshot. */
+    char diagnostic_source[DE_ASSET_EVENT_SOURCE_CAP];
+    u32 diagnostic_line;
+    bool diagnostic_captured;
     void *object;
     u64 object_bytes;
     de_asset_id *deps; /**< declared dependencies, no duplicates */
