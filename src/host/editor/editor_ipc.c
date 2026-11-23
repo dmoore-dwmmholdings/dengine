@@ -11,6 +11,10 @@
 
 #include <string.h>
 
+#ifndef _WIN32
+#include <sys/socket.h>
+#endif
+
 /* The thread waits this long in recv while connected: the most a frame's reply waits to be sent.
  * A small read is answered as soon as it arrives (recv returns on data). */
 #define IPC_RECV_TIMEOUT_MS   1u
@@ -239,6 +243,14 @@ static void rival_pump(de__ed_ipc *ipc) {
         ipc->rival_open = true;
         ipc->rival_since_ns = de_time_now_ns();
     }
+    /* The live client may have closed and reconnected inside one receive timeout. Its close is
+     * already visible on the live socket, so do not answer `conflict`: mark the link broken and let
+     * the loop adopt this client as the new link with its hello still unread. */
+    char probe;
+    if (recv(ipc->conn.fd, &probe, 1, MSG_PEEK | MSG_DONTWAIT) == 0) {
+        ipc->broken = "closed";
+        return;
+    }
     u8 kind = 0;
     size_t len = 0;
     const de_ep_io io = de_ep_recv(&ipc->rival, ipc->recv, ipc->desc.max_frame, &kind, &len, 0);
@@ -329,8 +341,16 @@ static i32 ipc_main(void *user) {
             continue;
         }
         if (!linked) {
-            if (de_ep_accept(&ipc->listener, &ipc->conn, (u32)ipc->desc.max_frame,
-                             IPC_ACCEPT_TIMEOUT_MS) == DE_EP_IO_OK) {
+            /* An IDE that connected while the old link was still up, and has not been answered
+             * `conflict` yet, is the next link (DENG-555: a reconnect right after a drop). */
+            bool adopted = false;
+            if (ipc->rival_open) {
+                ipc->conn = ipc->rival;
+                ipc->rival_open = false;
+                adopted = true;
+            }
+            if (adopted || de_ep_accept(&ipc->listener, &ipc->conn, (u32)ipc->desc.max_frame,
+                                        IPC_ACCEPT_TIMEOUT_MS) == DE_EP_IO_OK) {
                 ++ipc->epoch;
                 ipc->in_flight = 0; /* the frame drops the old epoch's requests */
                 ipc->authed = false;
@@ -339,13 +359,16 @@ static i32 ipc_main(void *user) {
             }
             continue;
         }
-        rival_pump(ipc);
+        /* The live link is read before a second client is looked at, so an IDE that closes and
+         * reconnects at once is seen as gone, not answered `conflict` (DENG-555). */
         u8 kind = 0;
         size_t len = 0;
         const de_ep_io io = de_ep_recv(&ipc->conn, ipc->recv, ipc->desc.max_frame, &kind, &len,
                                        IPC_RECV_TIMEOUT_MS);
-        if (io == DE_EP_IO_TIMEOUT)
+        if (io == DE_EP_IO_TIMEOUT) {
+            rival_pump(ipc);
             continue;
+        }
         if (io != DE_EP_IO_OK) {
             ipc->broken = io == DE_EP_IO_CLOSED ? "closed" : "read failed";
             continue;
@@ -359,6 +382,8 @@ static i32 ipc_main(void *user) {
             on_hello(ipc, &req);
         else
             on_request(ipc, &req, len);
+        if (ipc->broken == NULL)
+            rival_pump(ipc); /* a busy link still answers a second client */
     }
     /* Stopping: send what the frame queued (a goodbye reply), then close. */
     flush_out(ipc);
