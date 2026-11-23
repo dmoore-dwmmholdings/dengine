@@ -380,6 +380,15 @@ typedef struct de__ed_foliage_hooks {
 /* DENG-821: physics.loadAsset and the mouse spring physics.drag.* (editor_physics.c, physics
  * builds only); capabilities physics.authoring and physics.mouseSpring (protocol 1.23). */
 void de__ed_physics_register(de__editor *ed);
+/* DENG-828: input.loadActionMaps and input.monitor.subscribe (editor_input.c); capabilities
+ * input.actionMaps and input.monitor (protocol 1.24). de__ed_input_unsubscribe ends an input
+ * monitor subscription for the generic unsubscribe; false when `id` is not one. */
+void de__ed_input_register(de__editor *ed);
+bool de__ed_input_unsubscribe(u32 id);
+/* The sample input monitor subscription `id` would send now (one-frame phases it holds are
+ * consumed), and the samples it has sent; for the tests. */
+bool de__ed_input_sample(de__editor *ed, u32 id, de_ep_input_monitor_sample *out);
+u32 de__ed_input_samples(u32 id);
 /* DENG-778: ui.layout (editor_ui.c, UI builds only); capability ui.editor (protocol 1.14). DENG-785
  * adds the 1.15 methods: ui.nodeCorners, ui.themes, ui.themeVars, ui.previewTheme, loc.locales,
  * loc.strings and loc.previewLocale (`unsupported` below 1.15). The

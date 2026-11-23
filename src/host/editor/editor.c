@@ -622,6 +622,7 @@ de_result de__editor_start(de__host *h) {
     de__ed_terrain_register(ed); /* so is DeTerrain */
     de__ed_foliage_register(ed); /* and DeFoliage */
 #endif
+    de__ed_input_register(ed); /* DENG-828: input.loadActionMaps, input.monitor.subscribe */
 #if DE_HAS_PHYSICS
     de__ed_physics_register(ed); /* DENG-821: physics.loadAsset, physics.drag.* */
 #endif

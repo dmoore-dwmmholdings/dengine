@@ -119,6 +119,7 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
         editor/editor_gizmo.h
         editor/editor_debugdraw.c
         editor/editor_extra.c
+        editor/editor_input.c
         editor/editor_spline.c)
     target_link_libraries(de_host PRIVATE de_tp_dide_protocol)
     set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS de_tp_dide_protocol)

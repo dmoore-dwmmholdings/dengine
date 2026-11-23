@@ -173,6 +173,40 @@ bool de_ep_asset_event_kind_parse(de_ep_str s, de_ep_asset_event_kind *out) {
     return false;
 }
 
+const char *de_ep_input_action_phase_name(de_ep_input_action_phase v) {
+    switch (v) {
+    case DE_EP_INPUT_ACTION_PHASE_IDLE:
+        return "idle";
+    case DE_EP_INPUT_ACTION_PHASE_STARTED:
+        return "started";
+    case DE_EP_INPUT_ACTION_PHASE_PERFORMED:
+        return "performed";
+    case DE_EP_INPUT_ACTION_PHASE_CANCELED:
+        return "canceled";
+    }
+    return "";
+}
+
+bool de_ep_input_action_phase_parse(de_ep_str s, de_ep_input_action_phase *out) {
+    if (de_ep_str_eq(s, "idle")) {
+        *out = DE_EP_INPUT_ACTION_PHASE_IDLE;
+        return true;
+    }
+    if (de_ep_str_eq(s, "started")) {
+        *out = DE_EP_INPUT_ACTION_PHASE_STARTED;
+        return true;
+    }
+    if (de_ep_str_eq(s, "performed")) {
+        *out = DE_EP_INPUT_ACTION_PHASE_PERFORMED;
+        return true;
+    }
+    if (de_ep_str_eq(s, "canceled")) {
+        *out = DE_EP_INPUT_ACTION_PHASE_CANCELED;
+        return true;
+    }
+    return false;
+}
+
 const char *de_ep_material_graph_param_kind_name(de_ep_material_graph_param_kind v) {
     switch (v) {
     case DE_EP_MATERIAL_GRAPH_PARAM_KIND_FLOAT:
@@ -4493,6 +4527,138 @@ void de_ep_read_hello_result(mpack_reader_t *r, de_ep_arena *a, de_ep_hello_resu
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
+void de_ep_write_input_action_state(mpack_writer_t *w, const de_ep_input_action_state *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    n += v->has_progress ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "map");
+    de_ep_write_str(w, v->map);
+    mpack_write_cstr(w, "name");
+    de_ep_write_str(w, v->name);
+    mpack_write_cstr(w, "type");
+    de_ep_write_str(w, v->type);
+    mpack_write_cstr(w, "value");
+    mpack_start_array(w, v->value.count);
+    for (uint32_t i_1 = 0; i_1 < v->value.count; ++i_1) {
+        mpack_write_float(w, v->value.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "phase");
+    mpack_write_cstr(w, de_ep_input_action_phase_name(v->phase));
+    mpack_write_cstr(w, "interaction");
+    de_ep_write_str(w, v->interaction);
+    if (v->has_progress) {
+        mpack_write_cstr(w, "progress");
+        mpack_write_float(w, v->progress);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_input_action_state(mpack_reader_t *r, de_ep_arena *a, de_ep_input_action_state *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "map")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->map);
+        } else if (de_ep_str_eq(k, "name")) {
+            seen |= (uint64_t)1 << 1;
+            de_ep_read_str(r, &out->name);
+        } else if (de_ep_str_eq(k, "type")) {
+            seen |= (uint64_t)1 << 2;
+            de_ep_read_str(r, &out->type);
+        } else if (de_ep_str_eq(k, "value")) {
+            seen |= (uint64_t)1 << 3;
+            out->value.count = mpack_expect_array(r);
+            out->value.items = (float *)de_ep_arena_array(r, a, out->value.count, sizeof(*out->value.items));
+            for (uint32_t i_3 = 0; out->value.items && i_3 < out->value.count; ++i_3)
+            {
+                out->value.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "phase")) {
+            seen |= (uint64_t)1 << 4;
+            {
+                de_ep_str s_;
+                de_ep_read_str(r, &s_);
+                if (!de_ep_input_action_phase_parse(s_, &out->phase))
+                    mpack_reader_flag_error(r, mpack_error_data);
+            }
+        } else if (de_ep_str_eq(k, "interaction")) {
+            seen |= (uint64_t)1 << 5;
+            de_ep_read_str(r, &out->interaction);
+        } else if (de_ep_str_eq(k, "progress")) {
+            seen |= (uint64_t)1 << 6;
+            out->has_progress = true;
+            out->progress = mpack_expect_float(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(63)) != UINT64_C(63))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_input_context_state(mpack_writer_t *w, const de_ep_input_context_state *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "name");
+    de_ep_write_str(w, v->name);
+    mpack_write_cstr(w, "maps");
+    mpack_start_array(w, v->maps.count);
+    for (uint32_t i_1 = 0; i_1 < v->maps.count; ++i_1) {
+        de_ep_write_str(w, v->maps.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "blocksLower");
+    mpack_write_bool(w, v->blocks_lower);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_input_context_state(mpack_reader_t *r, de_ep_arena *a, de_ep_input_context_state *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "name")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->name);
+        } else if (de_ep_str_eq(k, "maps")) {
+            seen |= (uint64_t)1 << 1;
+            out->maps.count = mpack_expect_array(r);
+            out->maps.items = (de_ep_str *)de_ep_arena_array(r, a, out->maps.count, sizeof(*out->maps.items));
+            for (uint32_t i_3 = 0; out->maps.items && i_3 < out->maps.count; ++i_3)
+            {
+                de_ep_read_str(r, &out->maps.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "blocksLower")) {
+            seen |= (uint64_t)1 << 2;
+            out->blocks_lower = mpack_expect_bool(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(7)) != UINT64_C(7))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
 void de_ep_write_input_event(mpack_writer_t *w, const de_ep_input_event *v) {
     uint32_t n = 0;
     ++n;
@@ -4758,6 +4924,404 @@ void de_ep_read_input_focus_params(mpack_reader_t *r, de_ep_arena *a, de_ep_inpu
     }
     mpack_done_map(r);
     if ((seen & UINT64_C(3)) != UINT64_C(3))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_input_gamepad_state(mpack_writer_t *w, const de_ep_input_gamepad_state *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    n += v->has_gyro ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "id");
+    mpack_write_u32(w, v->id);
+    mpack_write_cstr(w, "name");
+    de_ep_write_str(w, v->name);
+    mpack_write_cstr(w, "family");
+    de_ep_write_str(w, v->family);
+    mpack_write_cstr(w, "leftStick");
+    mpack_start_array(w, v->left_stick.count);
+    for (uint32_t i_1 = 0; i_1 < v->left_stick.count; ++i_1) {
+        mpack_write_float(w, v->left_stick.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "rightStick");
+    mpack_start_array(w, v->right_stick.count);
+    for (uint32_t i_1 = 0; i_1 < v->right_stick.count; ++i_1) {
+        mpack_write_float(w, v->right_stick.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "leftTrigger");
+    mpack_write_float(w, v->left_trigger);
+    mpack_write_cstr(w, "rightTrigger");
+    mpack_write_float(w, v->right_trigger);
+    mpack_write_cstr(w, "buttons");
+    mpack_start_array(w, v->buttons.count);
+    for (uint32_t i_1 = 0; i_1 < v->buttons.count; ++i_1) {
+        de_ep_write_str(w, v->buttons.items[i_1]);
+    }
+    mpack_finish_array(w);
+    if (v->has_gyro) {
+        mpack_write_cstr(w, "gyro");
+        mpack_start_array(w, v->gyro.count);
+        for (uint32_t i_2 = 0; i_2 < v->gyro.count; ++i_2) {
+            mpack_write_float(w, v->gyro.items[i_2]);
+        }
+        mpack_finish_array(w);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_input_gamepad_state(mpack_reader_t *r, de_ep_arena *a, de_ep_input_gamepad_state *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "id")) {
+            seen |= (uint64_t)1 << 0;
+            out->id = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "name")) {
+            seen |= (uint64_t)1 << 1;
+            de_ep_read_str(r, &out->name);
+        } else if (de_ep_str_eq(k, "family")) {
+            seen |= (uint64_t)1 << 2;
+            de_ep_read_str(r, &out->family);
+        } else if (de_ep_str_eq(k, "leftStick")) {
+            seen |= (uint64_t)1 << 3;
+            out->left_stick.count = mpack_expect_array(r);
+            out->left_stick.items = (float *)de_ep_arena_array(r, a, out->left_stick.count, sizeof(*out->left_stick.items));
+            for (uint32_t i_3 = 0; out->left_stick.items && i_3 < out->left_stick.count; ++i_3)
+            {
+                out->left_stick.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "rightStick")) {
+            seen |= (uint64_t)1 << 4;
+            out->right_stick.count = mpack_expect_array(r);
+            out->right_stick.items = (float *)de_ep_arena_array(r, a, out->right_stick.count, sizeof(*out->right_stick.items));
+            for (uint32_t i_3 = 0; out->right_stick.items && i_3 < out->right_stick.count; ++i_3)
+            {
+                out->right_stick.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "leftTrigger")) {
+            seen |= (uint64_t)1 << 5;
+            out->left_trigger = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "rightTrigger")) {
+            seen |= (uint64_t)1 << 6;
+            out->right_trigger = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "buttons")) {
+            seen |= (uint64_t)1 << 7;
+            out->buttons.count = mpack_expect_array(r);
+            out->buttons.items = (de_ep_str *)de_ep_arena_array(r, a, out->buttons.count, sizeof(*out->buttons.items));
+            for (uint32_t i_3 = 0; out->buttons.items && i_3 < out->buttons.count; ++i_3)
+            {
+                de_ep_read_str(r, &out->buttons.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "gyro")) {
+            seen |= (uint64_t)1 << 8;
+            out->has_gyro = true;
+            out->gyro.count = mpack_expect_array(r);
+            out->gyro.items = (float *)de_ep_arena_array(r, a, out->gyro.count, sizeof(*out->gyro.items));
+            for (uint32_t i_3 = 0; out->gyro.items && i_3 < out->gyro.count; ++i_3)
+            {
+                out->gyro.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(255)) != UINT64_C(255))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_input_load_action_maps(mpack_writer_t *w, const de_ep_input_load_action_maps *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "maps");
+    mpack_write_u32(w, v->maps);
+    mpack_write_cstr(w, "actions");
+    mpack_write_u32(w, v->actions);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_input_load_action_maps(mpack_reader_t *r, de_ep_arena *a, de_ep_input_load_action_maps *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "maps")) {
+            seen |= (uint64_t)1 << 0;
+            out->maps = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "actions")) {
+            seen |= (uint64_t)1 << 1;
+            out->actions = mpack_expect_u32(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(3)) != UINT64_C(3))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_input_load_action_maps_params(mpack_writer_t *w, const de_ep_input_load_action_maps_params *v) {
+    uint32_t n = 0;
+    ++n;
+    n += v->has_text ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "path");
+    de_ep_write_str(w, v->path);
+    if (v->has_text) {
+        mpack_write_cstr(w, "text");
+        de_ep_write_str(w, v->text);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_input_load_action_maps_params(mpack_reader_t *r, de_ep_arena *a, de_ep_input_load_action_maps_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "path")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->path);
+        } else if (de_ep_str_eq(k, "text")) {
+            seen |= (uint64_t)1 << 1;
+            out->has_text = true;
+            de_ep_read_str(r, &out->text);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(1)) != UINT64_C(1))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_input_monitor_sample(mpack_writer_t *w, const de_ep_input_monitor_sample *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "subscription");
+    mpack_write_u32(w, v->subscription);
+    mpack_write_cstr(w, "frame");
+    mpack_write_u64(w, v->frame);
+    mpack_write_cstr(w, "keys");
+    mpack_start_array(w, v->keys.count);
+    for (uint32_t i_1 = 0; i_1 < v->keys.count; ++i_1) {
+        de_ep_write_str(w, v->keys.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "mouse");
+    de_ep_write_input_mouse_state(w, &v->mouse);
+    mpack_write_cstr(w, "gamepads");
+    mpack_start_array(w, v->gamepads.count);
+    for (uint32_t i_1 = 0; i_1 < v->gamepads.count; ++i_1) {
+        de_ep_write_input_gamepad_state(w, &v->gamepads.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "actions");
+    mpack_start_array(w, v->actions.count);
+    for (uint32_t i_1 = 0; i_1 < v->actions.count; ++i_1) {
+        de_ep_write_input_action_state(w, &v->actions.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "contexts");
+    mpack_start_array(w, v->contexts.count);
+    for (uint32_t i_1 = 0; i_1 < v->contexts.count; ++i_1) {
+        de_ep_write_input_context_state(w, &v->contexts.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_input_monitor_sample(mpack_reader_t *r, de_ep_arena *a, de_ep_input_monitor_sample *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "subscription")) {
+            seen |= (uint64_t)1 << 0;
+            out->subscription = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "frame")) {
+            seen |= (uint64_t)1 << 1;
+            out->frame = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "keys")) {
+            seen |= (uint64_t)1 << 2;
+            out->keys.count = mpack_expect_array(r);
+            out->keys.items = (de_ep_str *)de_ep_arena_array(r, a, out->keys.count, sizeof(*out->keys.items));
+            for (uint32_t i_3 = 0; out->keys.items && i_3 < out->keys.count; ++i_3)
+            {
+                de_ep_read_str(r, &out->keys.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "mouse")) {
+            seen |= (uint64_t)1 << 3;
+            de_ep_read_input_mouse_state(r, a, &out->mouse);
+        } else if (de_ep_str_eq(k, "gamepads")) {
+            seen |= (uint64_t)1 << 4;
+            out->gamepads.count = mpack_expect_array(r);
+            out->gamepads.items = (de_ep_input_gamepad_state *)de_ep_arena_array(r, a, out->gamepads.count, sizeof(*out->gamepads.items));
+            for (uint32_t i_3 = 0; out->gamepads.items && i_3 < out->gamepads.count; ++i_3)
+            {
+                de_ep_read_input_gamepad_state(r, a, &out->gamepads.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "actions")) {
+            seen |= (uint64_t)1 << 5;
+            out->actions.count = mpack_expect_array(r);
+            out->actions.items = (de_ep_input_action_state *)de_ep_arena_array(r, a, out->actions.count, sizeof(*out->actions.items));
+            for (uint32_t i_3 = 0; out->actions.items && i_3 < out->actions.count; ++i_3)
+            {
+                de_ep_read_input_action_state(r, a, &out->actions.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "contexts")) {
+            seen |= (uint64_t)1 << 6;
+            out->contexts.count = mpack_expect_array(r);
+            out->contexts.items = (de_ep_input_context_state *)de_ep_arena_array(r, a, out->contexts.count, sizeof(*out->contexts.items));
+            for (uint32_t i_3 = 0; out->contexts.items && i_3 < out->contexts.count; ++i_3)
+            {
+                de_ep_read_input_context_state(r, a, &out->contexts.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(127)) != UINT64_C(127))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_input_monitor_subscribe_params(mpack_writer_t *w, const de_ep_input_monitor_subscribe_params *v) {
+    uint32_t n = 0;
+    n += v->has_rate_hz ? 1u : 0u;
+    mpack_start_map(w, n);
+    if (v->has_rate_hz) {
+        mpack_write_cstr(w, "rateHz");
+        mpack_write_float(w, v->rate_hz);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_input_monitor_subscribe_params(mpack_reader_t *r, de_ep_arena *a, de_ep_input_monitor_subscribe_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "rateHz")) {
+            seen |= (uint64_t)1 << 0;
+            out->has_rate_hz = true;
+            out->rate_hz = mpack_expect_float(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    (void)seen;
+}
+
+void de_ep_write_input_mouse_state(mpack_writer_t *w, const de_ep_input_mouse_state *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "x");
+    mpack_write_float(w, v->x);
+    mpack_write_cstr(w, "y");
+    mpack_write_float(w, v->y);
+    mpack_write_cstr(w, "dx");
+    mpack_write_float(w, v->dx);
+    mpack_write_cstr(w, "dy");
+    mpack_write_float(w, v->dy);
+    mpack_write_cstr(w, "wheelX");
+    mpack_write_float(w, v->wheel_x);
+    mpack_write_cstr(w, "wheelY");
+    mpack_write_float(w, v->wheel_y);
+    mpack_write_cstr(w, "buttons");
+    mpack_start_array(w, v->buttons.count);
+    for (uint32_t i_1 = 0; i_1 < v->buttons.count; ++i_1) {
+        de_ep_write_str(w, v->buttons.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_input_mouse_state(mpack_reader_t *r, de_ep_arena *a, de_ep_input_mouse_state *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "x")) {
+            seen |= (uint64_t)1 << 0;
+            out->x = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "y")) {
+            seen |= (uint64_t)1 << 1;
+            out->y = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "dx")) {
+            seen |= (uint64_t)1 << 2;
+            out->dx = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "dy")) {
+            seen |= (uint64_t)1 << 3;
+            out->dy = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "wheelX")) {
+            seen |= (uint64_t)1 << 4;
+            out->wheel_x = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "wheelY")) {
+            seen |= (uint64_t)1 << 5;
+            out->wheel_y = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "buttons")) {
+            seen |= (uint64_t)1 << 6;
+            out->buttons.count = mpack_expect_array(r);
+            out->buttons.items = (de_ep_str *)de_ep_arena_array(r, a, out->buttons.count, sizeof(*out->buttons.items));
+            for (uint32_t i_3 = 0; out->buttons.items && i_3 < out->buttons.count; ++i_3)
+            {
+                de_ep_read_str(r, &out->buttons.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(127)) != UINT64_C(127))
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
@@ -12713,6 +13277,8 @@ static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
     "hello",
     "input.events",
     "input.focus",
+    "input.loadActionMaps",
+    "input.monitor.subscribe",
     "loc.locales",
     "loc.previewLocale",
     "loc.pseudo",
@@ -12841,6 +13407,8 @@ static const char *const de_ep__capabilities[DE_EP_METHOD_COUNT] = {
     NULL,
     NULL,
     NULL,
+    "input.actionMaps",
+    "input.monitor",
     "ui.editor",
     "ui.editor",
     "ui.editor",
@@ -13520,6 +14088,32 @@ bool de_ep_read_params_input_focus(const de_ep_request *req, de_ep_arena *a, de_
 void de_ep_write_response_input_focus(mpack_writer_t *w, uint64_t id, const de_ep_empty *result) {
     de_ep_write_result_begin(w, id);
     de_ep_write_empty(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_input_load_action_maps(const de_ep_request *req, de_ep_arena *a, de_ep_input_load_action_maps_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_input_load_action_maps_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_input_load_action_maps(mpack_writer_t *w, uint64_t id, const de_ep_input_load_action_maps *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_input_load_action_maps(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_input_monitor_subscribe(const de_ep_request *req, de_ep_arena *a, de_ep_input_monitor_subscribe_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_input_monitor_subscribe_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_input_monitor_subscribe(mpack_writer_t *w, uint64_t id, const de_ep_subscribe_result *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_subscribe_result(w, result);
     de_ep_write_result_end(w);
 }
 
@@ -14680,6 +15274,12 @@ void de_ep_write_notify_gizmo_drag_update(mpack_writer_t *w, uint64_t seq, const
 void de_ep_write_notify_input_capture_changed(mpack_writer_t *w, uint64_t seq, const de_ep_capture_changed *data) {
     de_ep_write_notification_begin(w, "input.captureChanged", seq);
     de_ep_write_capture_changed(w, data);
+    de_ep_write_notification_end(w);
+}
+
+void de_ep_write_notify_input_monitor(mpack_writer_t *w, uint64_t seq, const de_ep_input_monitor_sample *data) {
+    de_ep_write_notification_begin(w, "input.monitor", seq);
+    de_ep_write_input_monitor_sample(w, data);
     de_ep_write_notification_end(w);
 }
 

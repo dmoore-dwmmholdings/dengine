@@ -288,6 +288,17 @@ de_result de__bindings_parse(de_input *in, const char *text, size_t len, const c
  */
 de_result de__action_maps_parse(de_input *in, const char *text, size_t len, const char *source,
                                 u32 *unknown_keys);
+/** DENG-828: what one de__action_maps_parse_counted call added: the `[maps.<name>]` tables and
+ * their actions (an existing map or action of the same name counts; it was updated). */
+typedef struct de__action_maps_counts {
+    u32 maps;
+    u32 actions;
+} de__action_maps_counts;
+/** de__action_maps_parse, and on DE_OK the counts in `*counts` (NULL: not wanted; zeroed on an
+ * error). The editor's input.loadActionMaps uses it for the IDE's unsaved text. */
+de_result de__action_maps_parse_counted(de_input *in, const char *text, size_t len,
+                                        const char *source, u32 *unknown_keys,
+                                        de__action_maps_counts *counts);
 
 DE_EXTERN_C_END
 #endif
