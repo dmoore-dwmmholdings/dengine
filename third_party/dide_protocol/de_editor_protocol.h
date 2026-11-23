@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.24"
-#define DE_EP_SCHEMA_HASH "0451eb867f2432c2"
+#define DE_EP_PROTOCOL_VERSION "1.25"
+#define DE_EP_SCHEMA_HASH "4385c062eff4110b"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -115,6 +115,24 @@ typedef enum de_ep_material_graph_target_status {
 } de_ep_material_graph_target_status;
 const char *de_ep_material_graph_target_status_name(de_ep_material_graph_target_status v);
 bool de_ep_material_graph_target_status_parse(de_ep_str s, de_ep_material_graph_target_status *out);
+
+typedef enum de_ep_nav_bake_state {
+    DE_EP_NAV_BAKE_STATE_RUNNING,
+    DE_EP_NAV_BAKE_STATE_DONE,
+    DE_EP_NAV_BAKE_STATE_CANCELED,
+    DE_EP_NAV_BAKE_STATE_FAILED,
+} de_ep_nav_bake_state;
+const char *de_ep_nav_bake_state_name(de_ep_nav_bake_state v);
+bool de_ep_nav_bake_state_parse(de_ep_str s, de_ep_nav_bake_state *out);
+
+typedef enum de_ep_nav_tile_state {
+    DE_EP_NAV_TILE_STATE_UNBAKED,
+    DE_EP_NAV_TILE_STATE_BAKED,
+    DE_EP_NAV_TILE_STATE_DIRTY,
+    DE_EP_NAV_TILE_STATE_BAKING,
+} de_ep_nav_tile_state;
+const char *de_ep_nav_tile_state_name(de_ep_nav_tile_state v);
+bool de_ep_nav_tile_state_parse(de_ep_str s, de_ep_nav_tile_state *out);
 
 typedef enum de_ep_override_kind {
     DE_EP_OVERRIDE_KIND_FIELD,
@@ -269,6 +287,24 @@ typedef struct de_ep_model_render_params de_ep_model_render_params;
 typedef struct de_ep_model_slot de_ep_model_slot;
 typedef struct de_ep_model_submesh de_ep_model_submesh;
 typedef struct de_ep_model_submesh_lod de_ep_model_submesh_lod;
+typedef struct de_ep_nav_agent de_ep_nav_agent;
+typedef struct de_ep_nav_area de_ep_nav_area;
+typedef struct de_ep_nav_bake_params de_ep_nav_bake_params;
+typedef struct de_ep_nav_bake_progress de_ep_nav_bake_progress;
+typedef struct de_ep_nav_bake_started de_ep_nav_bake_started;
+typedef struct de_ep_nav_bounds de_ep_nav_bounds;
+typedef struct de_ep_nav_cancel_bake_params de_ep_nav_cancel_bake_params;
+typedef struct de_ep_nav_configure_params de_ep_nav_configure_params;
+typedef struct de_ep_nav_info de_ep_nav_info;
+typedef struct de_ep_nav_overlay_params de_ep_nav_overlay_params;
+typedef struct de_ep_nav_path de_ep_nav_path;
+typedef struct de_ep_nav_test_path_params de_ep_nav_test_path_params;
+typedef struct de_ep_nav_tile de_ep_nav_tile;
+typedef struct de_ep_nav_tile_key de_ep_nav_tile_key;
+typedef struct de_ep_nav_tile_mesh de_ep_nav_tile_mesh;
+typedef struct de_ep_nav_tile_mesh_params de_ep_nav_tile_mesh_params;
+typedef struct de_ep_nav_tiles de_ep_nav_tiles;
+typedef struct de_ep_nav_tiles_params de_ep_nav_tiles_params;
 typedef struct de_ep_net_checksums de_ep_net_checksums;
 typedef struct de_ep_net_checksums_params de_ep_net_checksums_params;
 typedef struct de_ep_net_desync de_ep_net_desync;
@@ -477,6 +513,16 @@ typedef struct de_ep_list_edit_op {
     uint32_t count;
 } de_ep_list_edit_op;
 
+typedef struct de_ep_list_nav_area {
+    de_ep_nav_area *items;
+    uint32_t count;
+} de_ep_list_nav_area;
+
+typedef struct de_ep_list_nav_tile {
+    de_ep_nav_tile *items;
+    uint32_t count;
+} de_ep_list_nav_tile;
+
 typedef struct de_ep_list_surface {
     de_ep_surface *items;
     uint32_t count;
@@ -491,6 +537,11 @@ typedef struct de_ep_list_model_lod {
     de_ep_model_lod *items;
     uint32_t count;
 } de_ep_list_model_lod;
+
+typedef struct de_ep_list_nav_agent {
+    de_ep_nav_agent *items;
+    uint32_t count;
+} de_ep_list_nav_agent;
 
 typedef struct de_ep_list_override {
     de_ep_override *items;
@@ -556,6 +607,11 @@ typedef struct de_ep_list_input_event {
     de_ep_input_event *items;
     uint32_t count;
 } de_ep_list_input_event;
+
+typedef struct de_ep_list_nav_tile_key {
+    de_ep_nav_tile_key *items;
+    uint32_t count;
+} de_ep_list_nav_tile_key;
 
 typedef struct de_ep_list_system_info {
     de_ep_system_info *items;
@@ -1363,7 +1419,7 @@ struct de_ep_input_monitor_sample {
     de_ep_input_mouse_state mouse;
     de_ep_list_input_gamepad_state gamepads;
     de_ep_list_input_action_state actions; /* every action of every enabled map */
-    de_ep_list_input_context_state contexts; /* the active context stack, bottom to top */
+    de_ep_list_input_context_state contexts; /* the active context stack, top first */
 };
 
 /* Stream raw device state and resolved actions (de_input_* queries) while the game runs. Samples are sent in Play and Simulate only; Edit and Paused send none (the subscription stays). One subscription per connection is enough; a second is allowed. */
@@ -1605,6 +1661,170 @@ struct de_ep_model_submesh_lod {
     uint32_t meshlet_first; /* First meshlet in the cooked mesh's combined LOD meshlet table. */
     uint32_t triangles;
     uint32_t meshlets;
+};
+
+/* One agent type's bake settings (de_navmesh_build_desc). Each agent type has its own navmesh. */
+struct de_ep_nav_agent {
+    de_ep_str name; /* unique, 1 to 32 characters */
+    float radius; /* m, above 0: erodes the walkable area (agent_radius) */
+    float height; /* m, above 0 (agent_height) */
+    float max_slope_deg; /* degrees, 0 to 89 (agent_max_slope_rad) */
+    float step_height; /* m, 0 or more (agent_max_climb) */
+    float cell_size; /* m, 0.05 to 2: the voxel size */
+    float cell_height; /* m, 0.05 to 2 */
+    uint32_t collision_mask; /* physics layers used as input; 0 = every layer */
+};
+
+/* A nav area: walkable ground is area 0; off-mesh links and modifier volumes name theirs. A path's cost through an area is its length there times `cost`. */
+struct de_ep_nav_area {
+    uint32_t id; /* 0 to 15: the area_mask bit */
+    de_ep_str name;
+    float cost; /* 1 or more */
+};
+
+/* A world-space box. */
+struct de_ep_nav_bounds {
+    de_ep_list_f64 min; /* [x, y, z] */
+    de_ep_list_f64 max; /* [x, y, z]; each value above min's */
+};
+
+/* Bake tiles in the background (de_nav_rebuild_tiles), tile by tile. Progress comes on topic nav.bake. conflict while another bake runs; invalid_params for an unknown agent. */
+struct de_ep_nav_bake_params {
+    bool has_agent;
+    de_ep_str agent; /* absent: every agent type */
+    bool has_region;
+    de_ep_nav_bounds region; /* only the tiles this box meets; absent: every tile in bounds */
+    bool has_dirty_only;
+    bool dirty_only; /* only tiles that are unbaked or dirty; absent: false */
+};
+
+/* Topic nav.bake: sent as tiles finish (at most once a frame) and once when the bake ends (state done, canceled or failed). */
+struct de_ep_nav_bake_progress {
+    uint32_t bake;
+    de_ep_nav_bake_state state;
+    uint32_t done; /* tiles finished so far */
+    uint32_t total;
+    de_ep_list_nav_tile_key tiles; /* the tiles that finished since the last nav.bake of this bake */
+    bool auto_; /* started by an automatic rebake, not by nav.bake */
+    float ms; /* time since the bake started */
+    bool has_error;
+    de_ep_str error; /* state failed: why, naming the tile; finished tiles keep their new data */
+};
+
+struct de_ep_nav_bake_started {
+    uint32_t bake;
+    uint32_t tiles; /* tiles queued; 0 sends one nav.bake with state done */
+};
+
+/* Stop a bake. Tiles that finished keep their new data; the rest keep their old data and state. not_found when the bake is over. */
+struct de_ep_nav_cancel_bake_params {
+    uint32_t bake;
+};
+
+/* Change the nav settings; absent fields keep their values. Settings are world data, saved with the scene. A changed agent type, area cost or bounds makes the tiles it touches dirty; nothing rebakes until a bake (or, with autoRebake, at once for tiles that were baked). Invalid values are invalid_params and change nothing; a new tileSize while any tile is baked is conflict (the first bake fixes it, as de_nav_rebuild_tiles does). */
+struct de_ep_nav_configure_params {
+    bool has_agents;
+    de_ep_list_nav_agent agents; /* the whole list; a type left out is dropped with its navmesh */
+    bool has_areas;
+    de_ep_list_nav_area areas; /* the whole list; must hold area 0 */
+    bool has_bounds;
+    de_ep_nav_bounds bounds;
+    bool has_tile_size;
+    float tile_size; /* m; must divide 256 into whole tiles (8, 16, 32, 64) */
+    bool has_auto_rebake;
+    bool auto_rebake;
+};
+
+/* What the engine draws over editor viewports (debug draw, Edit and Simulate). The IDE sends the whole state each time. */
+struct de_ep_nav_overlay_params {
+    bool has_agent;
+    de_ep_str agent; /* the agent type whose navmesh is drawn; absent: draw nothing */
+    bool navmesh; /* the baked polygons, coloured by area */
+    bool tiles; /* tile borders, coloured by NavTileState */
+    bool links; /* off-mesh links as arcs, with an arrow head on one-way links */
+    bool has_path;
+    de_ep_list_f64 path; /* a polyline to draw (the test path), 3 values per point */
+};
+
+struct de_ep_nav_info {
+    uint64_t revision; /* bumps on every configure and every finished tile */
+    de_ep_list_f64 up; /* the world up axis, unit [x, y, z]; tiles lie on the plane across it */
+    de_ep_nav_bounds bounds; /* the box that is baked */
+    float tile_size; /* m; tile (x, y) covers bounds.min + [x, y] * tileSize along the two horizontal axes, in axis order */
+    uint32_t tiles_x;
+    uint32_t tiles_y;
+    bool auto_rebake; /* rebake a baked tile when its input geometry, modifiers or links change (default on) */
+    de_ep_list_nav_agent agents; /* at least one; at most maxAgents */
+    de_ep_list_nav_area areas; /* by id; area 0 is always present */
+    uint32_t max_agents;
+    de_ep_str link_component; /* the reflected off-mesh link component */
+    de_ep_str modifier_component; /* the reflected nav modifier volume component */
+    de_ep_str grid_component; /* the reflected 2D grid nav component */
+    bool has_bake;
+    uint32_t bake; /* the running bake, if any */
+    de_ep_nav_overlay_params overlay;
+};
+
+struct de_ep_nav_path {
+    de_ep_list_f64 points; /* the string-pulled path: corner points, 3 values each, the start (on the navmesh) first */
+    de_ep_list_f64 corridor; /* the path before string pulling: the centre of each polygon A* crossed, 3 values each */
+    double cost; /* the A* cost: length through each area times its cost, plus off-mesh links */
+    double length; /* m along points */
+    bool partial; /* to cannot be reached: the path ends at the reachable point nearest to it */
+    de_ep_list_u64 links; /* the link entities the path uses, in order */
+    uint64_t revision; /* the NavInfo.revision the path was found on */
+};
+
+/* de_nav_find_path on one agent type's navmesh. not_found when no navmesh is near from or to (the message says which), invalid_params for an unknown agent or a bad point. */
+struct de_ep_nav_test_path_params {
+    de_ep_str agent;
+    de_ep_list_f64 from; /* [x, y, z] */
+    de_ep_list_f64 to; /* [x, y, z] */
+    bool has_area_mask;
+    uint32_t area_mask; /* bit i admits area i; absent or 0: every area */
+};
+
+struct de_ep_nav_tile {
+    int32_t x;
+    int32_t y;
+    de_ep_nav_tile_state state;
+    uint64_t revision; /* NavInfo.revision when this tile last finished baking; 0 when unbaked. A rebake changes it, so callers can tell which tiles a change rebuilt */
+    uint32_t polys; /* polygons in the baked tile */
+    uint32_t links; /* off-mesh links that start in the baked tile */
+    float ms; /* how long the last bake of this tile took */
+};
+
+struct de_ep_nav_tile_key {
+    de_ep_str agent;
+    int32_t x;
+    int32_t y;
+};
+
+/* A baked tile's polygons as triangles, for drawing. */
+struct de_ep_nav_tile_mesh {
+    uint64_t revision;
+    de_ep_list_f32 positions; /* world space, 3 values per vertex */
+    de_ep_list_u32 triangles; /* 3 vertex indices per triangle */
+    de_ep_list_u32 areas; /* the area id of each triangle */
+};
+
+/* not_found for a tile outside bounds; an unbaked tile has no triangles. */
+struct de_ep_nav_tile_mesh_params {
+    de_ep_str agent;
+    int32_t x;
+    int32_t y;
+};
+
+struct de_ep_nav_tiles {
+    de_ep_str agent;
+    uint64_t revision;
+    de_ep_list_nav_tile tiles; /* row by row: y, then x */
+};
+
+struct de_ep_nav_tiles_params {
+    de_ep_str agent;
+    bool has_region;
+    de_ep_nav_bounds region; /* only the tiles this box meets */
 };
 
 struct de_ep_net_checksums {
@@ -2719,6 +2939,42 @@ void de_ep_write_model_submesh(mpack_writer_t *w, const de_ep_model_submesh *v);
 void de_ep_read_model_submesh(mpack_reader_t *r, de_ep_arena *a, de_ep_model_submesh *out);
 void de_ep_write_model_submesh_lod(mpack_writer_t *w, const de_ep_model_submesh_lod *v);
 void de_ep_read_model_submesh_lod(mpack_reader_t *r, de_ep_arena *a, de_ep_model_submesh_lod *out);
+void de_ep_write_nav_agent(mpack_writer_t *w, const de_ep_nav_agent *v);
+void de_ep_read_nav_agent(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_agent *out);
+void de_ep_write_nav_area(mpack_writer_t *w, const de_ep_nav_area *v);
+void de_ep_read_nav_area(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_area *out);
+void de_ep_write_nav_bake_params(mpack_writer_t *w, const de_ep_nav_bake_params *v);
+void de_ep_read_nav_bake_params(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_bake_params *out);
+void de_ep_write_nav_bake_progress(mpack_writer_t *w, const de_ep_nav_bake_progress *v);
+void de_ep_read_nav_bake_progress(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_bake_progress *out);
+void de_ep_write_nav_bake_started(mpack_writer_t *w, const de_ep_nav_bake_started *v);
+void de_ep_read_nav_bake_started(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_bake_started *out);
+void de_ep_write_nav_bounds(mpack_writer_t *w, const de_ep_nav_bounds *v);
+void de_ep_read_nav_bounds(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_bounds *out);
+void de_ep_write_nav_cancel_bake_params(mpack_writer_t *w, const de_ep_nav_cancel_bake_params *v);
+void de_ep_read_nav_cancel_bake_params(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_cancel_bake_params *out);
+void de_ep_write_nav_configure_params(mpack_writer_t *w, const de_ep_nav_configure_params *v);
+void de_ep_read_nav_configure_params(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_configure_params *out);
+void de_ep_write_nav_info(mpack_writer_t *w, const de_ep_nav_info *v);
+void de_ep_read_nav_info(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_info *out);
+void de_ep_write_nav_overlay_params(mpack_writer_t *w, const de_ep_nav_overlay_params *v);
+void de_ep_read_nav_overlay_params(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_overlay_params *out);
+void de_ep_write_nav_path(mpack_writer_t *w, const de_ep_nav_path *v);
+void de_ep_read_nav_path(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_path *out);
+void de_ep_write_nav_test_path_params(mpack_writer_t *w, const de_ep_nav_test_path_params *v);
+void de_ep_read_nav_test_path_params(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_test_path_params *out);
+void de_ep_write_nav_tile(mpack_writer_t *w, const de_ep_nav_tile *v);
+void de_ep_read_nav_tile(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_tile *out);
+void de_ep_write_nav_tile_key(mpack_writer_t *w, const de_ep_nav_tile_key *v);
+void de_ep_read_nav_tile_key(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_tile_key *out);
+void de_ep_write_nav_tile_mesh(mpack_writer_t *w, const de_ep_nav_tile_mesh *v);
+void de_ep_read_nav_tile_mesh(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_tile_mesh *out);
+void de_ep_write_nav_tile_mesh_params(mpack_writer_t *w, const de_ep_nav_tile_mesh_params *v);
+void de_ep_read_nav_tile_mesh_params(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_tile_mesh_params *out);
+void de_ep_write_nav_tiles(mpack_writer_t *w, const de_ep_nav_tiles *v);
+void de_ep_read_nav_tiles(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_tiles *out);
+void de_ep_write_nav_tiles_params(mpack_writer_t *w, const de_ep_nav_tiles_params *v);
+void de_ep_read_nav_tiles_params(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_tiles_params *out);
 void de_ep_write_net_checksums(mpack_writer_t *w, const de_ep_net_checksums *v);
 void de_ep_read_net_checksums(mpack_reader_t *r, de_ep_arena *a, de_ep_net_checksums *out);
 void de_ep_write_net_checksums_params(mpack_writer_t *w, const de_ep_net_checksums_params *v);
@@ -3014,6 +3270,14 @@ typedef enum de_ep_method {
     DE_EP_METHOD_MATERIAL_GRAPH_CATALOG,
     DE_EP_METHOD_MATERIAL_GRAPH_COMPILE,
     DE_EP_METHOD_MATERIAL_GRAPH_GENERATE,
+    DE_EP_METHOD_NAV_BAKE,
+    DE_EP_METHOD_NAV_CANCEL_BAKE,
+    DE_EP_METHOD_NAV_CONFIGURE,
+    DE_EP_METHOD_NAV_INFO,
+    DE_EP_METHOD_NAV_OVERLAY,
+    DE_EP_METHOD_NAV_TEST_PATH,
+    DE_EP_METHOD_NAV_TILE_MESH,
+    DE_EP_METHOD_NAV_TILES,
     DE_EP_METHOD_NET_CHECKSUMS,
     DE_EP_METHOD_NET_SIM,
     DE_EP_METHOD_PHYSICS_DRAG_BEGIN,
@@ -3109,6 +3373,7 @@ const char *de_ep_method_capability(de_ep_method m);
 #define DE_EP_TOPIC_INPUT_CAPTURE_CHANGED "input.captureChanged"
 #define DE_EP_TOPIC_INPUT_MONITOR "input.monitor"
 #define DE_EP_TOPIC_LOG_RECORD "log.record"
+#define DE_EP_TOPIC_NAV_BAKE "nav.bake"
 #define DE_EP_TOPIC_NET_DESYNC "net.desync"
 #define DE_EP_TOPIC_REFLECT_CHANGED "reflect.changed"
 #define DE_EP_TOPIC_REPLAY_TICK "replay.tick"
@@ -3239,6 +3504,22 @@ bool de_ep_read_params_material_graph_compile(const de_ep_request *req, de_ep_ar
 void de_ep_write_response_material_graph_compile(mpack_writer_t *w, uint64_t id, const de_ep_material_graph_compiled *result);
 bool de_ep_read_params_material_graph_generate(const de_ep_request *req, de_ep_arena *a, de_ep_material_graph_params *out);
 void de_ep_write_response_material_graph_generate(mpack_writer_t *w, uint64_t id, const de_ep_material_graph_generated *result);
+bool de_ep_read_params_nav_bake(const de_ep_request *req, de_ep_arena *a, de_ep_nav_bake_params *out);
+void de_ep_write_response_nav_bake(mpack_writer_t *w, uint64_t id, const de_ep_nav_bake_started *result);
+bool de_ep_read_params_nav_cancel_bake(const de_ep_request *req, de_ep_arena *a, de_ep_nav_cancel_bake_params *out);
+void de_ep_write_response_nav_cancel_bake(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_nav_configure(const de_ep_request *req, de_ep_arena *a, de_ep_nav_configure_params *out);
+void de_ep_write_response_nav_configure(mpack_writer_t *w, uint64_t id, const de_ep_nav_info *result);
+bool de_ep_read_params_nav_info(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
+void de_ep_write_response_nav_info(mpack_writer_t *w, uint64_t id, const de_ep_nav_info *result);
+bool de_ep_read_params_nav_overlay(const de_ep_request *req, de_ep_arena *a, de_ep_nav_overlay_params *out);
+void de_ep_write_response_nav_overlay(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_nav_test_path(const de_ep_request *req, de_ep_arena *a, de_ep_nav_test_path_params *out);
+void de_ep_write_response_nav_test_path(mpack_writer_t *w, uint64_t id, const de_ep_nav_path *result);
+bool de_ep_read_params_nav_tile_mesh(const de_ep_request *req, de_ep_arena *a, de_ep_nav_tile_mesh_params *out);
+void de_ep_write_response_nav_tile_mesh(mpack_writer_t *w, uint64_t id, const de_ep_nav_tile_mesh *result);
+bool de_ep_read_params_nav_tiles(const de_ep_request *req, de_ep_arena *a, de_ep_nav_tiles_params *out);
+void de_ep_write_response_nav_tiles(mpack_writer_t *w, uint64_t id, const de_ep_nav_tiles *result);
 bool de_ep_read_params_net_checksums(const de_ep_request *req, de_ep_arena *a, de_ep_net_checksums_params *out);
 void de_ep_write_response_net_checksums(mpack_writer_t *w, uint64_t id, const de_ep_net_checksums *result);
 bool de_ep_read_params_net_sim(const de_ep_request *req, de_ep_arena *a, de_ep_net_sim_params *out);
@@ -3405,6 +3686,7 @@ void de_ep_write_notify_gizmo_drag_update(mpack_writer_t *w, uint64_t seq, const
 void de_ep_write_notify_input_capture_changed(mpack_writer_t *w, uint64_t seq, const de_ep_capture_changed *data);
 void de_ep_write_notify_input_monitor(mpack_writer_t *w, uint64_t seq, const de_ep_input_monitor_sample *data);
 void de_ep_write_notify_log_record(mpack_writer_t *w, uint64_t seq, const de_ep_log_record *data);
+void de_ep_write_notify_nav_bake(mpack_writer_t *w, uint64_t seq, const de_ep_nav_bake_progress *data);
 void de_ep_write_notify_net_desync(mpack_writer_t *w, uint64_t seq, const de_ep_net_desync *data);
 void de_ep_write_notify_reflect_changed(mpack_writer_t *w, uint64_t seq, const de_ep_reflect_changed *data);
 void de_ep_write_notify_replay_tick(mpack_writer_t *w, uint64_t seq, const de_ep_replay_tick *data);

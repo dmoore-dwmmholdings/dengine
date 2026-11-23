@@ -1,5 +1,5 @@
 # de_det v1 scenario=nav_queries seed=0x77 ticks=11: de_world_checksum after each tick, one per line
-c0a43f067eafe8dd
+5061387f8002b155
 99577c71f088bae1
 687484069db1a7f4
 19c33bdf92b9bbbc

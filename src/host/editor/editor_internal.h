@@ -36,7 +36,7 @@ typedef void (*de__ed_reset_fn)(de__editor *ed);
 typedef bool (*de__ed_op_fn)(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o,
                              de_ep_edit_op *inv, de_ep_error *code, char *msg, size_t cap);
 
-#define DE__ED_MAX_TICKS 16u
+#define DE__ED_MAX_TICKS 24u
 #define DE__ED_MAX_CAPS  32u
 
 struct de__editor {
@@ -384,6 +384,10 @@ void de__ed_physics_register(de__editor *ed);
  * input.actionMaps and input.monitor (protocol 1.24). de__ed_input_unsubscribe ends an input
  * monitor subscription for the generic unsubscribe; false when `id` is not one. */
 void de__ed_input_register(de__editor *ed);
+/* DENG-582: world.nav (nav.info/configure/bake/cancelBake/tiles/tileMesh/testPath/overlay and the
+ * topic nav.bake; protocol 1.25), in nav builds only (editor_nav.c). */
+void de__ed_nav_register(de__editor *ed);
+void de__ed_nav_shutdown(de__editor *ed);
 bool de__ed_input_unsubscribe(u32 id);
 /* The sample input monitor subscription `id` would send now (one-frame phases it holds are
  * consumed), and the samples it has sent; for the tests. */

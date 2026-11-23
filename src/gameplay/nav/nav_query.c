@@ -66,6 +66,7 @@ static de__nav_query *query_of(const de_nav *n) {
 }
 
 static void make_args(const de_nav *n, u32 area_mask, de__nav_query_args *args) {
+    memset(args, 0, sizeof *args);
     const f32 r = n->has_settings ? n->settings.desc.agent_radius : 0.5f;
     const f32 h = n->has_settings ? n->settings.desc.agent_height : 2.0f;
     const f32 xz = 2.0f * r > 1.0f ? 2.0f * r : 1.0f;
@@ -78,6 +79,12 @@ static void make_args(const de_nav *n, u32 area_mask, de__nav_query_args *args) 
 
 de_result de_nav_find_path(de_nav *n, de_dvec3 from, de_dvec3 to, u32 area_mask,
                            const de_allocator *a, de_nav_path *out) {
+    return de__nav_find_path_detail(n, from, to, area_mask, a, out, NULL);
+}
+
+de_result de__nav_find_path_detail(de_nav *n, de_dvec3 from, de_dvec3 to, u32 area_mask,
+                                   const de_allocator *a, de_nav_path *out,
+                                   de__nav_path_detail *d) {
     if (out != NULL)
         memset(out, 0, sizeof *out);
     if (n == NULL || out == NULL)
@@ -92,6 +99,8 @@ de_result de_nav_find_path(de_nav *n, de_dvec3 from, de_dvec3 to, u32 area_mask,
                        "de_nav_find_path: called from a thread that is not a frame worker");
     de__nav_query_args args;
     make_args(n, area_mask, &args);
+    if (d != NULL)
+        args.area_cost = d->area_cost;
     f32 s[3], e[3];
     de__nav_world_to_recast(&n->origin, from, s);
     de__nav_world_to_recast(&n->origin, to, e);
@@ -114,6 +123,18 @@ de_result de_nav_find_path(de_nav *n, de_dvec3 from, de_dvec3 to, u32 area_mask,
     out->points = p;
     out->count = (u32)count;
     out->partial = partial;
+    if (d != NULL) {
+        f32 centres[DE__NAV_QUERY_MAX_POLYS * 3];
+        i32 nc = 0, ni = 0;
+        const i32 cap = d->corridor_cap < DE__NAV_QUERY_MAX_POLYS ? (i32)d->corridor_cap
+                                                                   : DE__NAV_QUERY_MAX_POLYS;
+        de__nav_query_last_detail(q, centres, d->corridor != NULL ? cap : 0, &nc, d->link_ids,
+                                  d->link_ids != NULL ? (i32)d->link_cap : 0, &ni, &d->cost);
+        for (i32 i = 0; i < nc; ++i)
+            d->corridor[i] = de__nav_recast_to_world(&n->origin, &centres[i * 3]);
+        d->corridor_count = (u32)nc;
+        d->link_count = (u32)ni;
+    }
     return DE_OK;
 }
 

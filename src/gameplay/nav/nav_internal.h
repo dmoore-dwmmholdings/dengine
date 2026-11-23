@@ -32,7 +32,16 @@ typedef struct de__nav_link {
     f32 radius;
     bool bidirectional;
     u8 area;
+    u32 id; /* Detour user id: the index it was added at, or the caller's (de__nav_add_link_id) */
 } de__nav_link;
+
+/** A box volume from the editor (DENG-582): carved like an obstacle, or given an area. */
+typedef struct de__nav_volume {
+    de__nav_pose pose;
+    de_vec3 half_extents;
+    bool carve;
+    u8 area; /* 1..15 when !carve */
+} de__nav_volume;
 
 /** One de_nav_rebuild_tiles call: its input (gathered on the main thread) and its output. */
 typedef struct de__nav_job {
@@ -77,6 +86,9 @@ struct de_nav {
     de__nav_link *links;
     u32 link_count, link_cap;
 
+    de__nav_volume *volumes; /* DENG-582: de__nav_set_volumes */
+    u32 volume_count, volume_cap;
+
     /* DENG-77: one Detour query object per frame worker (index de_task_worker_index()), or one
      * for the main thread without a task system. Made with the navmesh. */
     de__nav_query **queries;
@@ -114,6 +126,43 @@ bool de__nav_entity_pose(de_world *w, de_entity e, de__nav_pose *out);
 
 /** The bytes of a READY `navmesh` asset, or NULL. */
 const u8 *de__nav_asset_bytes(de_asset_system *s, de_navmesh m, u64 *size);
+
+/* ---- Editor hooks (DENG-582, src/host/editor/editor_nav.c) ------------------------------------ */
+
+/** Sets the world the builds read colliders and obstacles from, without the DeNavRef resource
+ *  or the nav.update system (the caller runs de_nav_update). NULL unbinds; do so before the
+ *  world is destroyed. Ignored while the nav is attached with de_nav_attach. */
+void de__nav_bind_world(de_nav *n, de_world *w);
+/** Removes every off-mesh link (built tiles keep theirs until rebuilt). */
+void de__nav_clear_links(de_nav *n);
+/** de_nav_add_offmesh_link with a caller-chosen Detour user id (reported by path details). */
+de_result de__nav_add_link_id(de_nav *n, de_dvec3 from, de_dvec3 to, f32 radius,
+                              bool bidirectional, u8 area, u32 id);
+/** Replaces the box volumes later builds carve or mark (copied). */
+de_result de__nav_set_volumes(de_nav *n, const de__nav_volume *v, u32 count);
+/** Adds every input of a build (colliders of the bound world in the physics layers `mask`, 0 =
+ *  every layer; test triangles, obstacles, volumes, links) to `soup`, with no clipping beyond
+ *  the soup's own. */
+void de__nav_gather_input(de_nav *n, de__nav_soup *soup, u32 mask);
+
+/** Path details for the editor's test path. */
+typedef struct de__nav_path_detail {
+    const f32 *area_cost;  /* in: 16 costs per metre (0 = 1), or NULL */
+    de_dvec3 *corridor;    /* out: polygon centres, up to corridor_cap */
+    u32 corridor_cap, corridor_count;
+    u32 *link_ids;         /* out: user ids of the off-mesh links used, up to link_cap */
+    u32 link_cap, link_count;
+    f64 cost;              /* out: corner-path length weighted by area cost */
+} de__nav_path_detail;
+/** de_nav_find_path, filling `d` (may be NULL). */
+de_result de__nav_find_path_detail(de_nav *n, de_dvec3 from, de_dvec3 to, u32 area_mask,
+                                   const de_allocator *a, de_nav_path *out,
+                                   de__nav_path_detail *d);
+/** Ground polygons and links of tile (tx, tz); false when it has no data. */
+bool de__nav_tile_stats(const de_nav *n, i32 tx, i32 tz, i32 *polys, i32 *links);
+/** World-space detail triangles of tile (tx, tz): up to `cap` (3 points in `pts`, an area in
+ *  `areas`); returns how many the tile has. */
+u32 de__nav_tile_tris(const de_nav *n, i32 tx, i32 tz, de_dvec3 *pts, u8 *areas, u32 cap);
 
 /* ---- Test hooks (tests/unit/nav) ------------------------------------------------------------- */
 
