@@ -9,6 +9,9 @@
  * de_cooker there, tools/check_layers/layers.toml: host -> cook/importers). Elsewhere this file
  * is empty and the capability is not advertised.
  */
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS /* getenv, fopen */
+#endif
 #include "host/editor/editor_internal.h"
 #if DE_ED_MATERIAL_GRAPH
 #include "cook/importers/material_graph/material_graph.h"

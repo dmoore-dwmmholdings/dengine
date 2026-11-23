@@ -1,6 +1,9 @@
 /*
  * mg_import.c: the `material_graph` importer (mg_import.h; DENG-770).
  */
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS /* getenv, fopen */
+#endif
 #include "cook/importers/material_graph/mg_import.h"
 
 #include "cook/importers/material_graph/material_graph.h"

@@ -590,6 +590,7 @@ static mpack_node_t call_pseudo(ui_ed_fx *f, int enabled) { /* -1 absent, -2 nil
     ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
     return call(f, DE_EP_METHOD_LOC_PSEUDO, size);
 }
+#if !defined(_WIN32) /* only the non-Windows overflow tests call it */
 static mpack_node_t call_overflow(ui_ed_fx *f, bool has_root, u64 root) {
     mpack_writer_t w;
     mpack_writer_init(&w, f->params, sizeof f->params);
@@ -599,6 +600,7 @@ static mpack_node_t call_overflow(ui_ed_fx *f, bool has_root, u64 root) {
     ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
     return call(f, DE_EP_METHOD_UI_TEXT_OVERFLOW, size);
 }
+#endif
 TEST_F(editor_ui, pseudo_and_overflow_are_registered_and_gated_on_protocol_1_21, ui_ed_fx) {
     EXPECT_TRUE(f->ed.handlers[DE_EP_METHOD_LOC_PSEUDO] != NULL);
     EXPECT_TRUE(f->ed.handlers[DE_EP_METHOD_UI_TEXT_OVERFLOW] != NULL);
