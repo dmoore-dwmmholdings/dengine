@@ -812,8 +812,9 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
         return true;
     }
 
-    /* DENG-580: the world.terrain ops, in render builds. */
-    if (ed->terrain_op != NULL && o->op.len > 8 && memcmp(o->op.ptr, "terrain.", 8) == 0)
+    /* DENG-580: the world.terrain ops, in render builds; DENG-777: spline.carve, a terrain op. */
+    if (ed->terrain_op != NULL && ((o->op.len > 8 && memcmp(o->op.ptr, "terrain.", 8) == 0) ||
+                                   de_ep_str_eq(o->op, "spline.carve")))
         return ed->terrain_op(ed, a, o, inv, &f->code, f->msg, sizeof f->msg);
 
     return fail(f, DE_EP_ERR_INVALID_PARAMS, "unknown op %.*s", (int)o->op.len, o->op.ptr);

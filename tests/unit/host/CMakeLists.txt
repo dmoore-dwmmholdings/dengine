@@ -544,6 +544,14 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
         CONFIGURATIONS Debug Dev Release)
     target_include_directories(test_editor_terrain PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
+    # DENG-777: the spline.carve edit op (world.splines on a world.terrain entity), its tile-exact
+    # terrain.restore inverse and undo through the edit transactions.
+    de_add_test(NAME editor_spline_carve SOURCES test_editor_spline_carve.c
+        LIBS de_host de_spline de_terrain de_render de_tp_dide_protocol LABELS unit host
+        CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_spline_carve PRIVATE "${DE_ROOT_DIR}/src")
+endif()
 
 # DENG-769: the material graph over the editor IPC (materialGraph.catalog/generate/compile),
 # round-tripped through the generated protocol readers and writers. Debug and Dev with the cooker

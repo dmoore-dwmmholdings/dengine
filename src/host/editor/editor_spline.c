@@ -6,9 +6,10 @@
  * its overlay and the placed meshes match the engine. Every reply is in world space and carries
  * the entity revision it describes.
  *
- * Not here: spline.carve (an edit op on a terrain entity) needs world.terrain, which the engine
- * does not advertise yet. Rendering the placed meshes is DENG-583; spline.instances is what that
- * system will place, from the same de__spline_place().
+ * Not here: spline.carve is an edit op on a terrain entity, so it is in editor_terrain.c with the
+ * other terrain ops (DENG-777); its inverse is a terrain.restore of the changed tiles. Rendering
+ * the placed meshes is DENG-583; spline.instances is what that system will place, from the same
+ * de__spline_place().
  */
 #include "host/editor/editor_internal.h"
 

@@ -2,13 +2,15 @@
  * ops (DENG-580; DIDE protocol 1.11, capability world.terrain).
  *
  * A terrain is an entity with DeTerrain (a render component). The IDE reads it with the three
- * methods and changes it with four edit ops inside an edit transaction, so undo and redo work as
+ * methods and changes it with five edit ops inside an edit transaction, so undo and redo work as
  * for every other edit:
  *
  *   - terrain.stroke: `value` a TerrainStroke (a sculpt, paint or hole brush stroke);
  *   - terrain.import: `path` a heightmap file, `value` {format, tile} (both optional);
  *   - terrain.bake: writes the enabled auto-material rules into the splat map;
- *   - terrain.restore: `value` the tiles another op changed, as they were.
+ *   - terrain.restore: `value` the tiles another op changed, as they were;
+ *   - spline.carve (DENG-777, protocol 1.12 world.splines): `value` a SplineCarve, the terrain
+ *     carved along a spline entity's curve.
  *
  * The inverse of each is a terrain.restore that holds only the tiles the op changed (and the
  * rules, when they changed). The math is the deterministic CPU model in src/world/terrain; this
@@ -24,6 +26,7 @@
 #endif
 #include "host/editor/editor_internal.h"
 
+#include "world/spline/spline.h"
 #include "world/terrain/terrain.h"
 #include <dengine/de_render.h>
 #include <stb_image.h>
@@ -897,7 +900,53 @@ static bool op_import(const de_ep_edit_op *o, DeTerrain *t, op_fail *f) {
     return true;
 }
 
-/* The terrain.* edit ops (editor_edit.c calls it for an op that starts with "terrain."). */
+/* spline.carve (DENG-777): `value` a SplineCarve. The curve is the spline entity's polyline in
+ * world space (the one spline.sample answers), carved by the terrain model. */
+static bool op_carve(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, DeTerrain *t,
+                     const f64 org[3], op_fail *f) {
+    if (!o->has_value)
+        return op_error(f, DE_EP_ERR_INVALID_PARAMS, "spline.carve needs value");
+    de_ep_spline_carve p;
+    memset(&p, 0, sizeof p);
+    mpack_reader_t r;
+    mpack_reader_init_data(&r, o->value.ptr, o->value.len);
+    de_ep_read_spline_carve(&r, a, &p);
+    if (mpack_reader_destroy(&r) != mpack_ok)
+        return op_error(f, DE_EP_ERR_INVALID_PARAMS, "spline.carve: bad value");
+    if (!de__terrain_valid(t))
+        return op_error(f, DE_EP_ERR_INVALID_PARAMS, "the terrain grid is not %ux%u",
+                        DE_TERRAIN_RES, DE_TERRAIN_RES);
+    de_world *w = world_of(ed);
+    const de_entity se = {p.spline};
+    de_spline_ids ids;
+    const DeSpline *s = de__spline_register(w, &ids) == DE_OK && de_entity_alive(w, se)
+                            ? (const DeSpline *)de_entity_get_const(w, se, ids.spline)
+                            : NULL;
+    if (s == NULL)
+        return op_error(f, DE_EP_ERR_NOT_FOUND,
+                        "spline.carve: entity %llu has no " DE_SPLINE_COMPONENT,
+                        (unsigned long long)p.spline);
+    /* The polyline is 33 KB: in the arena, not on the stack. */
+    de_spline_poly *poly = (de_spline_poly *)de__ed_alloc(a, sizeof *poly);
+    f32 *path = poly != NULL ? (f32 *)de__ed_alloc(a, sizeof(f32) * 3u * DE_SPLINE_MAX_POLY) : NULL;
+    if (path == NULL)
+        return op_error(f, DE_EP_ERR_BUSY, "spline.carve: out of scratch memory");
+    const de_transform xf = de__ed_world_xf(w, se);
+    de__spline_poly(s, &xf, poly);
+    for (u32 i = 0; i < poly->n; ++i) {
+        path[3 * i] = poly->p[i].x;
+        path[3 * i + 1] = poly->p[i].y;
+        path[3 * i + 2] = poly->p[i].z;
+    }
+    if (!de__terrain_carve(t, org[0], org[1], org[2], path, poly->n, p.width, p.falloff, p.depth))
+        return op_error(f, DE_EP_ERR_INVALID_PARAMS,
+                        "spline.carve needs a curve of 2 or more points, width > 0, falloff >= 0 "
+                        "and a finite depth");
+    return true;
+}
+
+/* The terrain.* edit ops and spline.carve (editor_edit.c calls it for an op that starts with
+ * "terrain.", and for "spline.carve"). */
 static bool terrain_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_ep_edit_op *inv,
                        de_ep_error *code, char *msg, size_t cap) {
     op_fail f = {code, msg, cap};
@@ -920,6 +969,8 @@ static bool terrain_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, d
     bool ok;
     if (de_ep_str_eq(o->op, "terrain.stroke"))
         ok = op_stroke(a, o, &after, org, &f);
+    else if (de_ep_str_eq(o->op, "spline.carve"))
+        ok = op_carve(ed, a, o, &after, org, &f);
     else if (de_ep_str_eq(o->op, "terrain.import"))
         ok = op_import(o, &after, &f);
     else if (de_ep_str_eq(o->op, "terrain.bake")) {
