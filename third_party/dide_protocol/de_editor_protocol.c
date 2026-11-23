@@ -291,6 +291,28 @@ bool de_ep_override_kind_parse(de_ep_str s, de_ep_override_kind *out) {
     return false;
 }
 
+const char *de_ep_physics_asset_kind_name(de_ep_physics_asset_kind v) {
+    switch (v) {
+    case DE_EP_PHYSICS_ASSET_KIND_MATERIAL:
+        return "material";
+    case DE_EP_PHYSICS_ASSET_KIND_RAGDOLL:
+        return "ragdoll";
+    }
+    return "";
+}
+
+bool de_ep_physics_asset_kind_parse(de_ep_str s, de_ep_physics_asset_kind *out) {
+    if (de_ep_str_eq(s, "material")) {
+        *out = DE_EP_PHYSICS_ASSET_KIND_MATERIAL;
+        return true;
+    }
+    if (de_ep_str_eq(s, "ragdoll")) {
+        *out = DE_EP_PHYSICS_ASSET_KIND_RAGDOLL;
+        return true;
+    }
+    return false;
+}
+
 const char *de_ep_ui_text_align_name(de_ep_ui_text_align v) {
     switch (v) {
     case DE_EP_UI_TEXT_ALIGN_START:
@@ -7017,6 +7039,329 @@ void de_ep_read_peer_checksum(mpack_reader_t *r, de_ep_arena *a, de_ep_peer_chec
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
+void de_ep_write_physics_drag_begin(mpack_writer_t *w, const de_ep_physics_drag_begin *v) {
+    uint32_t n = 0;
+    n += v->has_drag ? 1u : 0u;
+    n += v->has_entity ? 1u : 0u;
+    n += v->has_bone ? 1u : 0u;
+    n += v->has_point ? 1u : 0u;
+    n += v->has_distance ? 1u : 0u;
+    mpack_start_map(w, n);
+    if (v->has_drag) {
+        mpack_write_cstr(w, "drag");
+        mpack_write_u32(w, v->drag);
+    }
+    if (v->has_entity) {
+        mpack_write_cstr(w, "entity");
+        mpack_write_u64(w, v->entity);
+    }
+    if (v->has_bone) {
+        mpack_write_cstr(w, "bone");
+        mpack_write_u32(w, v->bone);
+    }
+    if (v->has_point) {
+        mpack_write_cstr(w, "point");
+        mpack_start_array(w, v->point.count);
+        for (uint32_t i_2 = 0; i_2 < v->point.count; ++i_2) {
+            mpack_write_double(w, v->point.items[i_2]);
+        }
+        mpack_finish_array(w);
+    }
+    if (v->has_distance) {
+        mpack_write_cstr(w, "distance");
+        mpack_write_float(w, v->distance);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_physics_drag_begin(mpack_reader_t *r, de_ep_arena *a, de_ep_physics_drag_begin *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "drag")) {
+            seen |= (uint64_t)1 << 0;
+            out->has_drag = true;
+            out->drag = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "entity")) {
+            seen |= (uint64_t)1 << 1;
+            out->has_entity = true;
+            out->entity = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "bone")) {
+            seen |= (uint64_t)1 << 2;
+            out->has_bone = true;
+            out->bone = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "point")) {
+            seen |= (uint64_t)1 << 3;
+            out->has_point = true;
+            out->point.count = mpack_expect_array(r);
+            out->point.items = (double *)de_ep_arena_array(r, a, out->point.count, sizeof(*out->point.items));
+            for (uint32_t i_3 = 0; out->point.items && i_3 < out->point.count; ++i_3)
+            {
+                out->point.items[i_3] = mpack_expect_double(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "distance")) {
+            seen |= (uint64_t)1 << 4;
+            out->has_distance = true;
+            out->distance = mpack_expect_float(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    (void)seen;
+}
+
+void de_ep_write_physics_drag_begin_params(mpack_writer_t *w, const de_ep_physics_drag_begin_params *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    n += v->has_max_distance ? 1u : 0u;
+    n += v->has_entity ? 1u : 0u;
+    n += v->has_hertz ? 1u : 0u;
+    n += v->has_damping_ratio ? 1u : 0u;
+    n += v->has_max_force ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "origin");
+    mpack_start_array(w, v->origin.count);
+    for (uint32_t i_1 = 0; i_1 < v->origin.count; ++i_1) {
+        mpack_write_double(w, v->origin.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "direction");
+    mpack_start_array(w, v->direction.count);
+    for (uint32_t i_1 = 0; i_1 < v->direction.count; ++i_1) {
+        mpack_write_float(w, v->direction.items[i_1]);
+    }
+    mpack_finish_array(w);
+    if (v->has_max_distance) {
+        mpack_write_cstr(w, "maxDistance");
+        mpack_write_float(w, v->max_distance);
+    }
+    if (v->has_entity) {
+        mpack_write_cstr(w, "entity");
+        mpack_write_u64(w, v->entity);
+    }
+    if (v->has_hertz) {
+        mpack_write_cstr(w, "hertz");
+        mpack_write_float(w, v->hertz);
+    }
+    if (v->has_damping_ratio) {
+        mpack_write_cstr(w, "dampingRatio");
+        mpack_write_float(w, v->damping_ratio);
+    }
+    if (v->has_max_force) {
+        mpack_write_cstr(w, "maxForce");
+        mpack_write_float(w, v->max_force);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_physics_drag_begin_params(mpack_reader_t *r, de_ep_arena *a, de_ep_physics_drag_begin_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "origin")) {
+            seen |= (uint64_t)1 << 0;
+            out->origin.count = mpack_expect_array(r);
+            out->origin.items = (double *)de_ep_arena_array(r, a, out->origin.count, sizeof(*out->origin.items));
+            for (uint32_t i_3 = 0; out->origin.items && i_3 < out->origin.count; ++i_3)
+            {
+                out->origin.items[i_3] = mpack_expect_double(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "direction")) {
+            seen |= (uint64_t)1 << 1;
+            out->direction.count = mpack_expect_array(r);
+            out->direction.items = (float *)de_ep_arena_array(r, a, out->direction.count, sizeof(*out->direction.items));
+            for (uint32_t i_3 = 0; out->direction.items && i_3 < out->direction.count; ++i_3)
+            {
+                out->direction.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "maxDistance")) {
+            seen |= (uint64_t)1 << 2;
+            out->has_max_distance = true;
+            out->max_distance = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "entity")) {
+            seen |= (uint64_t)1 << 3;
+            out->has_entity = true;
+            out->entity = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "hertz")) {
+            seen |= (uint64_t)1 << 4;
+            out->has_hertz = true;
+            out->hertz = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "dampingRatio")) {
+            seen |= (uint64_t)1 << 5;
+            out->has_damping_ratio = true;
+            out->damping_ratio = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "maxForce")) {
+            seen |= (uint64_t)1 << 6;
+            out->has_max_force = true;
+            out->max_force = mpack_expect_float(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(3)) != UINT64_C(3))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_physics_drag_params(mpack_writer_t *w, const de_ep_physics_drag_params *v) {
+    uint32_t n = 0;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "drag");
+    mpack_write_u32(w, v->drag);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_physics_drag_params(mpack_reader_t *r, de_ep_arena *a, de_ep_physics_drag_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "drag")) {
+            seen |= (uint64_t)1 << 0;
+            out->drag = mpack_expect_u32(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(1)) != UINT64_C(1))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_physics_drag_update_params(mpack_writer_t *w, const de_ep_physics_drag_update_params *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "drag");
+    mpack_write_u32(w, v->drag);
+    mpack_write_cstr(w, "target");
+    mpack_start_array(w, v->target.count);
+    for (uint32_t i_1 = 0; i_1 < v->target.count; ++i_1) {
+        mpack_write_double(w, v->target.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_physics_drag_update_params(mpack_reader_t *r, de_ep_arena *a, de_ep_physics_drag_update_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "drag")) {
+            seen |= (uint64_t)1 << 0;
+            out->drag = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "target")) {
+            seen |= (uint64_t)1 << 1;
+            out->target.count = mpack_expect_array(r);
+            out->target.items = (double *)de_ep_arena_array(r, a, out->target.count, sizeof(*out->target.items));
+            for (uint32_t i_3 = 0; out->target.items && i_3 < out->target.count; ++i_3)
+            {
+                out->target.items[i_3] = mpack_expect_double(r);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(3)) != UINT64_C(3))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_physics_load_asset(mpack_writer_t *w, const de_ep_physics_load_asset *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "kind");
+    mpack_write_cstr(w, de_ep_physics_asset_kind_name(v->kind));
+    mpack_write_cstr(w, "respawned");
+    mpack_write_u32(w, v->respawned);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_physics_load_asset(mpack_reader_t *r, de_ep_arena *a, de_ep_physics_load_asset *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "kind")) {
+            seen |= (uint64_t)1 << 0;
+            {
+                de_ep_str s_;
+                de_ep_read_str(r, &s_);
+                if (!de_ep_physics_asset_kind_parse(s_, &out->kind))
+                    mpack_reader_flag_error(r, mpack_error_data);
+            }
+        } else if (de_ep_str_eq(k, "respawned")) {
+            seen |= (uint64_t)1 << 1;
+            out->respawned = mpack_expect_u32(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(3)) != UINT64_C(3))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_physics_load_asset_params(mpack_writer_t *w, const de_ep_physics_load_asset_params *v) {
+    uint32_t n = 0;
+    ++n;
+    n += v->has_text ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "path");
+    de_ep_write_str(w, v->path);
+    if (v->has_text) {
+        mpack_write_cstr(w, "text");
+        de_ep_write_str(w, v->text);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_physics_load_asset_params(mpack_reader_t *r, de_ep_arena *a, de_ep_physics_load_asset_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "path")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->path);
+        } else if (de_ep_str_eq(k, "text")) {
+            seen |= (uint64_t)1 << 1;
+            out->has_text = true;
+            de_ep_read_str(r, &out->text);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(1)) != UINT64_C(1))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
 void de_ep_write_pick_params(mpack_writer_t *w, const de_ep_pick_params *v) {
     uint32_t n = 0;
     ++n;
@@ -12378,6 +12723,10 @@ static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
     "materialGraph.generate",
     "net.checksums",
     "net.sim",
+    "physics.drag.begin",
+    "physics.drag.end",
+    "physics.drag.update",
+    "physics.loadAsset",
     "pick",
     "pick.rect",
     "ping",
@@ -12502,6 +12851,10 @@ static const char *const de_ep__capabilities[DE_EP_METHOD_COUNT] = {
     "assets.materialGraph",
     "net.multi",
     "net.multi",
+    "physics.mouseSpring",
+    "physics.mouseSpring",
+    "physics.mouseSpring",
+    "physics.authoring",
     NULL,
     NULL,
     NULL,
@@ -13297,6 +13650,58 @@ bool de_ep_read_params_net_sim(const de_ep_request *req, de_ep_arena *a, de_ep_n
 void de_ep_write_response_net_sim(mpack_writer_t *w, uint64_t id, const de_ep_empty *result) {
     de_ep_write_result_begin(w, id);
     de_ep_write_empty(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_physics_drag_begin(const de_ep_request *req, de_ep_arena *a, de_ep_physics_drag_begin_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_physics_drag_begin_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_physics_drag_begin(mpack_writer_t *w, uint64_t id, const de_ep_physics_drag_begin *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_physics_drag_begin(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_physics_drag_end(const de_ep_request *req, de_ep_arena *a, de_ep_physics_drag_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_physics_drag_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_physics_drag_end(mpack_writer_t *w, uint64_t id, const de_ep_empty *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_empty(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_physics_drag_update(const de_ep_request *req, de_ep_arena *a, de_ep_physics_drag_update_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_physics_drag_update_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_physics_drag_update(mpack_writer_t *w, uint64_t id, const de_ep_empty *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_empty(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_physics_load_asset(const de_ep_request *req, de_ep_arena *a, de_ep_physics_load_asset_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_physics_load_asset_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_physics_load_asset(mpack_writer_t *w, uint64_t id, const de_ep_physics_load_asset *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_physics_load_asset(w, result);
     de_ep_write_result_end(w);
 }
 

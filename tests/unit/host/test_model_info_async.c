@@ -24,6 +24,7 @@ static bool model_send(de__editor *ed, mpack_writer_t *w, u8 kind);
 #define de__ed_asset_source_vpath model_asset_source_vpath
 #define de__ed_asset_source_path  model_asset_source_path
 #define de__ed_asset_nth          model_asset_nth
+#define de__ed_project_vpath      model_project_vpath /* DENG-821 */
 #include "host/editor/editor_assets.c"
 #undef de_time_now_ns
 #undef de__ed_send
@@ -33,6 +34,7 @@ static bool model_send(de__editor *ed, mpack_writer_t *w, u8 kind);
 #undef de__ed_asset_source_vpath
 #undef de__ed_asset_source_path
 #undef de__ed_asset_nth
+#undef de__ed_project_vpath
 
 static bool model_send(de__editor *ed, mpack_writer_t *w, u8 kind) {
     (void)kind;

@@ -758,3 +758,11 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER AND
         LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
     target_include_directories(test_editor_view_resize PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_PHYSICS)
+    # DENG-821: physics.loadAsset and the mouse spring physics.drag.* (protocol 1.23).
+    de_add_test(NAME editor_physics SOURCES test_editor_physics.c
+        LIBS de_host de_physics de_tp_dide_protocol LABELS unit host
+        CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_physics PRIVATE "${DE_ROOT_DIR}/src")
+endif()

@@ -251,6 +251,9 @@ u32 de__ed_edit_run(de__editor *ed, de_ep_arena *a, u32 tx, u64 scene, const de_
 bool de__ed_asset_source(de__editor *ed, const char *id, void **data, u64 *size);
 /** The virtual path of asset `id`'s source file (DENG-798); false when the manifest has none. */
 bool de__ed_asset_source_vpath(de__editor *ed, const char *id, char *out, size_t cap);
+/** DENG-821: the virtual path of `rel`, a project-relative path, below the root manifest's folder;
+ * false when there is no manifest or it does not fit. */
+bool de__ed_project_vpath(de__editor *ed, const char *rel, char *out, size_t cap);
 /** The asset's source path as the manifest lists it (relative to the asset root), or NULL. */
 const char *de__ed_asset_source_path(de__editor *ed, const char *id);
 /** The id of the manifest's `i`th asset of type `type`, in manifest order, or NULL when there are
@@ -335,6 +338,9 @@ void de__ed_terrain_register(de__editor *ed);
 /* DENG-581: foliage.info, foliage.instances, foliage.type and the foliage.* edit ops
  * (editor_foliage.c, render builds only); capability world.foliage (protocol 1.22). */
 void de__ed_foliage_register(de__editor *ed);
+/* DENG-821: physics.loadAsset and the mouse spring physics.drag.* (editor_physics.c, physics
+ * builds only); capabilities physics.authoring and physics.mouseSpring (protocol 1.23). */
+void de__ed_physics_register(de__editor *ed);
 /* DENG-778: ui.layout (editor_ui.c, UI builds only); capability ui.editor (protocol 1.14). DENG-785
  * adds the 1.15 methods: ui.nodeCorners, ui.themes, ui.themeVars, ui.previewTheme, loc.locales,
  * loc.strings and loc.previewLocale (`unsupported` below 1.15). The

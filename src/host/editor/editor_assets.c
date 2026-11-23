@@ -302,6 +302,18 @@ static bool source_vpath(de__editor *ed, const de__manifest_asset *ma, char *out
     return n > 0 && (size_t)n < cap;
 }
 
+/* DENG-821: the project folder is the root manifest's folder. */
+bool de__ed_project_vpath(de__editor *ed, const char *rel, char *out, size_t cap) {
+    const de__manifest *m = manifest(ed);
+    if (m == NULL || m->root == NULL || rel == NULL)
+        return false;
+    const char *slash = strrchr(m->root, '/');
+    const int dir = slash != NULL ? (int)(slash - m->root) : 0;
+    const int n = dir > 0 ? snprintf(out, cap, "%.*s/%s", dir, m->root, rel)
+                          : snprintf(out, cap, "%s", rel);
+    return n > 0 && (size_t)n < cap;
+}
+
 bool de__ed_asset_source(de__editor *ed, const char *id, void **data, u64 *size) {
     *data = NULL;
     *size = 0;

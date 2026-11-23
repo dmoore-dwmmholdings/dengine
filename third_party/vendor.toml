@@ -610,9 +610,9 @@ notes = "Joe-Kuo D(6) numeric inputs for the generated 1024-dimensional PT matri
 # cache before offline verification (see docs/building.md).
 [[lib]]
 name = "dide_protocol"
-version = "1.22-45b382406409"
-url = "https://api.github.com/repos/dmoore-dwmmholdings/dide/tarball/45b3824064095d951fbdf90f8b7e2ea388fb0b9d"
-sha256 = "9b1c08e901c18250deaed5e94506b1ef1505272a9a22a2ee857de39b2686fc62"
+version = "1.23-88a3a6b21f07"
+url = "https://api.github.com/repos/dmoore-dwmmholdings/dide/tarball/88a3a6b21f072522187851922156c5fbe8c9657b"
+sha256 = "3851b4a1401ebcc419a638d89534b985494703c76174f25a5ff8a2a080e19a7f"
 license = "MIT"
 strip = 3
 license_file = "third_party/mpack/LICENSE"
@@ -633,5 +633,7 @@ local = ["CMakeLists.txt", "patches/**"]
 # DIDE-385: Windows named-pipe readiness via overlapped read).
 # DENG-820: pinned at DIDE main e8fb2a8 (protocol 1.21, DIDE-395: loc.pseudo, ui.textOverflow).
 # DENG-581: pinned at DIDE main 45b3824 (protocol 1.22, DIDE-396: world.foliage).
+# DENG-821: pinned at DIDE main 88a3a6b (protocol 1.23, DIDE-397: physics.authoring,
+# physics.mouseSpring).
 patches = ["patches/0001-raw-values-preserve-reader-tracking.patch"]
 notes = "Dev-only: linked by the host's editor service (src/host/editor), never in Shipping."

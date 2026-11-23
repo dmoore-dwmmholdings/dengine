@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.22"
-#define DE_EP_SCHEMA_HASH "f4fbaf670cecf894"
+#define DE_EP_PROTOCOL_VERSION "1.23"
+#define DE_EP_SCHEMA_HASH "761498e5da01bb19"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -116,6 +116,13 @@ typedef enum de_ep_override_kind {
 } de_ep_override_kind;
 const char *de_ep_override_kind_name(de_ep_override_kind v);
 bool de_ep_override_kind_parse(de_ep_str s, de_ep_override_kind *out);
+
+typedef enum de_ep_physics_asset_kind {
+    DE_EP_PHYSICS_ASSET_KIND_MATERIAL,
+    DE_EP_PHYSICS_ASSET_KIND_RAGDOLL,
+} de_ep_physics_asset_kind;
+const char *de_ep_physics_asset_kind_name(de_ep_physics_asset_kind v);
+bool de_ep_physics_asset_kind_parse(de_ep_str s, de_ep_physics_asset_kind *out);
 
 typedef enum de_ep_ui_text_align {
     DE_EP_UI_TEXT_ALIGN_START,
@@ -255,6 +262,12 @@ typedef struct de_ep_override_path_params de_ep_override_path_params;
 typedef struct de_ep_path_result de_ep_path_result;
 typedef struct de_ep_paused_params de_ep_paused_params;
 typedef struct de_ep_peer_checksum de_ep_peer_checksum;
+typedef struct de_ep_physics_drag_begin de_ep_physics_drag_begin;
+typedef struct de_ep_physics_drag_begin_params de_ep_physics_drag_begin_params;
+typedef struct de_ep_physics_drag_params de_ep_physics_drag_params;
+typedef struct de_ep_physics_drag_update_params de_ep_physics_drag_update_params;
+typedef struct de_ep_physics_load_asset de_ep_physics_load_asset;
+typedef struct de_ep_physics_load_asset_params de_ep_physics_load_asset_params;
 typedef struct de_ep_pick_params de_ep_pick_params;
 typedef struct de_ep_pick_rect_params de_ep_pick_rect_params;
 typedef struct de_ep_pick_result de_ep_pick_result;
@@ -1568,6 +1581,59 @@ struct de_ep_peer_checksum {
     uint64_t checksum;
 };
 
+/* The grab. Every field is absent when the ray hits no dynamic body (static, kinematic and trigger colliders are skipped): that is not an error. */
+struct de_ep_physics_drag_begin {
+    bool has_drag;
+    uint32_t drag; /* the drag id for update and end, unique in the epoch */
+    bool has_entity;
+    uint64_t entity; /* the body's entity; for a ragdoll bone, the DeRagdoll owner */
+    bool has_bone;
+    uint32_t bone; /* the ragdoll bone index when a bone was hit */
+    bool has_point;
+    de_ep_list_f64 point; /* [x, y, z] the hit point in world space; the spring pulls the body at this point, fixed in the body's frame */
+    bool has_distance;
+    float distance; /* metres from origin to point along the normalized ray; the IDE keeps the target at this distance on later cursor rays */
+};
+
+/* Grab the dynamic body under a world-space ray with a mouse spring. Play, Simulate and Paused only; Edit is wrong_mode. One drag per connection: a begin while a drag is live ends it first. */
+struct de_ep_physics_drag_begin_params {
+    de_ep_list_f64 origin; /* [x, y, z] ray origin in world space (the camera position for a cursor ray) */
+    de_ep_list_f32 direction; /* [x, y, z] ray direction; need not be normalized. Zero length is invalid_params. In a 2D world the ray is intersected with the 2D plane and the body at that point is grabbed */
+    bool has_max_distance;
+    float max_distance; /* metres along the normalized ray; absent: 1000 */
+    bool has_entity;
+    uint64_t entity; /* only this entity's body or its ragdoll's bones may be hit; not_found when it is not live */
+    bool has_hertz;
+    float hertz; /* spring frequency; absent: 5. <= 0 is invalid_params */
+    bool has_damping_ratio;
+    float damping_ratio; /* absent: 0.7. < 0 is invalid_params */
+    bool has_max_force;
+    float max_force; /* newtons; absent: 1000 times the grabbed body's mass. <= 0 is invalid_params */
+};
+
+/* End a drag; the body keeps its velocity. not_found when it already ended. */
+struct de_ep_physics_drag_params {
+    uint32_t drag;
+};
+
+/* Move the spring's target. The spring acts on every following physics tick (in Paused, on the next session.step). not_found when the drag ended (physics.drag.end, Stop to Edit, the body or entity went); Edit is wrong_mode. */
+struct de_ep_physics_drag_update_params {
+    uint32_t drag;
+    de_ep_list_f64 target; /* [x, y, z] world space; in a 2D world it is projected onto the 2D plane */
+};
+
+struct de_ep_physics_load_asset {
+    de_ep_physics_asset_kind kind;
+    uint32_t respawned; /* ragdoll: the DeRagdoll components that name this asset and spawn again next physics.step; material: always 0 (bodies already built keep their values until they are re-created) */
+};
+
+/* Parse and register (or replace) a physics asset under its project path (de_physics_material_register, de_physics_ragdoll_asset_register). Allowed in every mode. */
+struct de_ep_physics_load_asset_params {
+    de_ep_str path; /* project-relative path, also the registered name that DeCollider.material_asset and DeRagdoll.asset use, e.g. physics/ragdolls/hero.ragdoll.toml. The suffix gives the kind: .physmat.toml or .ragdoll.toml; any other suffix is invalid_params */
+    bool has_text;
+    de_ep_str text; /* the file text, usually the unsaved editor buffer, at most 1 MiB; absent: the engine reads the file at path (not_found when it is missing). Text that does not parse is invalid_params with the parser's message */
+};
+
 struct de_ep_pick_params {
     uint32_t view;
     float x;
@@ -2556,6 +2622,18 @@ void de_ep_write_paused_params(mpack_writer_t *w, const de_ep_paused_params *v);
 void de_ep_read_paused_params(mpack_reader_t *r, de_ep_arena *a, de_ep_paused_params *out);
 void de_ep_write_peer_checksum(mpack_writer_t *w, const de_ep_peer_checksum *v);
 void de_ep_read_peer_checksum(mpack_reader_t *r, de_ep_arena *a, de_ep_peer_checksum *out);
+void de_ep_write_physics_drag_begin(mpack_writer_t *w, const de_ep_physics_drag_begin *v);
+void de_ep_read_physics_drag_begin(mpack_reader_t *r, de_ep_arena *a, de_ep_physics_drag_begin *out);
+void de_ep_write_physics_drag_begin_params(mpack_writer_t *w, const de_ep_physics_drag_begin_params *v);
+void de_ep_read_physics_drag_begin_params(mpack_reader_t *r, de_ep_arena *a, de_ep_physics_drag_begin_params *out);
+void de_ep_write_physics_drag_params(mpack_writer_t *w, const de_ep_physics_drag_params *v);
+void de_ep_read_physics_drag_params(mpack_reader_t *r, de_ep_arena *a, de_ep_physics_drag_params *out);
+void de_ep_write_physics_drag_update_params(mpack_writer_t *w, const de_ep_physics_drag_update_params *v);
+void de_ep_read_physics_drag_update_params(mpack_reader_t *r, de_ep_arena *a, de_ep_physics_drag_update_params *out);
+void de_ep_write_physics_load_asset(mpack_writer_t *w, const de_ep_physics_load_asset *v);
+void de_ep_read_physics_load_asset(mpack_reader_t *r, de_ep_arena *a, de_ep_physics_load_asset *out);
+void de_ep_write_physics_load_asset_params(mpack_writer_t *w, const de_ep_physics_load_asset_params *v);
+void de_ep_read_physics_load_asset_params(mpack_reader_t *r, de_ep_arena *a, de_ep_physics_load_asset_params *out);
 void de_ep_write_pick_params(mpack_writer_t *w, const de_ep_pick_params *v);
 void de_ep_read_pick_params(mpack_reader_t *r, de_ep_arena *a, de_ep_pick_params *out);
 void de_ep_write_pick_rect_params(mpack_writer_t *w, const de_ep_pick_rect_params *v);
@@ -2819,6 +2897,10 @@ typedef enum de_ep_method {
     DE_EP_METHOD_MATERIAL_GRAPH_GENERATE,
     DE_EP_METHOD_NET_CHECKSUMS,
     DE_EP_METHOD_NET_SIM,
+    DE_EP_METHOD_PHYSICS_DRAG_BEGIN,
+    DE_EP_METHOD_PHYSICS_DRAG_END,
+    DE_EP_METHOD_PHYSICS_DRAG_UPDATE,
+    DE_EP_METHOD_PHYSICS_LOAD_ASSET,
     DE_EP_METHOD_PICK,
     DE_EP_METHOD_PICK_RECT,
     DE_EP_METHOD_PING,
@@ -3037,6 +3119,14 @@ bool de_ep_read_params_net_checksums(const de_ep_request *req, de_ep_arena *a, d
 void de_ep_write_response_net_checksums(mpack_writer_t *w, uint64_t id, const de_ep_net_checksums *result);
 bool de_ep_read_params_net_sim(const de_ep_request *req, de_ep_arena *a, de_ep_net_sim_params *out);
 void de_ep_write_response_net_sim(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_physics_drag_begin(const de_ep_request *req, de_ep_arena *a, de_ep_physics_drag_begin_params *out);
+void de_ep_write_response_physics_drag_begin(mpack_writer_t *w, uint64_t id, const de_ep_physics_drag_begin *result);
+bool de_ep_read_params_physics_drag_end(const de_ep_request *req, de_ep_arena *a, de_ep_physics_drag_params *out);
+void de_ep_write_response_physics_drag_end(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_physics_drag_update(const de_ep_request *req, de_ep_arena *a, de_ep_physics_drag_update_params *out);
+void de_ep_write_response_physics_drag_update(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_physics_load_asset(const de_ep_request *req, de_ep_arena *a, de_ep_physics_load_asset_params *out);
+void de_ep_write_response_physics_load_asset(mpack_writer_t *w, uint64_t id, const de_ep_physics_load_asset *result);
 bool de_ep_read_params_pick(const de_ep_request *req, de_ep_arena *a, de_ep_pick_params *out);
 void de_ep_write_response_pick(mpack_writer_t *w, uint64_t id, const de_ep_pick_result *result);
 bool de_ep_read_params_pick_rect(const de_ep_request *req, de_ep_arena *a, de_ep_pick_rect_params *out);

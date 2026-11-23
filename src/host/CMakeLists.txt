@@ -181,6 +181,12 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
     set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS "$<$<CONFIG:Debug,Dev>:de_tp_tinyexr>")
 endif()
 
+# DENG-821: physics.loadAsset and the mouse spring physics.drag.* (DIDE protocol 1.23,
+# physics.authoring, physics.mouseSpring), in physics builds only.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_PHYSICS)
+    target_sources(de_host PRIVATE editor/editor_physics.c)
+endif()
+
 # DENG-778: ui.layout (DIDE protocol 1.14, ui.editor) reads the UI module's layout preview.
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_UI)
     target_sources(de_host PRIVATE editor/editor_ui.c)
