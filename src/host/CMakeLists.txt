@@ -188,6 +188,11 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_PHYSICS)
     target_sources(de_host PRIVATE editor/editor_physics.c)
 endif()
 
+# DENG-582: world.nav (DIDE protocol 1.25): nav.* methods, the topic nav.bake, in nav builds only.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_NAV)
+    target_sources(de_host PRIVATE editor/editor_nav.c)
+endif()
+
 # DENG-778: ui.layout (DIDE protocol 1.14, ui.editor) reads the UI module's layout preview.
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_UI)
     target_sources(de_host PRIVATE editor/editor_ui.c)

@@ -112,6 +112,8 @@ typedef struct de__nav_soup {
     u32 obstacle_count, obstacle_cap;
     f32 *offmesh;         /* DE__NAV_RC_OFFMESH_FLOATS per off-mesh link (DENG-77) */
     u32 offmesh_count, offmesh_cap;
+    f32 *area_vols;       /* DE__NAV_RC_AREA_VOL_FLOATS per area volume (DENG-582) */
+    u32 area_vol_count, area_vol_cap;
 } de__nav_soup;
 
 /** A pose: position and unit rotation quaternion (x, y, z, w), f64. Scale is not used. */
@@ -142,7 +144,11 @@ void de__nav_soup_add_obstacle(de__nav_soup *s, const de__nav_pose *p, de_vec3 h
 /** An off-mesh link between two world points (DENG-77); every tile build gets it, Detour keeps
  *  it in the tile that holds `from`. */
 void de__nav_soup_add_offmesh(de__nav_soup *s, de_dvec3 from, de_dvec3 to, f32 radius,
-                              bool bidirectional, u8 area);
+                              bool bidirectional, u8 area, u32 id);
+/** An area volume (DENG-582): the walkable cells in the box's footprint (as an obstacle's) and
+ *  height range get `area` (1..15). */
+void de__nav_soup_add_area_volume(de__nav_soup *s, const de__nav_pose *p, de_vec3 half_extents,
+                                  u8 area);
 /** The convex hull of `count` local points (brute force; at most 64 points). */
 void de__nav_soup_add_hull(de__nav_soup *s, const de__nav_pose *p, const de_vec3 *points,
                            u32 count);

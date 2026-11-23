@@ -39,15 +39,22 @@ typedef struct de__nav_rc_tile_config {
     const f32 *obstacles;
     i32 obstacle_count;
     /* Off-mesh links (DENG-77), each DE__NAV_RC_OFFMESH_FLOATS floats: start xyz, end xyz,
-     * radius, bidirectional (0 or 1), area (0..15). Detour keeps those that start in the tile. */
+     * radius, bidirectional (0 or 1), area (0..15), user id (DENG-582; exact up to 2^24).
+     * Detour keeps those that start in the tile. */
     const f32 *offmesh;
     i32 offmesh_count;
+    /* Area volumes (DENG-582), each DE__NAV_RC_AREA_VOL_FLOATS floats: the obstacle layout,
+     * then the area (1..15) given to the walkable cells inside, after erosion. */
+    const f32 *area_vols;
+    i32 area_vol_count;
 } de__nav_rc_tile_config;
 
 /** Floats per obstacle in de__nav_rc_tile_config.obstacles. */
 #define DE__NAV_RC_OBSTACLE_FLOATS 10
 /** Floats per off-mesh link in de__nav_rc_tile_config.offmesh. */
-#define DE__NAV_RC_OFFMESH_FLOATS 9
+#define DE__NAV_RC_OFFMESH_FLOATS 10
+/** Floats per area volume in de__nav_rc_tile_config.area_vols. */
+#define DE__NAV_RC_AREA_VOL_FLOATS 11
 
 /**
  * Builds one Detour tile from a triangle soup (`verts`: nv x 3 floats, `tris`: nt x 3 indices,
@@ -96,6 +103,13 @@ u32 de__nav_mesh_poly_count(const de__nav_mesh *m);
  * xz plane, and within `max_dy` m of the polygon's height range.
  */
 bool de__nav_mesh_point_on_poly(const de__nav_mesh *m, const f32 p[3], f32 max_dy);
+/** Ground polygons and off-mesh links of tile (tx, tz); false when there is no tile there. */
+bool de__nav_mesh_tile_stats(const de__nav_mesh *m, i32 tx, i32 tz, i32 *polys, i32 *links);
+/**
+ * The detail triangles of tile (tx, tz), Recast space: writes up to `cap` triangles (9 floats in
+ * `xyz`, one area in `areas`) and returns how many the tile has (0 without a tile).
+ */
+i32 de__nav_mesh_tile_tris(const de__nav_mesh *m, i32 tx, i32 tz, f32 *xyz, u8 *areas, i32 cap);
 /** FNV-1a 64 of every tile's position and geometry (vertices, polygons, detail mesh, off-mesh
  *  connections), in tile-grid order; links between polygons are left out. 0 for NULL. */
 u64 de__nav_mesh_hash(const de__nav_mesh *m);
@@ -121,6 +135,7 @@ void de__nav_query_set_deterministic(de__nav_query *q, bool on);
 typedef struct de__nav_query_args {
     f32 ext[3]; /* half extents of the box searched for the nearest polygon */
     u16 include;
+    const f32 *area_cost; /* 16 costs per metre by area (0 = 1), or NULL for 1 everywhere */
 } de__nav_query_args;
 
 /**
@@ -132,6 +147,14 @@ typedef struct de__nav_query_args {
 de_result de__nav_query_path(de__nav_query *q, const de__nav_query_args *args, const f32 start[3],
                              const f32 end[3], const f32 **points, i32 *count, bool *partial,
                              bool *bad_end);
+/**
+ * Detail of the last successful de__nav_query_path on `q` (DENG-582): the centres of the
+ * corridor's polygons (Recast space, up to `centre_cap`), the user ids of the off-mesh links it
+ * crosses (up to `id_cap`, in path order) and the cost of the corner path (each segment's length
+ * times the cost of the area it starts in).
+ */
+void de__nav_query_last_detail(de__nav_query *q, f32 *centres, i32 centre_cap, i32 *ncentres,
+                               u32 *ids, i32 id_cap, i32 *nids, f64 *cost);
 /** Surface raycast: 1 = hit a wall (`hit` set), 0 = reached `end`, -1 = start off the mesh. */
 i32 de__nav_query_raycast(de__nav_query *q, const de__nav_query_args *args, const f32 start[3],
                           const f32 end[3], f32 hit[3]);

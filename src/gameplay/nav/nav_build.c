@@ -188,6 +188,11 @@ void de__nav_soup_free(de__nav_soup *s) {
         DE_FREE(s->alloc, s->offmesh, sizeof(f32) * DE__NAV_RC_OFFMESH_FLOATS * s->offmesh_cap);
     s->offmesh = NULL;
     s->offmesh_count = s->offmesh_cap = 0;
+    if (s->area_vols != NULL)
+        DE_FREE(s->alloc, s->area_vols,
+                sizeof(f32) * DE__NAV_RC_AREA_VOL_FLOATS * s->area_vol_cap);
+    s->area_vols = NULL;
+    s->area_vol_count = s->area_vol_cap = 0;
     s->verts = NULL;
     s->tris = NULL;
     s->vert_count = s->vert_cap = s->tri_count = s->tri_cap = 0;
@@ -288,9 +293,8 @@ void de__nav_soup_add_box(de__nav_soup *s, const de__nav_pose *p, de_vec3 h) {
     }
 }
 
-void de__nav_soup_add_obstacle(de__nav_soup *s, const de__nav_pose *p, de_vec3 h) {
-    if (s->failed)
-        return;
+/* The obstacle layout of a box: 4 xz corners of its Recast-space footprint, then ymin, ymax. */
+static void footprint(const de__nav_soup *s, const de__nav_pose *p, de_vec3 h, f32 out[10]) {
     f32 lo[3] = {0}, hi[3] = {0};
     for (u32 i = 0; i < 8; ++i) {
         const de_vec3 c = v3((i & 1u) ? h.x : -h.x, (i & 2u) ? h.y : -h.y, (i & 4u) ? h.z : -h.z);
@@ -303,19 +307,38 @@ void de__nav_soup_add_obstacle(de__nav_soup *s, const de__nav_pose *p, de_vec3 h
                 hi[k] = r[k];
         }
     }
+    const f32 q[10] = {lo[0], lo[2], hi[0], lo[2], hi[0], hi[2], lo[0], hi[2], lo[1], hi[1]};
+    memcpy(out, q, sizeof q);
+}
+
+void de__nav_soup_add_obstacle(de__nav_soup *s, const de__nav_pose *p, de_vec3 h) {
+    if (s->failed)
+        return;
     if (!grow(s->alloc, (void **)&s->obstacles, &s->obstacle_cap, s->obstacle_count + 1u,
               sizeof(f32) * DE__NAV_RC_OBSTACLE_FLOATS)) {
         s->failed = true;
         return;
     }
-    f32 *o = &s->obstacles[s->obstacle_count * DE__NAV_RC_OBSTACLE_FLOATS];
-    const f32 q[10] = {lo[0], lo[2], hi[0], lo[2], hi[0], hi[2], lo[0], hi[2], lo[1], hi[1]};
-    memcpy(o, q, sizeof q);
+    footprint(s, p, h, &s->obstacles[s->obstacle_count * DE__NAV_RC_OBSTACLE_FLOATS]);
     ++s->obstacle_count;
 }
 
+void de__nav_soup_add_area_volume(de__nav_soup *s, const de__nav_pose *p, de_vec3 h, u8 area) {
+    if (s->failed || area < 1u || area > 15u)
+        return;
+    if (!grow(s->alloc, (void **)&s->area_vols, &s->area_vol_cap, s->area_vol_count + 1u,
+              sizeof(f32) * DE__NAV_RC_AREA_VOL_FLOATS)) {
+        s->failed = true;
+        return;
+    }
+    f32 *o = &s->area_vols[s->area_vol_count * DE__NAV_RC_AREA_VOL_FLOATS];
+    footprint(s, p, h, o);
+    o[10] = (f32)area;
+    ++s->area_vol_count;
+}
+
 void de__nav_soup_add_offmesh(de__nav_soup *s, de_dvec3 from, de_dvec3 to, f32 radius,
-                              bool bidirectional, u8 area) {
+                              bool bidirectional, u8 area, u32 id) {
     if (s->failed)
         return;
     if (!grow(s->alloc, (void **)&s->offmesh, &s->offmesh_cap, s->offmesh_count + 1u,
@@ -329,6 +352,7 @@ void de__nav_soup_add_offmesh(de__nav_soup *s, de_dvec3 from, de_dvec3 to, f32 r
     o[6] = radius;
     o[7] = bidirectional ? 1.0f : 0.0f;
     o[8] = (f32)area;
+    o[9] = (f32)id;
     ++s->offmesh_count;
 }
 
@@ -505,6 +529,8 @@ de_result de__nav_build_tile(const de_allocator *a, const de__nav_settings *st,
         c.obstacle_count = (i32)soup->obstacle_count;
         c.offmesh = soup->offmesh;
         c.offmesh_count = (i32)soup->offmesh_count;
+        c.area_vols = soup->area_vols;
+        c.area_vol_count = (i32)soup->area_vol_count;
         r = de__nav_rc_build_tile(a, &c, soup->verts, (i32)soup->vert_count, sel, (i32)m, data,
                                   size);
     }

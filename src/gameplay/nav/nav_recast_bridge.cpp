@@ -8,6 +8,8 @@
 // it that records the allocator and the size, so the free hook needs no scope.
 #include "gameplay/nav/nav_recast_bridge.h"
 
+#include <dengine/de_math.h>
+
 #include <DetourAlloc.h>
 #include <DetourNavMesh.h>
 #include <DetourNavMeshBuilder.h>
@@ -218,8 +220,22 @@ de_result de__nav_rc_build_tile(const de_allocator *a, const de__nav_rc_tile_con
         }
         rcMarkConvexPolyArea(&ctx, poly, 4, o[8], o[9], RC_NULL_AREA, *w.chf);
     }
-    if (!rcErodeWalkableArea(&ctx, cfg.walkableRadius, *w.chf) ||
-        !rcBuildDistanceField(&ctx, *w.chf) ||
+    if (!rcErodeWalkableArea(&ctx, cfg.walkableRadius, *w.chf))
+        return DE_ERR_INTERNAL;
+    /* Area volumes (DENG-582): after erosion, so they change costs and flags, not the shape. */
+    for (i32 i = 0; i < c->area_vol_count; ++i) {
+        const f32 *o = &c->area_vols[i * DE__NAV_RC_AREA_VOL_FLOATS];
+        f32 poly[12];
+        for (int k = 0; k < 4; ++k) {
+            poly[k * 3 + 0] = o[k * 2 + 0];
+            poly[k * 3 + 1] = o[8];
+            poly[k * 3 + 2] = o[k * 2 + 1];
+        }
+        const int area = (int)o[10];
+        if (area >= 1 && area <= 15)
+            rcMarkConvexPolyArea(&ctx, poly, 4, o[8], o[9], (unsigned char)area, *w.chf);
+    }
+    if (!rcBuildDistanceField(&ctx, *w.chf) ||
         !rcBuildRegions(&ctx, *w.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea))
         return DE_ERR_INTERNAL;
     w.cset = rcAllocContourSet();
@@ -248,6 +264,8 @@ de_result de__nav_rc_build_tile(const de_allocator *a, const de__nav_rc_tile_con
         if (w.pmesh->areas[i] == RC_WALKABLE_AREA) {
             w.pmesh->areas[i] = 0;
             w.pmesh->flags[i] = k_walk_flag;
+        } else if (w.pmesh->areas[i] >= 1 && w.pmesh->areas[i] <= 15) {
+            w.pmesh->flags[i] = (unsigned short)(1u << w.pmesh->areas[i]); // area volume
         } else {
             w.pmesh->flags[i] = 0;
         }
@@ -296,13 +314,16 @@ de_result de__nav_rc_build_tile(const de_allocator *a, const de__nav_rc_tile_con
         unsigned char *areas = dirs + n;
         for (size_t i = 0; i < n; ++i) {
             const f32 *o = &c->offmesh[i * DE__NAV_RC_OFFMESH_FLOATS];
+            // Recast puts the walkable surface one or two voxels above the geometry, and Detour
+            // drops a link whose start is more than the climb below it. Endpoints authored on the
+            // geometry are lifted by one voxel, so ones on the geometry or on the mesh both fit.
             for (int k = 0; k < 6; ++k)
-                verts[i * 6 + k] = o[k];
+                verts[i * 6 + k] = o[k] + ((k == 1 || k == 4) ? cfg.ch : 0.0f);
             rad[i] = o[6];
             dirs[i] = o[7] != 0.0f ? DT_OFFMESH_CON_BIDIR : 0;
             areas[i] = (unsigned char)o[8];
             flags[i] = (unsigned short)(1u << areas[i]);
-            ids[i] = (unsigned int)i;
+            ids[i] = (unsigned int)o[9];
         }
         p.offMeshConVerts = verts;
         p.offMeshConRad = rad;
@@ -469,6 +490,49 @@ bool de__nav_mesh_point_on_poly(const de__nav_mesh *m, const f32 p[3], f32 max_d
     return false;
 }
 
+bool de__nav_mesh_tile_stats(const de__nav_mesh *m, i32 tx, i32 tz, i32 *polys, i32 *links) {
+    *polys = 0;
+    *links = 0;
+    if (m == nullptr)
+        return false;
+    const dtMeshTile *t = m->nav->getTileAt(tx, tz, 0);
+    if (t == nullptr || t->header == nullptr)
+        return false;
+    *links = t->header->offMeshConCount;
+    *polys = t->header->polyCount - t->header->offMeshConCount;
+    return true;
+}
+
+i32 de__nav_mesh_tile_tris(const de__nav_mesh *m, i32 tx, i32 tz, f32 *xyz, u8 *areas, i32 cap) {
+    if (m == nullptr)
+        return 0;
+    const dtMeshTile *t = m->nav->getTileAt(tx, tz, 0);
+    if (t == nullptr || t->header == nullptr)
+        return 0;
+    i32 n = 0;
+    for (int i = 0; i < t->header->polyCount; ++i) {
+        const dtPoly &p = t->polys[i];
+        if (p.getType() != DT_POLYTYPE_GROUND || i >= t->header->detailMeshCount)
+            continue;
+        const dtPolyDetail &pd = t->detailMeshes[i];
+        for (int j = 0; j < pd.triCount; ++j, ++n) {
+            if (n >= cap)
+                continue;
+            const unsigned char *dt = &t->detailTris[(pd.triBase + (unsigned int)j) * 4];
+            for (int k = 0; k < 3; ++k) {
+                const float *v = dt[k] < p.vertCount
+                                     ? &t->verts[p.verts[dt[k]] * 3]
+                                     : &t->detailVerts[(pd.vertBase + dt[k] - p.vertCount) * 3];
+                xyz[n * 9 + k * 3 + 0] = v[0];
+                xyz[n * 9 + k * 3 + 1] = v[1];
+                xyz[n * 9 + k * 3 + 2] = v[2];
+            }
+            areas[n] = p.getArea();
+        }
+    }
+    return n;
+}
+
 u64 de__nav_mesh_hash(const de__nav_mesh *m) {
     if (m == nullptr)
         return 0;
@@ -541,6 +605,8 @@ struct de__nav_query {
     float points[DE__NAV_QUERY_MAX_POINTS * 3];
     unsigned char flags[DE__NAV_QUERY_MAX_POINTS];
     dtPolyRef refs[DE__NAV_QUERY_MAX_POINTS];
+    int npolys, npoints; // of the last successful path (DENG-582)
+    float cost[16];      // its area costs
 };
 
 namespace {
@@ -551,6 +617,9 @@ const int k_query_nodes = 4096;
 void make_filter(const de__nav_query_args *a, dtQueryFilter *f) {
     f->setIncludeFlags(a->include);
     f->setExcludeFlags(0);
+    if (a->area_cost != nullptr)
+        for (int i = 0; i < 16; ++i)
+            f->setAreaCost(i, a->area_cost[i] > 0.0f ? a->area_cost[i] : 1.0f);
 }
 
 } // namespace
@@ -602,6 +671,10 @@ de_result de__nav_query_path(de__nav_query *q, const de__nav_query_args *args, c
     *count = 0;
     *partial = false;
     *bad_end = false;
+    q->npolys = q->npoints = 0;
+    for (int i = 0; i < 16; ++i)
+        q->cost[i] = args->area_cost != nullptr && args->area_cost[i] > 0.0f ? args->area_cost[i]
+                                                                               : 1.0f;
     det_scope det(q->det);
     dtQueryFilter f;
     make_filter(args, &f);
@@ -633,9 +706,50 @@ de_result de__nav_query_path(de__nav_query *q, const de__nav_query_args *args, c
         return DE_ERR_INTERNAL;
     if (dtStatusDetail(ss, DT_BUFFER_TOO_SMALL))
         part = true;
+    q->npolys = np;
+    q->npoints = ns;
     *count = ns;
     *partial = part;
     return DE_OK;
+}
+
+void de__nav_query_last_detail(de__nav_query *q, f32 *centres, i32 centre_cap, i32 *ncentres,
+                               u32 *ids, i32 id_cap, i32 *nids, f64 *cost) {
+    *ncentres = 0;
+    *nids = 0;
+    *cost = 0.0;
+    const dtNavMesh *nav = q->mesh->nav;
+    for (int i = 0; i < q->npolys; ++i) {
+        const dtMeshTile *t = nullptr;
+        const dtPoly *p = nullptr;
+        if (dtStatusFailed(nav->getTileAndPolyByRef(q->polys[i], &t, &p)))
+            continue;
+        if (p->getType() == DT_POLYTYPE_OFFMESH_CONNECTION) {
+            const unsigned int idx = (unsigned int)(p - t->polys);
+            const int k = (int)idx - t->header->offMeshBase;
+            if (k >= 0 && k < t->header->offMeshConCount && *nids < id_cap)
+                ids[(*nids)++] = t->offMeshCons[k].userId;
+        }
+        if (*ncentres < centre_cap) {
+            float c[3] = {0.0f, 0.0f, 0.0f};
+            for (int v = 0; v < p->vertCount; ++v)
+                for (int k = 0; k < 3; ++k)
+                    c[k] += t->verts[p->verts[v] * 3 + k];
+            for (int k = 0; k < 3; ++k)
+                centres[*ncentres * 3 + k] = p->vertCount > 0 ? c[k] / (float)p->vertCount : 0.0f;
+            ++*ncentres;
+        }
+    }
+    double total = 0.0;
+    for (int i = 0; i + 1 < q->npoints; ++i) {
+        const float *a = &q->points[i * 3], *b = &q->points[(i + 1) * 3];
+        const double dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+        unsigned char area = 0;
+        if (q->refs[i] != 0)
+            (void)nav->getPolyArea(q->refs[i], &area);
+        total += de_dsqrt64(dx * dx + dy * dy + dz * dz) * (double)q->cost[area & 15];
+    }
+    *cost = total;
 }
 
 i32 de__nav_query_raycast(de__nav_query *q, const de__nav_query_args *args, const f32 start[3],

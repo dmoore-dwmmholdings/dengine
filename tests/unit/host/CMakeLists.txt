@@ -767,6 +767,15 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_PHYSICS)
     target_include_directories(test_editor_physics PRIVATE "${DE_ROOT_DIR}/src")
 endif()
 
+# DENG-582: world.nav (protocol 1.25, DIDE-R174): nav.* and the topic nav.bake, with physics
+# colliders as navmesh input.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_NAV AND DE_HAS_PHYSICS)
+    de_add_test(NAME editor_nav SOURCES test_editor_nav.c
+        LIBS de_host de_nav de_physics de_tp_dide_protocol LABELS unit host
+        CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_nav PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
 # DENG-828: input.loadActionMaps and input.monitor.subscribe (protocol 1.24, DIDE-137).
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     de_add_test(NAME editor_input SOURCES test_editor_input.c

@@ -13,6 +13,8 @@ de_add_module(
         nav_asset.c
         nav_query.c
         nav_obstacles.c
+        nav_components.h
+        nav_components.c
     DEPS ecs asset
     OPTIONAL_DEPS physics
     OPTIONAL_OPTION DE_WITH_NAV
