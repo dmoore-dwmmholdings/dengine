@@ -1,0 +1,16 @@
+# DENG-825: a foliage layer with one page (cell 0, 0) of two instances.
+[[entity]]
+id = "0x1"
+[entity.DeFoliage]
+
+[[entity]]
+id = "0x2"
+parent = "0x1"
+[entity.DeFoliagePage]
+layer = "0x1"
+x = 0
+z = 0
+page = 0
+count = 2
+revision = 3
+instances = [{x = 1.0, y = 2.0, z = 3.0, yaw = 0.0, scale = 1.0, rule = 0, type = 0, nx = 0, nz = 0}, {x = 4.0, y = 2.0, z = 5.0, yaw = 0.0, scale = 1.0, rule = 0, type = 1, nx = 0, nz = 0}]

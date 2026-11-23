@@ -203,6 +203,14 @@ de_result de__prefab_instantiate_ids(de_asset_system *s, de_world *w, de_prefab 
                                      de_entity parent, de_entity *out_root, u64 *sids,
                                      de_entity *ents, u32 cap, u32 *count);
 
+/** DENG-825: a function that runs on every successful instantiate with the spawned entities in
+ * record order. A component module uses it to finish a migration that needs entities (a stored
+ * version of the component that kept its data inline). It may spawn entities. False: it could not
+ * finish (the instantiate warns, the scene stays). */
+typedef bool (*de__scene_loaded_fn)(de_world *w, const de_entity *ents, u32 n);
+/** Sets the function above (one for the process; NULL clears it). Safe from any thread. */
+void de__scene_set_loaded_hook(de__scene_loaded_fn fn);
+
 /** Called for each component of a prefab, decoded into scratch memory. Entity fields hold
  * prefab-local scene ids, not entities. `obj` is valid during the call only; it is NULL for a
  * tag (a component without data). Each entity is first visited once with `component` NULL, a

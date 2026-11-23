@@ -901,3 +901,156 @@ TEST_F(render_components, terrain_v1_cell_size_migrates_to_size, cfx) {
     EXPECT_TRUE(d->hooks.migrate(&tr, 2, old, old_fields, 2));
     EXPECT_FLOAT_EQ(tr.size, 32.0, 0);
 }
+
+/* ---- DENG-825: a version 1 DeFoliage in a binary scene ------------------------------------- */
+
+/* Version 1 kept its cells and instances inline. A binary object written with that layout (from a
+ * second registry) loads into the current DeFoliage, and the loaded hook the scene instantiate
+ * calls then gives the layer pages with the same instances. */
+typedef struct v1_cell {
+    i32 x, z;
+    u32 count;
+    u64 revision;
+} v1_cell;
+typedef struct v1_foliage {
+    u32 cell_count, instance_count;
+    v1_cell cells[32];
+    de_foliage_instance instances[384];
+} v1_foliage;
+
+static bool v1_foliage_register(de_type_registry *old, de_type_id *out) {
+    static const de_field_info k_inst[] = {
+        DE_FIELD(de_foliage_instance, x, DE_FK_F32, DE_FIELD_DEFAULT),
+        DE_FIELD(de_foliage_instance, y, DE_FK_F32, DE_FIELD_DEFAULT),
+        DE_FIELD(de_foliage_instance, z, DE_FK_F32, DE_FIELD_DEFAULT),
+        DE_FIELD(de_foliage_instance, yaw, DE_FK_F32, DE_FIELD_DEFAULT),
+        DE_FIELD(de_foliage_instance, scale, DE_FK_F32, DE_FIELD_DEFAULT),
+        DE_FIELD(de_foliage_instance, rule, DE_FK_U32, DE_FIELD_DEFAULT),
+        DE_FIELD(de_foliage_instance, type, DE_FK_U8, DE_FIELD_DEFAULT),
+        DE_FIELD(de_foliage_instance, nx, DE_FK_I8, DE_FIELD_DEFAULT),
+        DE_FIELD(de_foliage_instance, nz, DE_FK_I8, DE_FIELD_DEFAULT),
+    };
+    static const de_field_info k_cell[] = {
+        DE_FIELD(v1_cell, x, DE_FK_I32, DE_FIELD_DEFAULT),
+        DE_FIELD(v1_cell, z, DE_FK_I32, DE_FIELD_DEFAULT),
+        DE_FIELD(v1_cell, count, DE_FK_U32, DE_FIELD_DEFAULT),
+        DE_FIELD(v1_cell, revision, DE_FK_U64, DE_FIELD_DEFAULT),
+    };
+    static const de_field_info k_fields[] = {
+        DE_FIELD(v1_foliage, cell_count, DE_FK_U32, DE_FIELD_DEFAULT),
+        DE_FIELD(v1_foliage, instance_count, DE_FK_U32, DE_FIELD_DEFAULT),
+        DE_FIELD_EX(v1_foliage, cells, DE_FK_FIXED_ARRAY, DE_FIELD_DEFAULT,
+                    {0, 0, 0, 0, "de_foliage_cell", 32}),
+        DE_FIELD_EX(v1_foliage, instances, DE_FK_FIXED_ARRAY, DE_FIELD_DEFAULT,
+                    {0, 0, 0, 0, "de_foliage_instance", 384}),
+    };
+    de_type_desc inst = DE_TYPE_DESC(de_foliage_instance, 1, k_inst);
+    de_type_desc cell = DE_TYPE_DESC(v1_cell, 1, k_cell);
+    cell.name = "de_foliage_cell";
+    de_type_desc layer = DE_TYPE_DESC(v1_foliage, 1, k_fields);
+    layer.name = "DeFoliage";
+    if (!DE_HANDLE_VALID(de_type_register(old, &inst)) ||
+        !DE_HANDLE_VALID(de_type_register(old, &cell)))
+        return false;
+    *out = de_type_register(old, &layer);
+    return DE_HANDLE_VALID(*out);
+}
+
+typedef struct page_tally {
+    u64 layer;
+    u32 pages, instances, cell0, cell1;
+    u64 rev0, rev1;
+} page_tally;
+
+static void tally_pages(const de_query_chunk *ch, void *user) {
+    page_tally *t = (page_tally *)user;
+    const DeFoliagePage *p = (const DeFoliagePage *)ch->columns[0];
+    for (u32 r = 0; r < ch->count; ++r) {
+        if (p[r].layer.bits != t->layer)
+            continue;
+        ++t->pages;
+        t->instances += p[r].count;
+        if (p[r].x == 0) {
+            t->cell0 += p[r].count;
+            t->rev0 = p[r].revision;
+        } else if (p[r].x == 1) {
+            t->cell1 += p[r].count;
+            t->rev1 = p[r].revision;
+        }
+    }
+}
+
+TEST_F(render_components, foliage_v1_binary_layer_migrates_to_pages, cfx) {
+    ASSERT_EQ(de_render_register_components(f->w), DE_OK);
+    de_type_registry *old;
+    ASSERT_EQ(de_type_registry_create(NULL, &old), DE_OK);
+    de_type_id old_t;
+    ASSERT_TRUE(v1_foliage_register(old, &old_t));
+    /* Cell (0, 0) holds 380 instances and cell (1, 0) three; the third slot is unused. */
+    static v1_foliage v1;
+    memset(&v1, 0, sizeof v1);
+    v1.cell_count = 2;
+    v1.instance_count = 383;
+    v1.cells[0] = (v1_cell){0, 0, 380, 5};
+    v1.cells[1] = (v1_cell){1, 0, 3, 6};
+    for (u32 i = 0; i < 383; ++i) {
+        v1.instances[i].x = (f32)i;
+        v1.instances[i].z = 2.0f;
+        v1.instances[i].type = (u8)(i % 2);
+        v1.instances[i].rule = i;
+    }
+    de_mem_writer mw;
+    de_mem_writer_init(&mw, NULL);
+    de_writer wr = de_writer_from_mem(&mw);
+    const de_ser_options sopt = {DE_SER_BINARY, 0, NULL};
+    const de_ser_binary_options wopt = {.schema = DE_SER_BINARY_SELF_DESCRIBING};
+    ASSERT_EQ(de_serialize_binary(old, old_t, &v1, &sopt, &wopt, &wr), DE_OK);
+    de_type_registry_destroy(old);
+
+    const de_component fc = de_component_find(f->w, "DeFoliage");
+    const de_component pc = de_component_find(f->w, "DeFoliagePage");
+    ASSERT_TRUE(DE_HANDLE_VALID(fc) && DE_HANDLE_VALID(pc));
+    const de_entity layer = de_entity_spawn(f->w);
+    DeFoliage *fo = (DeFoliage *)de_entity_add(f->w, layer, fc);
+    ASSERT_TRUE(fo != NULL);
+    de_mem_reader mr;
+    de_mem_reader_init(&mr, mw.data, mw.size);
+    de_reader rd = de_reader_from_mem(&mr);
+    de_ser_binary_stats stats;
+    memset(&stats, 0, sizeof stats);
+    const de_ser_options ropt = {DE_SER_BINARY, DE_FIELD_SERIALIZE, NULL};
+    const de_ser_binary_options bopt = {.stats = &stats};
+    ASSERT_EQ(de_deserialize_binary(f->types, type_of(f, "DeFoliage"), fo, &ropt, &bopt, &rd),
+              DE_OK);
+    de_mem_writer_free(&mw);
+    EXPECT_EQ(stats.migrations, 1u);
+    EXPECT_TRUE(fo->source != 0 && fo->source != layer.bits); /* parked for the loaded hook */
+    /* A structural change (the hierarchy links move the row) loses nothing. */
+    const de_entity parent = de_entity_spawn(f->w);
+    ASSERT_EQ(de_entity_set_parent(f->w, layer, parent), DE_OK);
+
+    const de_entity ents[2] = {parent, layer};
+    EXPECT_TRUE(de__render_foliage_loaded(f->w, ents, 2));
+    fo = (DeFoliage *)de_entity_get(f->w, layer, fc);
+    ASSERT_TRUE(fo != NULL);
+    EXPECT_EQ(fo->source, layer.bits);
+    page_tally t = {layer.bits, 0, 0, 0, 0, 0, 0};
+    const de_query_term terms[1] = {{pc, DE_READ}};
+    const de_query_desc qd = {terms, 1, NULL, 0};
+    const de_query q = de_query_create(f->w, &qd);
+    de_query_each(f->w, q, tally_pages, &t);
+    de_query_destroy(f->w, q);
+    EXPECT_EQ(t.pages, 2u);
+    EXPECT_EQ(t.instances, 383u);
+    EXPECT_EQ(t.cell0, 380u);
+    EXPECT_EQ(t.cell1, 3u);
+    EXPECT_EQ(t.rev0, 5u);
+    EXPECT_EQ(t.rev1, 6u);
+    /* A second call finds nothing parked. */
+    EXPECT_TRUE(de__render_foliage_loaded(f->w, ents, 2));
+    t = (page_tally){layer.bits, 0, 0, 0, 0, 0, 0};
+    const de_query q2 = de_query_create(f->w, &qd);
+    de_query_each(f->w, q2, tally_pages, &t);
+    de_query_destroy(f->w, q2);
+    EXPECT_EQ(t.pages, 2u);
+}

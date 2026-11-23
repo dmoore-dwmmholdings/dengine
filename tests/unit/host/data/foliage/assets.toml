@@ -7,3 +7,5 @@ asset_root = "assets"
 "foliage/grass" = { type = "foliageType", source = "foliage/grass.foliage.toml" }
 "foliage/pine"  = { type = "foliageType", source = "foliage/pine.foliage.toml" }
 "foliage/bad"   = { type = "foliageType", source = "foliage/bad.foliage.toml" }
+# DENG-825: a prefab with a layer and one page of two instances (a child of the layer).
+"props/patch"   = { type = "prefab", source = "patch.prefab.toml" }

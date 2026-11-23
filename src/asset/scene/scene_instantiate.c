@@ -27,6 +27,7 @@
 
 #include "ecs/ecs_internal.h" /* ecs_component_get: a component's type and whether it is a tag */
 
+#include <stdatomic.h>
 #include <string.h>
 
 de_prefab de_asset_scene(de_asset_system *s, de_asset_id id) {
@@ -72,6 +73,10 @@ typedef struct inst_type {
     de_type_id type;
     bool tag;
 } inst_type;
+
+static _Atomic(de__scene_loaded_fn) g_loaded_hook;
+
+void de__scene_set_loaded_hook(de__scene_loaded_fn fn) { atomic_store(&g_loaded_hook, fn); }
 
 typedef struct inst_drop {
     u32 entity;
@@ -208,6 +213,14 @@ static de_result instantiate(de_asset_system *s, de_world *w, de_prefab p, de_en
             r = de_entity_set_parent(w, ents[i], parent);
         if (out_root != NULL && e.parent == DE__SCENE_NO_PARENT && out_root->bits == 0)
             *out_root = ents[i];
+    }
+
+    /* DENG-825: a component whose older stored version needs entities (foliage pages) finishes. */
+    if (r == DE_OK && v->entity_count != 0) {
+        const de__scene_loaded_fn hook = atomic_load(&g_loaded_hook);
+        if (hook != NULL && !hook(w, ents, v->entity_count))
+            DE_WARN(s->log, "prefab %016llx: a component's older stored version was not migrated",
+                    (unsigned long long)sl->id.hash);
     }
 
     if (r != DE_OK) {

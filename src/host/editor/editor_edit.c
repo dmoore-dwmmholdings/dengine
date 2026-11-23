@@ -1022,9 +1022,19 @@ static void on_begin(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
 
 /* Applies `ops` to open transaction `t`, all or nothing: on a failure what this call applied is
  * undone and `f` is set. */
-/* DENG-824: applies an op the editor adds to an edit (foliage page upkeep) as a pair of its own.
- * A failure is not the edit's: the op is dropped. */
-static void tx_extra(de__editor *ed, de_ep_arena *a, ed_tx *t, de_ep_edit_op *op) {
+/* DENG-824: an op the editor adds to an edit (foliage page upkeep). With `inv` NULL it is applied
+ * as a pair of its own (a failure is not the edit's: the op is dropped); with `inv` the pair is
+ * only recorded (DENG-825: the world already holds the result). */
+typedef struct extra_ctx {
+    de__editor *ed;
+    de_ep_arena *a;
+    ed_tx *t;
+} extra_ctx;
+
+static bool tx_extra(void *user, de_ep_edit_op *op, de_ep_edit_op *inv_in) {
+    extra_ctx *x = (extra_ctx *)user;
+    de__editor *ed = x->ed;
+    ed_tx *t = x->t;
     de_ep_edit_op inv;
     u64 spawned = 0;
     ed_fail f2 = {DE_EP_OK, "", NULL};
@@ -1032,26 +1042,34 @@ static void tx_extra(de__editor *ed, de_ep_arena *a, ed_tx *t, de_ep_edit_op *op
         op->has_scene = true;
         op->scene = t->scene;
     }
-    if (!apply_op(ed, a, op, &inv, &spawned, &f2)) {
-        DE_WARN(ed->log, "editor: %.*s skipped: %s", (int)op->op.len, op->op.ptr, f2.msg);
-        return;
+    if (inv_in != NULL) {
+        if (!inv_in->has_scene) {
+            inv_in->has_scene = true;
+            inv_in->scene = t->scene;
+        }
+        return tx_push(t, blob_of_op(ed, op), blob_of_op(ed, inv_in));
     }
-    tx_push(t, blob_of_op(ed, op), blob_of_op(ed, &inv));
+    if (!apply_op(ed, x->a, op, &inv, &spawned, &f2)) {
+        DE_WARN(ed->log, "editor: %.*s skipped: %s", (int)op->op.len, op->op.ptr, f2.msg);
+        return false;
+    }
+    return tx_push(t, blob_of_op(ed, op), blob_of_op(ed, &inv));
 }
 
 static bool tx_apply(de__editor *ed, de_ep_arena *a, ed_tx *t, const de_ep_edit_op *ops, u32 n,
                      ed_fail *f) {
     const u32 first = t->count, first_assigned = t->assigned_count;
     for (u32 i = 0; i < n; ++i) {
-        de_ep_edit_op inv, applied = ops[i], extra;
+        de_ep_edit_op inv, applied = ops[i];
+        extra_ctx xc = {ed, a, t};
         u64 spawned = 0;
         if (!applied.has_scene) {
             applied.has_scene = true;
             applied.scene = t->scene;
         }
         /* A layer that goes empties its pages first, so an undo brings them back after it. */
-        if (ed->foliage != NULL && ed->foliage->before(ed, a, &applied, &extra))
-            tx_extra(ed, a, t, &extra);
+        if (ed->foliage != NULL)
+            (void)ed->foliage->before(ed, a, &applied, tx_extra, &xc);
         if (!apply_op(ed, a, &applied, &inv, &spawned, f)) {
             for (u32 k = t->count; k > first; --k) {
                 de_ep_edit_op undo, ignored;
@@ -1073,9 +1091,12 @@ static bool tx_apply(de__editor *ed, de_ep_arena *a, ed_tx *t, const de_ep_edit_
         }
         tx_push(t, blob_of_op(ed, &applied), blob_of_op(ed, &inv));
         /* A copied layer (DIDE Duplicate) gets pages of its own. */
-        if (spawned != 0 && ed->foliage != NULL &&
-            ed->foliage->after_spawn(ed, a, spawned, &extra))
-            tx_extra(ed, a, t, &extra);
+        if (spawned != 0 && ed->foliage != NULL) {
+            (void)ed->foliage->after_spawn(ed, a, spawned, tx_extra, &xc);
+            /* DENG-825: a prefab's layers bring their pages; undo takes them away first. */
+            if (de_ep_str_eq(applied.op, "instantiate"))
+                (void)ed->foliage->after_instantiate(ed, a, spawned, tx_extra, &xc);
+        }
     }
     return true;
 }
@@ -1184,6 +1205,9 @@ static bool replay(de__editor *ed, de_ep_arena *a, ed_tx *t, bool undo, ed_fail 
     }
     bool ok = true;
     u32 done = 0;
+    /* DENG-825: each op and its inverse live in the arena only until the inverse is stored, so
+     * a transaction of many large ops (foliage chunks) needs room for one at a time. */
+    const size_t arena_mark = a->used;
     for (u32 i = 0; i < t->count && ok; ++i, done += ok) {
         const u32 k = undo ? t->count - 1 - i : i;
         const ed_pair *p = &t->pairs[k];
@@ -1195,6 +1219,8 @@ static bool replay(de__editor *ed, de_ep_arena *a, ed_tx *t, bool undo, ed_fail 
             ok = false;
         else
             fresh[k] = blob_of_op(ed, &inv);
+        if (ok)
+            a->used = arena_mark;
     }
     /* A failed op leaves the ones before it applied: put them back, newest first, so the world
      * (and any prefab source file) is as it was before the replay. */
@@ -1205,6 +1231,7 @@ static bool replay(de__editor *ed, de_ep_arena *a, ed_tx *t, bool undo, ed_fail 
         ed_fail ignored = {DE_EP_OK, "", NULL};
         if (fresh[k].p != NULL && op_of_blob(&fresh[k], a, &o))
             (void)apply_op(ed, a, &o, &inv, &spawned, &ignored);
+        a->used = arena_mark;
     }
     for (u32 k = 0; k < t->count; ++k) {
         ed_blob *side = undo ? &t->pairs[k].fwd : &t->pairs[k].inv;

@@ -44,6 +44,12 @@ typedef struct DeRenderComponents {
  * or a system that declares no write of the resource. */
 const DeRenderComponents *de__render_components(de_world *w);
 
+/** DENG-825: gives each DeFoliage layer among `ents` that was migrated from version 1 (binary
+ * scenes kept the cells inline) the DeFoliagePage entities of its cells. The scene instantiate
+ * calls it through de__scene_set_loaded_hook; a test may call it. False: a page could not be
+ * spawned. */
+bool de__render_foliage_loaded(de_world *w, const de_entity *ents, u32 n);
+
 /** de_renderer_attach's call: registers the components of `w`; a failure is logged to the
  * renderer's `render` category (attach returns nothing). */
 void de__render_components_attach(de_renderer *r, de_world *w);
