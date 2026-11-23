@@ -442,6 +442,143 @@ TEST_F(editor_ipc, crash_notification_reaches_the_ide, ipc_fx) {
 #endif
 }
 
+/* DENG-555, IPC "Limits": "256 requests in flight ... A request over a limit gets `busy` with
+ * `data: { retryAfterMs }`." With the frame stalled, 256 world changes wait for it; the next is
+ * refused at once, reads still answer, and every waiting change is answered once the frame runs. */
+TEST_F(editor_ipc, a_request_over_the_in_flight_limit_gets_busy_with_retry_after, ipc_fx) {
+    ASSERT_NE(cl_hello(f), 0u);
+    de_atomic_store_u32(&f->pump, 0, DE_ATOMIC_RELEASE);
+    de_sleep_ns(2 * IPC_FRAME_NS);
+
+    u64 first = 0;
+    for (u32 i = 0; i < DE_EP_LIMIT_REQUESTS_IN_FLIGHT; ++i) {
+        const u64 id = cl_request(f, "session.setMode", mode_params, "paused");
+        ASSERT_NE(id, 0u);
+        if (i == 0)
+            first = id;
+    }
+    const u64 over = cl_request(f, "session.setMode", mode_params, "paused");
+    ASSERT_NE(over, 0u);
+    mpack_tree_t t;
+    ASSERT_EQ(cl_response(f, over, 1000, &t), 1);
+    const mpack_node_t err = mpack_node_map_cstr_optional(mpack_tree_root(&t), "error");
+    ASSERT_EQ(mpack_node_type(err), mpack_type_map);
+    EXPECT_EQ(mpack_node_i64(mpack_node_map_cstr(err, "code")), (i64)DE_EP_ERR_BUSY);
+    const mpack_node_t data = mpack_node_map_cstr_optional(err, "data");
+    ASSERT_EQ(mpack_node_type(data), mpack_type_map);
+    EXPECT_GT(mpack_node_u64(mpack_node_map_cstr(data, "retryAfterMs")), 0u);
+    (void)mpack_tree_destroy(&t);
+    EXPECT_EQ(ping_once(f, 500), 1); /* a read answered on the service thread is not in flight */
+
+    de_atomic_store_u32(&f->pump, 1, DE_ATOMIC_RELEASE);
+    static bool seen[DE_EP_LIMIT_REQUESTS_IN_FLIGHT];
+    memset(seen, 0, sizeof seen);
+    for (u32 got = 0; got < DE_EP_LIMIT_REQUESTS_IN_FLIGHT;) {
+        u8 kind = 0;
+        size_t len = 0;
+        ASSERT_EQ(cl_recv(f, &kind, &len, 3000), 1);
+        if (kind != DE_EP_KIND_RESPONSE)
+            continue;
+        mpack_tree_init_data(&t, f->buf, len);
+        mpack_tree_parse(&t);
+        ASSERT_EQ(mpack_tree_error(&t), mpack_ok);
+        const u64 id = mpack_node_u64(mpack_node_map_cstr(mpack_tree_root(&t), "id"));
+        ASSERT_GE(id, first);
+        ASSERT_LT(id - first, (u64)DE_EP_LIMIT_REQUESTS_IN_FLIGHT);
+        EXPECT_FALSE(seen[id - first]);
+        EXPECT_TRUE(mpack_node_map_contains_cstr(mpack_tree_root(&t), "result"));
+        seen[id - first] = true;
+        ++got;
+        (void)mpack_tree_destroy(&t);
+    }
+    /* The answered requests released their places. */
+    const u64 again = cl_request(f, "session.setMode", mode_params, "edit");
+    ASSERT_EQ(cl_response(f, again, 2000, &t), 1);
+    EXPECT_TRUE(mpack_node_map_contains_cstr(mpack_tree_root(&t), "result"));
+    (void)mpack_tree_destroy(&t);
+}
+
+/* Reads hello's limits.frame_size from a fresh link (0 on failure). */
+static u32 cl_hello_frame_size(ipc_fx *f) {
+    f->fd = cl_connect(f->sock);
+    if (f->fd < 0)
+        return 0;
+    const u64 id = cl_request(f, "hello", hello_params, NULL);
+    mpack_tree_t t;
+    if (id == 0 || cl_response(f, id, 2000, &t) != 1)
+        return 0;
+    u32 size = 0;
+    const mpack_node_t result = mpack_node_map_cstr_optional(mpack_tree_root(&t), "result");
+    if (mpack_node_type(result) == mpack_type_map) {
+        const mpack_node_t limits = mpack_node_map_cstr_optional(result, "limits");
+        if (mpack_node_type(limits) == mpack_type_map)
+            size = (u32)mpack_node_u64(mpack_node_map_cstr(limits, "frameSize"));
+    }
+    (void)mpack_tree_destroy(&t);
+    return size;
+}
+
+/* Sends a ping whose frame length field (kind byte + payload) is exactly `frame_len`. */
+static u64 cl_padded_ping(ipc_fx *f, u32 frame_len) {
+    const size_t payload = (size_t)frame_len - 1;
+    char *frame = (char *)malloc(payload + 5);
+    if (frame == NULL)
+        return 0;
+    const u64 id = ++f->next_id;
+    size_t pad = payload - 256, used = 0;
+    for (int pass = 0; pass < 2; ++pass) {
+        mpack_writer_t w;
+        mpack_writer_init(&w, frame + 5, payload);
+        de_ep_write_request_begin(&w, id, "ping");
+        mpack_start_map(&w, 1);
+        mpack_write_cstr(&w, "pad");
+        mpack_start_bin(&w, (u32)pad);
+        mpack_write_bytes(&w, frame + 5, pad); /* content is irrelevant */
+        mpack_finish_bin(&w);
+        mpack_finish_map(&w);
+        de_ep_write_request_end(&w);
+        used = mpack_writer_buffer_used(&w);
+        if (mpack_writer_destroy(&w) != mpack_ok) {
+            free(frame);
+            return 0;
+        }
+        pad += payload - used; /* the bin32 header stays the same size */
+    }
+    bool ok = used == payload;
+    for (u32 i = 0; i < 4; ++i)
+        frame[i] = (char)(frame_len >> (8 * i));
+    frame[4] = (char)DE_EP_KIND_REQUEST;
+    ok = ok && cl_write_all(f->fd, frame, payload + 5);
+    free(frame);
+    return ok ? id : 0;
+}
+
+/* DENG-555, IPC "Limits": hello's frame_size is the size the engine really accepts. A frame of
+ * exactly that size is answered; one byte over closes the connection ("A frame over the size
+ * limit closes the connection"). Before DENG-555 hello said 64 MiB and the engine closed at 16. */
+TEST_F(editor_ipc, hello_frame_size_is_the_size_the_engine_accepts, ipc_fx) {
+    const u32 limit = cl_hello_frame_size(f);
+    ASSERT_GT(limit, 1024u);
+    const u64 id = cl_padded_ping(f, limit);
+    ASSERT_NE(id, 0u);
+    mpack_tree_t t;
+    ASSERT_EQ(cl_response(f, id, 5000, &t), 1);
+    EXPECT_TRUE(mpack_node_map_contains_cstr(mpack_tree_root(&t), "result"));
+    (void)mpack_tree_destroy(&t);
+
+    const u32 over = limit + 1;
+    const unsigned char head[5] = {(unsigned char)over, (unsigned char)(over >> 8),
+                                   (unsigned char)(over >> 16), (unsigned char)(over >> 24),
+                                   (unsigned char)DE_EP_KIND_REQUEST};
+    ASSERT_TRUE(cl_write_all(f->fd, head, sizeof head));
+    u8 kind = 0;
+    size_t len = 0;
+    int r = 1;
+    while (r == 1)
+        r = cl_recv(f, &kind, &len, 2000);
+    EXPECT_EQ(r, -1); /* closed, not a timeout */
+}
+
 #else
 TEST(editor_ipc, posix_only) {
     SKIP("the IPC thread tests use a Unix-socket client (Windows pipe client pending)");

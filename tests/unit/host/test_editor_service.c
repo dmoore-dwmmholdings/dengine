@@ -614,6 +614,118 @@ TEST_F(editor_service, despawn_undo_puts_the_entity_back_at_its_index, service_f
     expect_kids(f, p, k, 3);
 }
 
+/* ---------- Mixed transactions (DENG-555) ---------- */
+
+/* The world's content, hierarchy included, as one value. */
+static u64 world_sum(service_fx *f) {
+    return de_world_checksum(f->engine.world, 0xFFFFFFFFu);
+}
+static int apply_batch(service_fx *f, u32 tx, de_ep_edit_op *ops, u32 n) {
+    const de_ep_edit_apply_params q = {.tx = tx, .ops = {ops, n}};
+    char p[2048];
+    WRITE_PARAMS(p, de_ep_write_edit_apply_params, &q);
+    return call_code(f, DE_EP_METHOD_EDIT_APPLY, p, p_size);
+}
+/* One op of every kind in a single edit.apply: set, add, remove, reparent, spawn, despawn. */
+static u32 mixed_ops(de_entity a, de_entity p, const de_entity *k, const char *seven,
+                     size_t seven_n, de_ep_edit_op *ops) {
+    u32 n = 0;
+    ops[n++] = (de_ep_edit_op){.op = de_ep_cstr("set"),
+                               .has_entity = true,
+                               .entity = a.bits,
+                               .has_path = true,
+                               .path = de_ep_cstr("SvcHealth.current"),
+                               .has_value = true,
+                               .value = {seven, seven_n}};
+    ops[n++] = (de_ep_edit_op){.op = de_ep_cstr("add"),
+                               .has_entity = true,
+                               .entity = p.bits,
+                               .has_component = true,
+                               .component = de_ep_cstr("SvcHealth")};
+    ops[n++] = reparent_to(k[0], a, false, 0);
+    ops[n++] = spawn_under(p, true, 0);
+    ops[n++] = (de_ep_edit_op){.op = de_ep_cstr("despawn"), .has_entity = true, .entity = k[1].bits};
+    ops[n++] = (de_ep_edit_op){.op = de_ep_cstr("remove"),
+                               .has_entity = true,
+                               .entity = a.bits,
+                               .has_component = true,
+                               .component = de_ep_cstr("SvcHealth")};
+    return n;
+}
+
+/* DENG-555 acceptance: a transaction of mixed ops commits, undoes to the exact world before it
+ * and redoes to the exact world after it, twice over (checksums of the whole world). */
+TEST_F(editor_service, mixed_op_transaction_undoes_and_redoes_to_the_same_checksums, service_fx) {
+    const de_component health = register_health(f);
+    const de_entity a = spawn_health(f, health, 5);
+    de_entity k[3];
+    const de_entity p = family(f, k, 3);
+    de__ed_edit_register(&f->ed);
+    char seven[8];
+    mpack_writer_t vw;
+    mpack_writer_init(&vw, seven, sizeof seven);
+    mpack_write_float(&vw, 7);
+    const size_t seven_n = mpack_writer_buffer_used(&vw);
+    ASSERT_EQ(mpack_writer_destroy(&vw), mpack_ok);
+
+    const u64 before = world_sum(f);
+    const u32 tx = edit_begin(f);
+    de_ep_edit_op ops[8];
+    const u32 n = mixed_ops(a, p, k, seven, seven_n, ops);
+    ASSERT_EQ(apply_batch(f, tx, ops, n), 0);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_COMMIT, tx), 0);
+    const u64 after = world_sum(f);
+    ASSERT_NE(after, before);
+    EXPECT_FALSE(de_entity_has(f->engine.world, a, health));
+    EXPECT_TRUE(de_entity_has(f->engine.world, p, health));
+    EXPECT_FALSE(de_entity_alive(f->engine.world, k[1]));
+    EXPECT_EQ(de_entity_children_count(f->engine.world, p), 2u); /* k[2] and the spawn */
+    EXPECT_EQ(de_entity_children_count(f->engine.world, a), 1u);
+    for (u32 i = 0; i < 2; ++i) {
+        ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+        EXPECT_EQ(world_sum(f), before);
+        EXPECT_FLOAT_EQ(health_of(f, a, health), 5, 0);
+        expect_kids(f, p, k, 3);
+        ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
+        EXPECT_EQ(world_sum(f), after);
+    }
+}
+
+/* DENG-555 acceptance: edit.apply is all-or-nothing. When the last op of a mixed batch fails,
+ * every op before it is reverted, the world is unchanged and the transaction stays usable. */
+TEST_F(editor_service, a_failed_op_rolls_back_a_mixed_batch_to_the_same_checksum, service_fx) {
+    const de_component health = register_health(f);
+    const de_entity a = spawn_health(f, health, 5);
+    de_entity k[3];
+    const de_entity p = family(f, k, 3);
+    de__ed_edit_register(&f->ed);
+    char seven[8];
+    mpack_writer_t vw;
+    mpack_writer_init(&vw, seven, sizeof seven);
+    mpack_write_float(&vw, 7);
+    const size_t seven_n = mpack_writer_buffer_used(&vw);
+    ASSERT_EQ(mpack_writer_destroy(&vw), mpack_ok);
+
+    const u64 before = world_sum(f);
+    const u32 tx = edit_begin(f);
+    de_ep_edit_op ops[8];
+    u32 n = mixed_ops(a, p, k, seven, seven_n, ops);
+    ops[n++] = (de_ep_edit_op){.op = de_ep_cstr("add"),
+                               .has_entity = true,
+                               .entity = p.bits, /* already added by op 2: conflict */
+                               .has_component = true,
+                               .component = de_ep_cstr("SvcHealth")};
+    EXPECT_EQ(apply_batch(f, tx, ops, n), DE_EP_ERR_CONFLICT);
+    EXPECT_EQ(world_sum(f), before);
+    EXPECT_TRUE(de_entity_alive(f->engine.world, k[1]));
+    expect_kids(f, p, k, 3);
+    /* Nothing was recorded: the same batch without the bad op still applies and cancels clean. */
+    ASSERT_EQ(apply_batch(f, tx, ops, n - 1), 0);
+    EXPECT_NE(world_sum(f), before);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_CANCEL, tx), 0);
+    EXPECT_EQ(world_sum(f), before);
+}
+
 /* ---------- Transactional prefab instantiate (DENG-764) ---------- */
 
 #if DE_HAS_COOKER

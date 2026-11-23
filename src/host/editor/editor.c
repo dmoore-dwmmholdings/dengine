@@ -21,9 +21,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define ED_IN_CAP             (16u << 20)
-#define ED_OUT_CAP            (32u << 20)
+/* DENG-555: the largest frame either way, and hello's limits.frame_size. The IDE uses the value it
+ * is sent for its reads and its writes, so it must hold for both: requests up to it are read
+ * whole and no response is larger. Below the protocol default (64 MiB), which IPC "Limits" lets
+ * an engine lower ("so they can change in a minor version"). */
+#define ED_FRAME_CAP          (32u << 20)
+#define ED_IN_CAP             ED_FRAME_CAP
+#define ED_OUT_CAP            (ED_FRAME_CAP - 1u) /* a payload; the frame adds its kind byte */
 #define ED_NOTE_CAP           (8u << 20)
+_Static_assert(ED_NOTE_CAP <= ED_FRAME_CAP, "a notification must fit in a frame");
+_Static_assert(ED_FRAME_CAP <= DE_EP_LIMIT_FRAME_SIZE, "no frame over the protocol default");
 #define ED_ARENA_CAP          (8u << 20)
 #define ED_BLOB_PART          (1u << 20)
 #define ED_REQUESTS_PER_FRAME 256u
@@ -340,7 +347,7 @@ static void hello_result(const de__editor *ed, const de__ed_snapshot *s, u32 epo
     r->limits.subscriptions = DE_EP_LIMIT_SUBSCRIPTIONS;
     r->limits.query_page_size = DE_EP_LIMIT_QUERY_PAGE_SIZE;
     r->limits.open_transactions = DE_EP_LIMIT_OPEN_TRANSACTIONS;
-    r->limits.frame_size = DE_EP_LIMIT_FRAME_SIZE;
+    r->limits.frame_size = ED_FRAME_CAP; /* what the engine really reads and writes */
     r->epoch = epoch;
     r->has_schema = true;
     r->schema = de_ep_cstr(DE_EP_SCHEMA_HASH);

@@ -554,3 +554,46 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND TARGET de_tp_slang)
             "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:de_cooker>")
     endif()
 endif()
+
+# DENG-555 (DIDE-R135 AC1): editor_service_absent_in_shipping (label `check`): no editor-service
+# or editor-IPC symbol in a Shipping `dengine`. It shares the Shipping build of
+# prof_no_tracy_in_shipping (build/<preset>/prof_shipping/, the `prof_shipping` lock). See the
+# script header.
+if(CMAKE_NM)
+    set(_de_ed_nm "${CMAKE_NM}")
+else()
+    find_program(_de_ed_nm NAMES llvm-nm nm)
+endif()
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    set(_de_ed_expect 1)
+else()
+    set(_de_ed_expect 0)
+endif()
+if(DE_IS_SHIPPING)
+    set(_de_ed_is_shipping 1)
+else()
+    set(_de_ed_is_shipping 0)
+endif()
+add_test(NAME editor_service_absent_in_shipping
+    COMMAND "${CMAKE_COMMAND}"
+        "-DDE_SOURCE_DIR=${DE_ROOT_DIR}"
+        "-DDE_BUILD_DIR=${CMAKE_BINARY_DIR}"
+        "-DDE_IS_SHIPPING=${_de_ed_is_shipping}"
+        "-DDE_NM=${_de_ed_nm}"
+        "-DDE_GENERATOR=${CMAKE_GENERATOR}"
+        "-DDE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+        "-DDE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+        "-DDE_C_COMPILER=${CMAKE_C_COMPILER}"
+        "-DDE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DDE_HEADLESS=${DE_HEADLESS}"
+        "-DDE_PARENT_LIB=$<TARGET_FILE:dengine>"
+        "-DDE_EXPECT_EDITOR=${_de_ed_expect}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/editor_service_absent_in_shipping.cmake")
+set_tests_properties(editor_service_absent_in_shipping PROPERTIES
+    LABELS "check;host"
+    SKIP_REGULAR_EXPRESSION "editor_service_absent_in_shipping: SKIPPED"
+    RESOURCE_LOCK prof_shipping
+    TIMEOUT 900)
+if(DE_IS_SHIPPING)
+    set_tests_properties(editor_service_absent_in_shipping PROPERTIES RUN_SERIAL TRUE)
+endif()
