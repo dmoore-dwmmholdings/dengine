@@ -22,3 +22,6 @@ workers = 3
 
 [memory]
 frame_arena_mib = 32
+
+[physics]
+attach = true

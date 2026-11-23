@@ -300,6 +300,24 @@ static de_result gt_tasks(gt_parser *p, const toml_datum_t *t) {
     return DE_OK;
 }
 
+/* DENG-835: [physics] attach (see de__engine_attach_physics). */
+static de_result gt_physics(gt_parser *p, const toml_datum_t *t) {
+    for (int32_t i = 0; i < t->u.tab.size; ++i) {
+        const toml_datum_t *v = &t->u.tab.value[i];
+        char path[GT_PATH_MAX];
+        if (!gt_path(path, sizeof path, "physics", t->u.tab.key[i], t->u.tab.len[i]))
+            return gt_fail(p, v, "physics", "key path longer than %d bytes", GT_PATH_MAX - 1);
+        de_result r = DE_OK;
+        if (gt_key_is(t, i, "attach"))
+            r = gt_bool(p, v, path, &p->cfg->physics_attach);
+        else
+            gt_unknown(p, v, path);
+        if (r != DE_OK)
+            return r;
+    }
+    return DE_OK;
+}
+
 static de_result gt_memory(gt_parser *p, const toml_datum_t *t) {
     for (int32_t i = 0; i < t->u.tab.size; ++i) {
         const toml_datum_t *v = &t->u.tab.value[i];
@@ -470,6 +488,8 @@ de_result de__game_config_parse(const char *text, size_t len, const char *source
             section = gt_memory;
         else if (gt_key_is(top, i, "assets")) /* DENG-143 */
             section = gt_assets;
+        else if (gt_key_is(top, i, "physics")) /* DENG-835 */
+            section = gt_physics;
         else if (gt_key_is(top, i, "cvars"))
             is_cvars = true;
         if (section == NULL && !is_cvars) {

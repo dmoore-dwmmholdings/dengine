@@ -29,6 +29,9 @@
 #if DE_HAS_UI
 #include <dengine/de_ui.h>
 #endif
+#if DE_HAS_PHYSICS
+#include <dengine/de_physics.h> /* DENG-835 */
+#endif
 
 #include <stdlib.h> /* getenv: editor sessions (DENG-647) */
 #include <string.h>
@@ -76,6 +79,16 @@ static void engine_teardown(de__engine *e) {
         de_world_destroy(e->pub.world);
         e->pub.world = NULL;
     }
+#if DE_HAS_PHYSICS
+    /* DENG-835: after the world, whose systems and resource point to it; before the task system
+     * its step may use. */
+    if (e->owned_physics != NULL) {
+        if (e->pub.physics == e->owned_physics)
+            e->pub.physics = NULL;
+        de_physics_destroy(e->owned_physics);
+        e->owned_physics = NULL;
+    }
+#endif
 #if DE_HAS_RENDER
     if (e->pub.renderer != NULL) {
         de_renderer_destroy(e->pub.renderer);
@@ -376,6 +389,40 @@ void de__engine_destroy(de_engine *e) {
     if (e == NULL)
         return;
     engine_teardown(de__engine_from(e));
+}
+
+de_result de__engine_attach_physics(de_engine *pub) {
+    if (pub == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de__engine_attach_physics: NULL engine");
+#if DE_HAS_PHYSICS
+    if (pub->physics != NULL || pub->world == NULL)
+        return DE_OK;
+    const de_type_id t = de_type_find(pub->types, "DePhysicsWorld");
+    if (DE_HANDLE_VALID(t) && DE_HANDLE_VALID(de_resource_find(pub->world, t)))
+        return DE_OK; /* the game attached a physics world of its own */
+    de__engine *e = de__engine_from(pub);
+    de_physics_desc pd;
+    memset(&pd, 0, sizeof pd);
+    pd.allocator = pub->allocator;
+    pd.tasks = pub->tasks;
+    de_physics_world *p = NULL;
+    de_result r = de_physics_create(&pd, &p);
+    if (r != DE_OK)
+        return DE_FAIL_WRAP(r, "host physics world");
+    r = de_physics_attach(p, pub->world, pub->types);
+    if (r != DE_OK) {
+        /* A partly attached world may have left its resource behind: keep the world alive with
+         * the ECS world (destroyed after it), but do not hand it to the game. */
+        e->owned_physics = p;
+        return DE_FAIL_WRAP(r, "attaching the host physics world");
+    }
+    e->owned_physics = p;
+    pub->physics = p;
+    DE_LOG(DE_LOG_INFO, e->log_host, "physics: the host attached a 3D physics world");
+    return DE_OK;
+#else
+    return DE_OK;
+#endif
 }
 
 /* ---- de_game.h -------------------------------------------------------------------------- */

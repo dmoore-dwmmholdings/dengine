@@ -176,6 +176,21 @@ static de_result host_run_game(de__host *h) {
     de_engine *e = h->engine;
     (void)de__host_crash_attach(h); /* DENG-96: crash annotations, frame hook; logs a failure */
 
+    /* DENG-835: `[physics] attach = true`: the game finds e->physics in init. Engine-owned
+     * systems, so a hot reload keeps them. */
+    if (h->config.physics_attach) {
+        r = de__engine_attach_physics(e);
+        if (r != DE_OK) {
+            r = DE_FAIL_WRAP(r, "game.toml [physics] attach");
+            de__headless_end(h);
+            de__engine_destroy(h->engine);
+            h->engine = NULL;
+            de__game_detach(h);
+            de__hot_reload_shutdown(h);
+            return r;
+        }
+    }
+
     /* DENG-93: systems the game adds carry its owner tag, so a hot reload can remove them. */
     de__world_set_system_owner(e->world, DE__HOST_GAME_SYSTEM_OWNER);
     de_error_clear(); /* so a failed init without its own error context is told apart */
@@ -203,6 +218,14 @@ static de_result host_run_game(de__host *h) {
     if (api->register_systems != NULL)
         api->register_systems(e, e->world);
     de__world_set_system_owner(e->world, DE__SYSTEM_OWNER_ENGINE); /* DENG-93 */
+
+    /* DENG-835: an editor session can author colliders (inspector, nav bake) in any game. A game
+     * that attached a physics world of its own keeps it. A failure only costs the session its
+     * physics components: logged, and the game runs. */
+    if (de_engine_editor_session(e) && de__engine_attach_physics(e) != DE_OK) {
+        de__host_log_error("editor session: no physics world");
+        de_error_clear();
+    }
 
 #if DE_HAS_EDITOR_SERVICE
     /* DENG-623: `--editor-service <endpoint>` (DIDE engine sessions). */

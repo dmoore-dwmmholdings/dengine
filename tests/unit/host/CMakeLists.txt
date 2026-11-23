@@ -810,3 +810,15 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
             DE_ANIM_PREVIEW_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/animation_preview")
     endif()
 endif()
+
+# DENG-835: the host's own physics world (de__engine_attach_physics): game.toml [physics] attach
+# before init, and an editor session (DE_EDITOR_TOKEN) after register_systems, so DeCollider is
+# there for the inspector and the nav bake. Headless.
+de_add_test(NAME host_physics SOURCES test_host_physics.c LIBS de_host LABELS unit host)
+if(TARGET test_host_physics)
+    target_include_directories(test_host_physics PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_host_physics PRIVATE
+        DE_HOST_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+        DE_HOST_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_host_physics_tmp")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_host_physics_tmp")
+endif()
