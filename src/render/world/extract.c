@@ -160,6 +160,7 @@ static void sys_views(de_system_ctx *ctx) {
     main_cam m = {0};
     de_query_each(ctx->world, ctx->queries[0], find_main, &m);
     de__rw_update_origin(rw, m.found, m.pos);
+    de__rw_foliage_resolve(rw, ctx->world, ctx->queries[5], m.found, m.pos);
     f->origin = rw->origin;
     f->origin_changed = rw->origin_changed;
     if (de__rw_frame_reserve_views(rw, f, de_query_count(ctx->world, ctx->queries[0])) != DE_OK)
@@ -339,8 +340,10 @@ static void run_category(de_system_ctx *ctx, de__rw_kind k) {
     de_query_each(ctx->world, ctx->queries[0], inst ? inst_all : light_all, &x);
     de_query_each(ctx->world, ctx->queries[1], inst ? inst_changed_renderer : light_changed, &x);
     de_query_each(ctx->world, ctx->queries[2], inst ? inst_changed_xform : light_changed_xform, &x);
-    if (inst)
+    if (inst) {
         de__sprite_extract(rw, ctx->world, ctx->queries[3]);
+        x.failed += de__rw_foliage_extract(rw, ctx->world, ctx->queries[4], ctx->queries[5]);
+    }
     if (x.failed > 0)
         DE_ERROR(rw->log, "render world: out of memory: %u %s not extracted in frame %llu",
                  x.failed, inst ? "mesh instances" : "lights", (unsigned long long)rw->frame);
@@ -371,11 +374,16 @@ static de_system add_category_system(de__render_world *rw, de_world *w, const ch
     const de_query_filter changed_comp = {comp, DE_CHANGED};
     const de_query_filter changed_global = {global, DE_CHANGED};
     const de_query_term sprite_terms[2] = {{global, DE_READ}, {rw->ids.sprite, DE_READ}};
-    const de_query_desc queries[4] = {
+    const de_query_term foliage_terms[1] = {{rw->ids.foliage, DE_READ}};
+    const de_query_filter changed_foliage = {rw->ids.foliage, DE_CHANGED};
+    const de_query_desc queries[6] = {
         {.terms = terms, .term_count = 2},
         {.terms = terms, .term_count = 2, .filters = &changed_comp, .filter_count = 1},
         {.terms = terms, .term_count = 2, .filters = &changed_global, .filter_count = 1},
         {.terms = sprite_terms, .term_count = 2},
+        /* DENG-822: DeFoliage instances (foliage_extract.c). */
+        {.terms = foliage_terms, .term_count = 1},
+        {.terms = foliage_terms, .term_count = 1, .filters = &changed_foliage, .filter_count = 1},
     };
     const char *const after[1] = {SYS_VIEWS};
     return de_system_add(
@@ -384,7 +392,7 @@ static de_system add_category_system(de__render_world *rw, de_world *w, const ch
                              .fn = fn,
                              .user = rw,
                              .queries = queries,
-                             .query_count = comp.id == rw->ids.mesh_renderer.id ? 4u : 3u,
+                             .query_count = comp.id == rw->ids.mesh_renderer.id ? 6u : 3u,
                              .after = after,
                              .after_count = 1});
 }
@@ -399,11 +407,14 @@ static bool add_systems(de__render_world *rw, de_world *w) {
                                        {rw->ids.irradiance_volume, DE_READ}};
     const de_query_term fog_terms[2] = {{rw->builtins.global_transform, DE_READ},
                                         {rw->ids.fog_volume, DE_READ}};
-    const de_query_desc view_queries[5] = {{.terms = cam_terms, .term_count = 2},
+    const de_query_term foliage_terms[1] = {{rw->ids.foliage, DE_READ}};
+    /* [5]: DeFoliage, whose foliageType assets and meshes resolve here (main thread). */
+    const de_query_desc view_queries[6] = {{.terms = cam_terms, .term_count = 2},
                                            {.terms = env_terms, .term_count = 1},
                                            {.terms = probe_terms, .term_count = 2},
                                            {.terms = gi_terms, .term_count = 2},
-                                           {.terms = fog_terms, .term_count = 2}};
+                                           {.terms = fog_terms, .term_count = 2},
+                                           {.terms = foliage_terms, .term_count = 1}};
     const de_system views =
         de_system_add(w, &(de_system_desc){.name = SYS_VIEWS,
                                            .schedule = DE_SCHEDULE_EXTRACT,
@@ -412,7 +423,7 @@ static bool add_systems(de__render_world *rw, de_world *w) {
                                            .flags = DE_SYSTEM_MAIN_THREAD,
                                            .user = rw,
                                            .queries = view_queries,
-                                           .query_count = 5});
+                                           .query_count = 6});
     if (!DE_HANDLE_VALID(views))
         return false;
     const de_system meshes =
@@ -483,6 +494,7 @@ void de__render_world_attach(de_renderer *r, de_world *w) {
             memset(rw->inst_pool.map_gen, 0, sizeof(u32) * rw->inst_pool.map_capacity);
         if (rw->light_pool.map_capacity > 0)
             memset(rw->light_pool.map_gen, 0, sizeof(u32) * rw->light_pool.map_capacity);
+        de__rw_foliage_reset(rw);
     }
     rw->ids = *ids;
     rw->builtins = builtins;

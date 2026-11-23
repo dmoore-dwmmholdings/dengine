@@ -210,6 +210,7 @@ void de__rw_free(de__render_world *rw) {
         frame_free(rw, &rw->frames[i]);
     pool_free(rw, DE__RW_KIND_INSTANCE);
     pool_free(rw, DE__RW_KIND_LIGHT);
+    de__rw_foliage_free(rw);
 }
 
 /* ---------- Frames ---------- */
@@ -388,12 +389,10 @@ u32 de__rw_pool_find(const de__render_world *rw, de__rw_kind k, de_entity e) {
     return p->map_slot[i];
 }
 
-u32 de__rw_pool_take(de__render_world *rw, de__rw_kind k, de_entity e) {
+/* A free slot, or a new one at the high-water mark, owned by entity bits `owner`. */
+static u32 take_slot(de__render_world *rw, de__rw_kind k, u64 owner) {
     de__rw_pool *p = pool_of(rw, k);
     u32 *count = count_of(rw, k);
-    const u32 index = de_entity_index(e);
-    if (map_grow(rw, p, index) != DE_OK)
-        return DE__RW_NONE;
     u32 s;
     if (p->free_count > 0) {
         s = p->free[--p->free_count];
@@ -402,14 +401,29 @@ u32 de__rw_pool_take(de__render_world *rw, de__rw_kind k, de_entity e) {
             return DE__RW_NONE;
         s = (*count)++;
     }
-    p->map_slot[index] = s;
-    p->map_gen[index] = de_entity_generation(e);
-    entity_of(rw, k)[s] = e.bits;
+    entity_of(rw, k)[s] = owner;
     p->added[s] = rw->frame;
     p->seen[s] = rw->frame;
     *live_of(rw, k) += 1u;
     de__rw_pool_touch(rw, k, s);
     return s;
+}
+
+u32 de__rw_pool_take(de__render_world *rw, de__rw_kind k, de_entity e) {
+    de__rw_pool *p = pool_of(rw, k);
+    const u32 index = de_entity_index(e);
+    if (map_grow(rw, p, index) != DE_OK)
+        return DE__RW_NONE;
+    const u32 s = take_slot(rw, k, e.bits);
+    if (s == DE__RW_NONE)
+        return DE__RW_NONE;
+    p->map_slot[index] = s;
+    p->map_gen[index] = de_entity_generation(e);
+    return s;
+}
+
+u32 de__rw_pool_take_detached(de__render_world *rw, de__rw_kind k, de_entity owner) {
+    return take_slot(rw, k, owner.bits);
 }
 
 /* The f32 matrices of slot `s` from its f64 transforms. */

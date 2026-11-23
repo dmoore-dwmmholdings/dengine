@@ -29,6 +29,8 @@ DE_STATIC_ASSERT(sizeof(de_projection) == 4 && sizeof(de_light_kind) == 4 &&
 DE_STATIC_ASSERT(sizeof(de_view) == 4 && sizeof(de_tonemapper) == 4 && sizeof(de_mesh) == 4 &&
                      sizeof(de_material) == 4 && sizeof(de_texture) == 4 && sizeof(de_blob) == 4,
                  "handles are reflected as 4-byte fields");
+/* DENG-822: the tilt lives in the instance's padding; a DeFoliage row still fits a chunk. */
+DE_STATIC_ASSERT(sizeof(de_foliage_instance) == 28, "de_foliage_instance is 28 bytes");
 DE_STATIC_ASSERT(sizeof(bool) == 1, "bool fields are DE_FK_BOOL (1 byte)");
 
 #define AUTHORED   DE_FIELD_DEFAULT                        /* serialize + snapshot */
@@ -549,6 +551,9 @@ static de_result reg_foliage(de_world *w, de_component *out) {
         DE_FIELD(de_foliage_instance, scale, DE_FK_F32, AUTHORED),
         DE_FIELD(de_foliage_instance, rule, DE_FK_U32, AUTHORED),
         DE_FIELD(de_foliage_instance, type, DE_FK_U8, AUTHORED),
+        /* DENG-822: alignToNormal's tilt. Missing in older data: 0, upright. */
+        DE_FIELD(de_foliage_instance, nx, DE_FK_I8, AUTHORED),
+        DE_FIELD(de_foliage_instance, nz, DE_FK_I8, AUTHORED),
     };
     de_type_id t;
     de_type_desc rule = DE_TYPE_DESC(de_foliage_rule, 1, k_rule);

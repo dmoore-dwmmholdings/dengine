@@ -267,6 +267,9 @@ static u32 fill_fields(cfx *f, de_type_id t, u8 *obj, u32 k) {
         case DE_FK_U8:
             p[0] = (u8)(1u + (i + k) % 3u);
             break;
+        case DE_FK_I8: /* de_foliage_instance.nx, nz (DENG-822) */
+            p[0] = (u8)(i8)(-3 - (i32)((i + k) % 100u));
+            break;
         case DE_FK_STRING:
             snprintf((char *)p, fi->size, "layer%u", (unsigned)(i + k));
             break;

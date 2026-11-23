@@ -355,6 +355,8 @@ static void place(DeFoliage *fo, const de_foliage_instance *in) {
     dst->scale = in->scale;
     dst->rule = in->rule;
     dst->type = in->type;
+    dst->nx = in->nx;
+    dst->nz = in->nz;
     fo->instance_count++;
     fo->cells[ci].count++;
 }
@@ -390,6 +392,8 @@ bool de__foliage_set_cell(DeFoliage *fo, i32 x, i32 z, const de_foliage_instance
         fo->instances[at].scale = i.scale;
         fo->instances[at].rule = i.rule;
         fo->instances[at].type = i.type;
+        fo->instances[at].nx = i.nx;
+        fo->instances[at].nz = i.nz;
         fo->instance_count++;
         fo->cells[ci].count++;
     }
@@ -430,16 +434,29 @@ void de__foliage_transform(const de_foliage_instance *i, f32 out[10]) {
     out[0] = i->x;
     out[1] = i->y;
     out[2] = i->z;
-    out[3] = 0.0f;
-    out[4] = s;
-    out[5] = 0.0f;
-    out[6] = c;
+    /* DENG-822: alignToNormal tilts +y onto the stored normal after the yaw: q = tilt * yaw, with
+     * tilt = normalize(up x n, 1 + up . n). Upright instances (nx = nz = 0) keep the yaw alone. */
+    f32 tx = 0.0f, tz = 0.0f, tw = 1.0f;
+    if (i->nx != 0 || i->nz != 0) {
+        const f32 x = (f32)i->nx / 127.0f, z = (f32)i->nz / 127.0f;
+        const f32 yy = 1.0f - x * x - z * z;
+        const f32 y = yy > 0.0f ? de_dsqrt(yy) : 0.0f;
+        const f32 n = de_dsqrt(z * z + x * x + (1.0f + y) * (1.0f + y));
+        tx = z / n;
+        tz = -x / n;
+        tw = (1.0f + y) / n;
+    }
+    out[3] = tx * c - tz * s;
+    out[4] = tw * s;
+    out[5] = tx * s + tz * c;
+    out[6] = tw * c;
     out[7] = out[8] = out[9] = i->scale;
 }
 
 /* ---- Surfaces ------------------------------------------------------------------------------ */
 
 typedef struct hit {
+    const de_foliage_surface *src; /**< the surface hit */
     f32 y, slope;
     const f32 *weights;
     u32 weight_count;
@@ -447,6 +464,7 @@ typedef struct hit {
 } hit;
 
 static bool surface_hit(const de_foliage_surface *s, f32 x, f32 z, hit *out) {
+    out->src = s;
     if (s->terrain == NULL) {
         out->y = (f32)s->oy;
         out->slope = 0.0f;
@@ -461,6 +479,41 @@ static bool surface_hit(const de_foliage_surface *s, f32 x, f32 z, hit *out) {
     memcpy(out->w, smp.weights, sizeof out->w);
     out->weight_count = DE_TERRAIN_LAYERS;
     return true;
+}
+
+static i8 quantise(f32 v) {
+    const f32 q = v * 127.0f + (v >= 0.0f ? 0.5f : -0.5f);
+    return (i8)(q > 127.0f ? 127 : q < -127.0f ? -127 : (i32)q);
+}
+
+/* DENG-822: the normal of `s` at (x, z), its x and z times 127 (de_foliage_instance.nx, nz), from
+ * central differences one grid spacing apart (one-sided at the edge of the grid). A plane is flat:
+ * 0, 0. */
+static void surface_normal(const de_foliage_surface *s, f32 x, f32 z, i8 *nx, i8 *nz) {
+    *nx = *nz = 0;
+    if (s == NULL || s->terrain == NULL)
+        return;
+    const f32 e = de__terrain_spacing(s->terrain);
+    if (!(e > 0.0f))
+        return;
+    f32 h[4];
+    f32 span[2] = {0.0f, 0.0f};
+    de_terrain_sample smp;
+    if (!de__terrain_sample_at(s->terrain, s->ox, s->oz, (f64)x, (f64)z, &smp))
+        return;
+    const f32 h0 = smp.height;
+    static const f32 k_dx[4] = {1.0f, -1.0f, 0.0f, 0.0f}, k_dz[4] = {0.0f, 0.0f, 1.0f, -1.0f};
+    for (u32 i = 0; i < 4; ++i) {
+        const bool ok = de__terrain_sample_at(s->terrain, s->ox, s->oz, (f64)(x + k_dx[i] * e),
+                                              (f64)(z + k_dz[i] * e), &smp);
+        h[i] = ok ? smp.height : h0;
+        span[i / 2] += ok ? e : 0.0f;
+    }
+    const f32 gx = span[0] > 0.0f ? (h[0] - h[1]) / span[0] : 0.0f;
+    const f32 gz = span[1] > 0.0f ? (h[2] - h[3]) / span[1] : 0.0f;
+    const f32 len = de_dsqrt(gx * gx + 1.0f + gz * gz);
+    *nx = quantise(-gx / len);
+    *nz = quantise(-gz / len);
 }
 
 static bool highest(const de_foliage_surface *s, u32 n, f32 x, f32 z, hit *out) {
@@ -539,10 +592,12 @@ de_foliage_error de__foliage_paint(DeFoliage *fo, const de_foliage_env *env,
             const f32 spacing = maxf(ft.min_spacing, 0.5f / de_dsqrt(maxf(density * w, 1e-6f)));
             if (!room(fo, x, z, index, spacing))
                 continue;
-            const de_foliage_instance in = {x, h.y, z,
-                                            lerpf(ft.rotation[0], ft.rotation[1], yaw),
-                                            lerpf(ft.scale[0], ft.scale[1], scale), 0u,
-                                            (u8)index};
+            de_foliage_instance in = {x, h.y, z,
+                                      lerpf(ft.rotation[0], ft.rotation[1], yaw),
+                                      lerpf(ft.scale[0], ft.scale[1], scale), 0u,
+                                      (u8)index, 0, 0};
+            if (ft.align_to_normal)
+                surface_normal(h.src, x, z, &in.nx, &in.nz);
             place(fo, &in);
         }
     }
@@ -662,12 +717,50 @@ de_foliage_error de__foliage_scatter(DeFoliage *fo, const de_foliage_env *env, c
                 continue;
             if (!room(fo, x, z, r->type, ft.min_spacing))
                 continue;
-            const de_foliage_instance in = {x, h.y, z,
-                                            lerpf(ft.rotation[0], ft.rotation[1], yaw),
-                                            lerpf(ft.scale[0], ft.scale[1], scale), r->id,
-                                            r->type};
+            de_foliage_instance in = {x, h.y, z,
+                                      lerpf(ft.rotation[0], ft.rotation[1], yaw),
+                                      lerpf(ft.scale[0], ft.scale[1], scale), r->id,
+                                      r->type, 0, 0};
+            if (ft.align_to_normal)
+                surface_normal(&surf, x, z, &in.nx, &in.nz);
             place(fo, &in);
         }
     }
     return DE_FOLIAGE_OK;
+}
+
+void de__foliage_realign(DeFoliage *fo, const de_foliage_env *env,
+                         const de_foliage_surface *surfaces, u32 surface_count) {
+    /* Per palette slot: 0 not read yet, 1 upright, 2 aligned. */
+    u8 align[DE_FOLIAGE_TYPES] = {0};
+    char msg[8];
+    for (u32 k = 0; k < fo->instance_count && k < DE_FOLIAGE_INSTANCES; ++k) {
+        de_foliage_instance *in = &fo->instances[k];
+        if (in->nx != 0 || in->nz != 0 || in->type >= DE_FOLIAGE_TYPES)
+            continue;
+        if (align[in->type] == 0) {
+            de_foliage_type ft;
+            align[in->type] =
+                type_of(env, in->type, &ft, msg, sizeof msg) == DE_FOLIAGE_OK && ft.align_to_normal
+                    ? 2
+                    : 1;
+        }
+        if (align[in->type] != 2)
+            continue;
+        /* The terrain the instance stands on: the one whose height there is nearest its y. */
+        const de_foliage_surface *best = NULL;
+        f32 best_d = 0.05f;
+        for (u32 s = 0; s < surface_count; ++s) {
+            hit h;
+            if (surfaces[s].terrain == NULL || !surface_hit(&surfaces[s], in->x, in->z, &h))
+                continue;
+            const f32 d = h.y > in->y ? h.y - in->y : in->y - h.y;
+            if (d <= best_d) {
+                best_d = d;
+                best = &surfaces[s];
+            }
+        }
+        if (best != NULL)
+            surface_normal(best, in->x, in->z, &in->nx, &in->nz);
+    }
 }
