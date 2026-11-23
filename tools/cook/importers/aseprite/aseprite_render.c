@@ -226,9 +226,25 @@ de_result de_aseprite_render_frame(de_aseprite_renderer *r, u32 frame, u32 layer
         bytes < (size_t)(r->doc->height - 1u) * stride + r->row_bytes)
         return DE_ERR_INVALID_ARGUMENT;
     plan(r, frame, layer);
+    /* Aseprite renderSprite(): a visible first root Background layer of an indexed sprite
+     * pre-fills the canvas from palette[transparent index] before any cel is composited. */
+    u8 fill[4] = {0};
+    if (r->doc->depth == 8) {
+        for (u32 i = 0; i < r->doc->layer_count; ++i) {
+            const de_aseprite_layer *l = &r->doc->layers[i];
+            if (l->parent != UINT32_MAX)
+                continue;
+            if (l->type == 0 && (l->flags & 8u) && r->selected[i])
+                memcpy(fill, r->doc->frames[frame].palette[r->doc->transparent_index], 4);
+            break;
+        }
+    }
     for (u32 y = 0; y < r->doc->height; ++y) {
         u8 *row = (u8 *)rgba + (size_t)y * stride;
         memset(row, 0, r->row_bytes);
+        if (fill[3])
+            for (u32 x = 0; x < r->doc->width; ++x)
+                memcpy(row + (size_t)x * 4u, fill, 4);
         group_row(r, r->doc->layer_count, frame, y, 0, row);
     }
     if (why)

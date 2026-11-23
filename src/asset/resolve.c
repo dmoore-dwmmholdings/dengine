@@ -820,6 +820,21 @@ static bool rs_check_source(de__resolved *r, const de__validate_desc *d, const c
     return true;
 }
 
+/* DENG-780: editors find stylesheet sources by DE_ASSET_STYLESHEET_SUFFIX. A source that does
+ * not end with it still cooks and loads, so this is a warning. */
+static bool rs_check_stylesheet_name(de__resolved *r, const de__manifest_asset *a,
+                                     const char *source, const char *key) {
+    const size_t n = source != NULL ? strlen(source) : 0,
+                 sn = sizeof DE_ASSET_STYLESHEET_SUFFIX - 1;
+    if (source == NULL || (n > sn && memcmp(source + n - sn, DE_ASSET_STYLESHEET_SUFFIX, sn) == 0 &&
+                           source[n - sn - 1] != '/'))
+        return true;
+    return rs_issue(r, DE_ASSET_ISSUE_WARNING, a->file, key, a->line,
+                    "asset \"%s\": stylesheet source \"%s\" does not end with \"%s\", so editors "
+                    "cannot find it",
+                    a->id, source, DE_ASSET_STYLESHEET_SUFFIX);
+}
+
 de_result de__manifest_validate(de__resolved *r, const de__validate_desc *desc) {
     if (r == NULL)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de__manifest_validate: resolved is NULL");
@@ -862,6 +877,14 @@ de_result de__manifest_validate(de__resolved *r, const de__validate_desc *desc) 
                 ok = k != NULL &&
                      rs_issue(r, DE_ASSET_ISSUE_ERROR, a->file, k, a->line,
                               "asset \"%s\": unknown asset type \"%s\"", a->id, a->type);
+            }
+        }
+        if (ok && (strcmp(a->type, "ui_style") == 0 || strcmp(a->type, "stylesheet") == 0)) {
+            const char *sk = rs_kp(&kp, "assets", a->id, "source", NULL);
+            ok = sk != NULL && rs_check_stylesheet_name(r, a, a->source, sk);
+            for (u32 l = 0; ok && l < a->locale_count; ++l) {
+                sk = rs_kp(&kp, "assets", a->id, "locale", a->locales[l].locale);
+                ok = sk != NULL && rs_check_stylesheet_name(r, a, a->locales[l].source, sk);
             }
         }
         if (!ok || !check_sources)

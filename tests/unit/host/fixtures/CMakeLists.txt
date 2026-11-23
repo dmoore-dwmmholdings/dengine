@@ -66,9 +66,34 @@ de_add_game(NAME test_owned_game_module SOURCES owned_game.c GAME_TOML ../data/o
 get_target_property(_owned_game_dir test_owned_game_module DE_GAME_DIR)
 configure_file(../data/owned_assets.toml "${_owned_game_dir}/owned_assets.toml" COPYONLY)
 configure_file(../data/owned_probe.bin "${_owned_game_dir}/owned_probe.bin" COPYONLY)
+configure_file(../data/owned_probe.dpak "${_owned_game_dir}/owned_probe.dpak" COPYONLY)
+
+# Regenerate the checked-in synthetic pack explicitly; ordinary test/game targets only read it.
+# Tools are added after tests, so the target does not exist yet during this include.
+if(DE_BUILD_TOOLS)
+    add_executable(test_owned_probe_generator EXCLUDE_FROM_ALL generate_owned_probe.c)
+    target_link_libraries(test_owned_probe_generator PRIVATE de_pack_lib de_build_flags)
+endif()
 
 # DENG-701: actual fatal commands, used only by isolated real-host IPC/session qualification.
 if(DE_GAME_DYLIB)
     de_add_game(NAME crash_game SOURCES crash_game.c)
     target_link_libraries(crash_game PRIVATE de_build_flags)
+endif()
+
+# DENG-789: shader_game (shader_game/), a game with its own .slang shader. de_add_game(ASSETS)
+# cooks shader_game/assets.toml into <game dir>/game.dpak in Release and Shipping; Debug and Dev
+# cook it in-process from the copies of the manifest and the source in the game directory, which
+# is also where a game like VCC stages them. Needs the shader module (not DE_HEADLESS).
+if(TARGET de_gpu_shader)
+    de_add_game(NAME shader_game SOURCES shader_game/shader_game.c
+                GAME_TOML shader_game/game.toml ASSETS shader_game/assets.toml)
+    foreach(_de_t shader_game shader_game_static)
+        if(TARGET ${_de_t})
+            target_link_libraries(${_de_t} PRIVATE de_build_flags)
+        endif()
+    endforeach()
+    get_target_property(_de_shader_game_dir shader_game DE_GAME_DIR)
+    configure_file(shader_game/assets.toml "${_de_shader_game_dir}/assets.toml" COPYONLY)
+    configure_file(shader_game/tint.slang "${_de_shader_game_dir}/tint.slang" COPYONLY)
 endif()

@@ -363,21 +363,10 @@ bool de__shader_loaded_version(de_asset_system *s, de_shader shader, u32 *versio
     return true;
 }
 
-de_result de__shader_blob(de_asset_system *s, de_shader shader, de_gpu_backend backend,
-                          u32 permutation, const char *entry, de_gpu_shader_blob *out,
-                          de__shader_reflection *refl) {
-    if (out != NULL)
-        memset(out, 0, sizeof *out);
-    if (refl != NULL)
-        memset(refl, 0, sizeof *refl);
-    if (out == NULL || entry == NULL)
-        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de__shader_blob: NULL argument");
-    de_result why;
-    const de__shader_obj *o = obj_of(s, shader, &why);
-    if (o == NULL)
-        return DE_FAIL(why, why == DE_ERR_BUSY ? "de__shader_blob: the shader is not loaded"
-                                               : "de__shader_blob: not a shader handle");
-    const de__shader_view *v = &o->view;
+/* The code of `entry` in checked view `v` (de__shader_blob, de__shader_view_code). */
+static de_result view_blob(const de__shader_view *v, de_gpu_backend backend, u32 permutation,
+                           const char *entry, de_gpu_shader_blob *out,
+                           de__shader_reflection *refl) {
     u32 e = 0;
     const char *name = NULL;
     for (; e < v->header.entry_count; ++e) {
@@ -410,6 +399,23 @@ de_result de__shader_blob(de_asset_system *s, de_shader shader, de_gpu_backend b
         refl->mesh_max_primitives = r.mesh_limits >> 16;
     }
     return DE_OK;
+}
+
+de_result de__shader_blob(de_asset_system *s, de_shader shader, de_gpu_backend backend,
+                          u32 permutation, const char *entry, de_gpu_shader_blob *out,
+                          de__shader_reflection *refl) {
+    if (out != NULL)
+        memset(out, 0, sizeof *out);
+    if (refl != NULL)
+        memset(refl, 0, sizeof *refl);
+    if (out == NULL || entry == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de__shader_blob: NULL argument");
+    de_result why;
+    const de__shader_obj *o = obj_of(s, shader, &why);
+    if (o == NULL)
+        return DE_FAIL(why, why == DE_ERR_BUSY ? "de__shader_blob: the shader is not loaded"
+                                               : "de__shader_blob: not a shader handle");
+    return view_blob(&o->view, backend, permutation, entry, out, refl);
 }
 
 u32 de__shader_permutation_count(de_asset_system *s, de_shader shader) {
@@ -460,6 +466,28 @@ de_result de_shader_get_code(de_asset_system *assets, de_shader shader, de_gpu_b
         memset(refl, 0, sizeof *refl);
     de__shader_reflection r;
     DE_TRY(de__shader_blob(assets, shader, backend, permutation, entry, out, &r));
+    if (refl != NULL) {
+        refl->stage = public_stage(r.stage);
+        memcpy(refl->threadgroup, r.threadgroup, sizeof refl->threadgroup);
+        refl->push_constant_bytes = r.push_constant_bytes;
+        refl->mesh_max_vertices = r.mesh_max_vertices;
+        refl->mesh_max_primitives = r.mesh_max_primitives;
+    }
+    return DE_OK;
+}
+
+de_result de__shader_view_code(const de__shader_view *v, de_gpu_backend backend, u32 permutation,
+                               const char *entry, de_gpu_shader_blob *out,
+                               de_shader_reflection *refl) {
+    if (out != NULL)
+        memset(out, 0, sizeof *out);
+    if (refl != NULL)
+        memset(refl, 0, sizeof *refl);
+    if (v == NULL || v->base == NULL || out == NULL || entry == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de__shader_view_code: NULL argument");
+    de__shader_reflection r;
+    memset(&r, 0, sizeof r);
+    DE_TRY(view_blob(v, backend, permutation, entry, out, &r));
     if (refl != NULL) {
         refl->stage = public_stage(r.stage);
         memcpy(refl->threadgroup, r.threadgroup, sizeof refl->threadgroup);

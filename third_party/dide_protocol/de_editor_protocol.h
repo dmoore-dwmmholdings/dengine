@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.8"
-#define DE_EP_SCHEMA_HASH "eb33822460ae9041"
+#define DE_EP_PROTOCOL_VERSION "1.20"
+#define DE_EP_SCHEMA_HASH "5ece11fddbb88fc6"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -84,6 +84,48 @@ typedef enum de_ep_asset_event_kind {
 const char *de_ep_asset_event_kind_name(de_ep_asset_event_kind v);
 bool de_ep_asset_event_kind_parse(de_ep_str s, de_ep_asset_event_kind *out);
 
+typedef enum de_ep_material_graph_param_kind {
+    DE_EP_MATERIAL_GRAPH_PARAM_KIND_FLOAT,
+    DE_EP_MATERIAL_GRAPH_PARAM_KIND_COLOR,
+    DE_EP_MATERIAL_GRAPH_PARAM_KIND_TEXTURE,
+} de_ep_material_graph_param_kind;
+const char *de_ep_material_graph_param_kind_name(de_ep_material_graph_param_kind v);
+bool de_ep_material_graph_param_kind_parse(de_ep_str s, de_ep_material_graph_param_kind *out);
+
+typedef enum de_ep_material_graph_severity {
+    DE_EP_MATERIAL_GRAPH_SEVERITY_ERROR,
+    DE_EP_MATERIAL_GRAPH_SEVERITY_WARNING,
+} de_ep_material_graph_severity;
+const char *de_ep_material_graph_severity_name(de_ep_material_graph_severity v);
+bool de_ep_material_graph_severity_parse(de_ep_str s, de_ep_material_graph_severity *out);
+
+typedef enum de_ep_material_graph_target_status {
+    DE_EP_MATERIAL_GRAPH_TARGET_STATUS_OK,
+    DE_EP_MATERIAL_GRAPH_TARGET_STATUS_ERROR,
+    DE_EP_MATERIAL_GRAPH_TARGET_STATUS_UNSUPPORTED,
+} de_ep_material_graph_target_status;
+const char *de_ep_material_graph_target_status_name(de_ep_material_graph_target_status v);
+bool de_ep_material_graph_target_status_parse(de_ep_str s, de_ep_material_graph_target_status *out);
+
+typedef enum de_ep_override_kind {
+    DE_EP_OVERRIDE_KIND_FIELD,
+    DE_EP_OVERRIDE_KIND_COMPONENT_ADDED,
+    DE_EP_OVERRIDE_KIND_COMPONENT_REMOVED,
+    DE_EP_OVERRIDE_KIND_ENTITY_ADDED,
+    DE_EP_OVERRIDE_KIND_ENTITY_REMOVED,
+} de_ep_override_kind;
+const char *de_ep_override_kind_name(de_ep_override_kind v);
+bool de_ep_override_kind_parse(de_ep_str s, de_ep_override_kind *out);
+
+typedef enum de_ep_ui_text_align {
+    DE_EP_UI_TEXT_ALIGN_START,
+    DE_EP_UI_TEXT_ALIGN_CENTER,
+    DE_EP_UI_TEXT_ALIGN_END,
+    DE_EP_UI_TEXT_ALIGN_JUSTIFY,
+} de_ep_ui_text_align;
+const char *de_ep_ui_text_align_name(de_ep_ui_text_align v);
+bool de_ep_ui_text_align_parse(de_ep_str s, de_ep_ui_text_align *out);
+
 typedef enum de_ep_world_mode {
     DE_EP_WORLD_MODE_EDIT,
     DE_EP_WORLD_MODE_PLAY,
@@ -98,6 +140,7 @@ typedef struct de_ep_animation_joint_frame de_ep_animation_joint_frame;
 typedef struct de_ep_animation_metadata de_ep_animation_metadata;
 typedef struct de_ep_animation_preview de_ep_animation_preview;
 typedef struct de_ep_animation_preview_params de_ep_animation_preview_params;
+typedef struct de_ep_apply_result de_ep_apply_result;
 typedef struct de_ep_archetype de_ep_archetype;
 typedef struct de_ep_archetype_list de_ep_archetype_list;
 typedef struct de_ep_asset_event de_ep_asset_event;
@@ -115,6 +158,7 @@ typedef struct de_ep_asset_type_list de_ep_asset_type_list;
 typedef struct de_ep_asset_type_params de_ep_asset_type_params;
 typedef struct de_ep_blob_ref de_ep_blob_ref;
 typedef struct de_ep_build_info de_ep_build_info;
+typedef struct de_ep_buoyancy_probes de_ep_buoyancy_probes;
 typedef struct de_ep_c_var de_ep_c_var;
 typedef struct de_ep_c_var_list de_ep_c_var_list;
 typedef struct de_ep_cache_clear_params de_ep_cache_clear_params;
@@ -157,14 +201,28 @@ typedef struct de_ep_font_atlas_params de_ep_font_atlas_params;
 typedef struct de_ep_gizmo_drag_end de_ep_gizmo_drag_end;
 typedef struct de_ep_gizmo_drag_update de_ep_gizmo_drag_update;
 typedef struct de_ep_gizmo_tool_params de_ep_gizmo_tool_params;
+typedef struct de_ep_heightmap_export_params de_ep_heightmap_export_params;
 typedef struct de_ep_hello_params de_ep_hello_params;
 typedef struct de_ep_hello_result de_ep_hello_result;
 typedef struct de_ep_input_event de_ep_input_event;
 typedef struct de_ep_input_events_params de_ep_input_events_params;
 typedef struct de_ep_input_focus_params de_ep_input_focus_params;
 typedef struct de_ep_limits de_ep_limits;
+typedef struct de_ep_loc_locale_info de_ep_loc_locale_info;
+typedef struct de_ep_loc_locales de_ep_loc_locales;
+typedef struct de_ep_loc_preview_params de_ep_loc_preview_params;
+typedef struct de_ep_loc_string de_ep_loc_string;
+typedef struct de_ep_loc_strings de_ep_loc_strings;
 typedef struct de_ep_log_record de_ep_log_record;
 typedef struct de_ep_log_subscribe_params de_ep_log_subscribe_params;
+typedef struct de_ep_material_graph_catalog de_ep_material_graph_catalog;
+typedef struct de_ep_material_graph_compile_params de_ep_material_graph_compile_params;
+typedef struct de_ep_material_graph_compiled de_ep_material_graph_compiled;
+typedef struct de_ep_material_graph_diagnostic de_ep_material_graph_diagnostic;
+typedef struct de_ep_material_graph_generated de_ep_material_graph_generated;
+typedef struct de_ep_material_graph_param de_ep_material_graph_param;
+typedef struct de_ep_material_graph_params de_ep_material_graph_params;
+typedef struct de_ep_material_graph_target_result de_ep_material_graph_target_result;
 typedef struct de_ep_material_render_params de_ep_material_render_params;
 typedef struct de_ep_model_attribute de_ep_model_attribute;
 typedef struct de_ep_model_info de_ep_model_info;
@@ -190,7 +248,9 @@ typedef struct de_ep_peer_checksum de_ep_peer_checksum;
 typedef struct de_ep_pick_params de_ep_pick_params;
 typedef struct de_ep_pick_rect_params de_ep_pick_rect_params;
 typedef struct de_ep_pick_result de_ep_pick_result;
+typedef struct de_ep_prefab_error_data de_ep_prefab_error_data;
 typedef struct de_ep_prefab_instantiate_params de_ep_prefab_instantiate_params;
+typedef struct de_ep_prefab_unpack_params de_ep_prefab_unpack_params;
 typedef struct de_ep_query_params de_ep_query_params;
 typedef struct de_ep_query_result de_ep_query_result;
 typedef struct de_ep_reflect_changed de_ep_reflect_changed;
@@ -201,6 +261,7 @@ typedef struct de_ep_replay_seek_params de_ep_replay_seek_params;
 typedef struct de_ep_replay_speed_params de_ep_replay_speed_params;
 typedef struct de_ep_replay_tick de_ep_replay_tick;
 typedef struct de_ep_resource_list de_ep_resource_list;
+typedef struct de_ep_revert_result de_ep_revert_result;
 typedef struct de_ep_scene_info de_ep_scene_info;
 typedef struct de_ep_scene_list de_ep_scene_list;
 typedef struct de_ep_scene_load_params de_ep_scene_load_params;
@@ -215,6 +276,12 @@ typedef struct de_ep_snap_diff de_ep_snap_diff;
 typedef struct de_ep_snap_diff_params de_ep_snap_diff_params;
 typedef struct de_ep_snap_params de_ep_snap_params;
 typedef struct de_ep_snap_result de_ep_snap_result;
+typedef struct de_ep_spline_carve de_ep_spline_carve;
+typedef struct de_ep_spline_info de_ep_spline_info;
+typedef struct de_ep_spline_instances de_ep_spline_instances;
+typedef struct de_ep_spline_params de_ep_spline_params;
+typedef struct de_ep_spline_sample_params de_ep_spline_sample_params;
+typedef struct de_ep_spline_samples de_ep_spline_samples;
 typedef struct de_ep_stats_sample de_ep_stats_sample;
 typedef struct de_ep_stats_subscribe_params de_ep_stats_subscribe_params;
 typedef struct de_ep_step_params de_ep_step_params;
@@ -224,10 +291,40 @@ typedef struct de_ep_surface de_ep_surface;
 typedef struct de_ep_system_enable_params de_ep_system_enable_params;
 typedef struct de_ep_system_info de_ep_system_info;
 typedef struct de_ep_system_list de_ep_system_list;
+typedef struct de_ep_terrain_info de_ep_terrain_info;
+typedef struct de_ep_terrain_layer de_ep_terrain_layer;
+typedef struct de_ep_terrain_params de_ep_terrain_params;
+typedef struct de_ep_terrain_sample de_ep_terrain_sample;
+typedef struct de_ep_terrain_sample_params de_ep_terrain_sample_params;
+typedef struct de_ep_terrain_stroke de_ep_terrain_stroke;
 typedef struct de_ep_tx_params de_ep_tx_params;
 typedef struct de_ep_tx_result de_ep_tx_result;
 typedef struct de_ep_type_info de_ep_type_info;
 typedef struct de_ep_type_list de_ep_type_list;
+typedef struct de_ep_ui_check_error de_ep_ui_check_error;
+typedef struct de_ep_ui_check_stylesheet de_ep_ui_check_stylesheet;
+typedef struct de_ep_ui_check_stylesheet_params de_ep_ui_check_stylesheet_params;
+typedef struct de_ep_ui_layout de_ep_ui_layout;
+typedef struct de_ep_ui_layout_params de_ep_ui_layout_params;
+typedef struct de_ep_ui_layout_rect de_ep_ui_layout_rect;
+typedef struct de_ep_ui_measure_text de_ep_ui_measure_text;
+typedef struct de_ep_ui_measure_text_params de_ep_ui_measure_text_params;
+typedef struct de_ep_ui_node_corners de_ep_ui_node_corners;
+typedef struct de_ep_ui_node_corners_params de_ep_ui_node_corners_params;
+typedef struct de_ep_ui_pick_hit de_ep_ui_pick_hit;
+typedef struct de_ep_ui_preview_theme_params de_ep_ui_preview_theme_params;
+typedef struct de_ep_ui_safe_insets de_ep_ui_safe_insets;
+typedef struct de_ep_ui_sheet de_ep_ui_sheet;
+typedef struct de_ep_ui_sheet_error de_ep_ui_sheet_error;
+typedef struct de_ep_ui_stylesheets de_ep_ui_stylesheets;
+typedef struct de_ep_ui_text_line de_ep_ui_text_line;
+typedef struct de_ep_ui_text_style de_ep_ui_text_style;
+typedef struct de_ep_ui_theme_info de_ep_ui_theme_info;
+typedef struct de_ep_ui_theme_var de_ep_ui_theme_var;
+typedef struct de_ep_ui_theme_vars de_ep_ui_theme_vars;
+typedef struct de_ep_ui_theme_vars_params de_ep_ui_theme_vars_params;
+typedef struct de_ep_ui_themes de_ep_ui_themes;
+typedef struct de_ep_unpack_result de_ep_unpack_result;
 typedef struct de_ep_unsubscribe_params de_ep_unsubscribe_params;
 typedef struct de_ep_view_camera_params de_ep_view_camera_params;
 typedef struct de_ep_view_create_params de_ep_view_create_params;
@@ -242,6 +339,14 @@ typedef struct de_ep_view_render_mode_params de_ep_view_render_mode_params;
 typedef struct de_ep_view_resize_params de_ep_view_resize_params;
 typedef struct de_ep_view_resized de_ep_view_resized;
 typedef struct de_ep_view_show_flags_params de_ep_view_show_flags_params;
+typedef struct de_ep_water_flow_map de_ep_water_flow_map;
+typedef struct de_ep_water_flow_params de_ep_water_flow_params;
+typedef struct de_ep_water_info de_ep_water_info;
+typedef struct de_ep_water_params de_ep_water_params;
+typedef struct de_ep_water_probes_params de_ep_water_probes_params;
+typedef struct de_ep_water_show_probes_params de_ep_water_show_probes_params;
+typedef struct de_ep_water_surface de_ep_water_surface;
+typedef struct de_ep_water_surface_params de_ep_water_surface_params;
 typedef struct de_ep_world_delta de_ep_world_delta;
 
 typedef struct de_ep_kv_f32 {
@@ -309,6 +414,11 @@ typedef struct de_ep_list_str {
     uint32_t count;
 } de_ep_list_str;
 
+typedef struct de_ep_list_bool {
+    bool *items;
+    uint32_t count;
+} de_ep_list_bool;
+
 typedef struct de_ep_list_c_var {
     de_ep_c_var *items;
     uint32_t count;
@@ -323,6 +433,11 @@ typedef struct de_ep_list_surface {
     de_ep_surface *items;
     uint32_t count;
 } de_ep_list_surface;
+
+typedef struct de_ep_list_ui_sheet {
+    de_ep_ui_sheet *items;
+    uint32_t count;
+} de_ep_list_ui_sheet;
 
 typedef struct de_ep_list_model_lod {
     de_ep_model_lod *items;
@@ -359,6 +474,11 @@ typedef struct de_ep_list_field_info {
     uint32_t count;
 } de_ep_list_field_info;
 
+typedef struct de_ep_list_loc_string {
+    de_ep_loc_string *items;
+    uint32_t count;
+} de_ep_list_loc_string;
+
 typedef struct de_ep_list_model_node {
     de_ep_model_node *items;
     uint32_t count;
@@ -373,6 +493,11 @@ typedef struct de_ep_list_scene_info {
     de_ep_scene_info *items;
     uint32_t count;
 } de_ep_list_scene_info;
+
+typedef struct de_ep_list_ui_pick_hit {
+    de_ep_ui_pick_hit *items;
+    uint32_t count;
+} de_ep_list_ui_pick_hit;
 
 typedef struct de_ep_list_cache_entry {
     de_ep_cache_entry *items;
@@ -389,6 +514,16 @@ typedef struct de_ep_list_system_info {
     uint32_t count;
 } de_ep_list_system_info;
 
+typedef struct de_ep_list_ui_text_line {
+    de_ep_ui_text_line *items;
+    uint32_t count;
+} de_ep_list_ui_text_line;
+
+typedef struct de_ep_list_ui_theme_var {
+    de_ep_ui_theme_var *items;
+    uint32_t count;
+} de_ep_list_ui_theme_var;
+
 typedef struct de_ep_list_debug_output {
     de_ep_debug_output *items;
     uint32_t count;
@@ -403,6 +538,11 @@ typedef struct de_ep_list_field_change {
     de_ep_field_change *items;
     uint32_t count;
 } de_ep_list_field_change;
+
+typedef struct de_ep_list_ui_theme_info {
+    de_ep_ui_theme_info *items;
+    uint32_t count;
+} de_ep_list_ui_theme_info;
 
 typedef struct de_ep_list_model_mesh_lod {
     de_ep_model_mesh_lod *items;
@@ -419,10 +559,25 @@ typedef struct de_ep_list_peer_checksum {
     uint32_t count;
 } de_ep_list_peer_checksum;
 
+typedef struct de_ep_list_terrain_layer {
+    de_ep_terrain_layer *items;
+    uint32_t count;
+} de_ep_list_terrain_layer;
+
+typedef struct de_ep_list_ui_layout_rect {
+    de_ep_ui_layout_rect *items;
+    uint32_t count;
+} de_ep_list_ui_layout_rect;
+
 typedef struct de_ep_list_asset_type_info {
     de_ep_asset_type_info *items;
     uint32_t count;
 } de_ep_list_asset_type_info;
+
+typedef struct de_ep_list_loc_locale_info {
+    de_ep_loc_locale_info *items;
+    uint32_t count;
+} de_ep_list_loc_locale_info;
 
 typedef struct de_ep_list_animation_joint {
     de_ep_animation_joint *items;
@@ -444,10 +599,25 @@ typedef struct de_ep_list_debug_draw_category {
     uint32_t count;
 } de_ep_list_debug_draw_category;
 
+typedef struct de_ep_list_material_graph_param {
+    de_ep_material_graph_param *items;
+    uint32_t count;
+} de_ep_list_material_graph_param;
+
 typedef struct de_ep_list_animation_joint_frame {
     de_ep_animation_joint_frame *items;
     uint32_t count;
 } de_ep_list_animation_joint_frame;
+
+typedef struct de_ep_list_material_graph_diagnostic {
+    de_ep_material_graph_diagnostic *items;
+    uint32_t count;
+} de_ep_list_material_graph_diagnostic;
+
+typedef struct de_ep_list_material_graph_target_result {
+    de_ep_material_graph_target_result *items;
+    uint32_t count;
+} de_ep_list_material_graph_target_result;
 
 struct de_ep_animation_joint {
     de_ep_str name;
@@ -487,6 +657,15 @@ struct de_ep_animation_preview_params {
     uint32_t clip_version;
     bool has_skeleton_version;
     uint32_t skeleton_version; /* Send both known tokens to omit unchanged metadata; omit both initially. */
+};
+
+/* The result of prefab.applyOverride. */
+struct de_ep_apply_result {
+    uint32_t tx; /* the edit transaction that holds the change; one undo step */
+    uint64_t revision; /* the prefab revision after the change */
+    de_ep_list_str prefabs; /* the prefab definitions written: the chain levels down to target, then the variants and nesting prefabs that follow them. Since DENG-807 the engine loads, before the plan, every manifest prefab whose base or nested chain reaches target, so a dependent that has no instance is listed too */
+    de_ep_list_u64 entities; /* the instance entities whose base changed */
+    de_ep_list_str files; /* the manifest source path of each entry in prefabs (e.g. crate.prefab.toml), in the same order, unchanged prefabs included (protocol 1.19, DIDE-383) */
 };
 
 struct de_ep_archetype {
@@ -598,6 +777,16 @@ struct de_ep_build_info {
     de_ep_str engine_version;
     de_ep_str gpu_backend; /* d3d12, vulkan, metal or none */
     de_ep_str config; /* debug, dev, release */
+};
+
+/* Each probe of the bodies asked for, in the current frame. */
+struct de_ep_buoyancy_probes {
+    de_ep_list_u64 entities; /* the body each probe belongs to */
+    de_ep_list_f32 positions; /* world space, 3 values per probe */
+    de_ep_list_bool wet; /* whether the probe is over or in a water body */
+    de_ep_list_f32 depths; /* metres of the probe's centre below the surface (negative above it); 0 when not wet */
+    de_ep_list_f32 forces; /* upward buoyancy force in newtons */
+    de_ep_list_u64 shown; /* the bodies water.showProbes shows */
 };
 
 struct de_ep_c_var {
@@ -744,7 +933,7 @@ struct de_ep_edit_begin_params {
     de_ep_str merge_key;
 };
 
-/* One operation. `op` is spawn, despawn, add, remove, set or reparent; the other fields are the ones that op uses. */
+/* One operation. `op` is spawn, despawn, add, remove, set, reparent, instantiate or uninstantiate; the other fields are the ones that op uses. `instantiate` (`path` the prefab asset, `scene`, optional `parent`) spawns a prefab instance and returns its root in `assignedIds`; its inverse is `uninstantiate`. `uninstantiate` (`entity` the instance root; any other entity is INVALID_PARAMS) removes the tree, its scene memberships and the instance record; its inverse is `instantiate` with `value` an opaque snapshot, which restores the same entity ids, scene ids, components and instance record (CONFLICT if an id is taken). `edit.undo` and `edit.redo` replace each pair's other side with the inverse the replay returns. With the optional world.terrain capability (protocol 1.11) there are four more, each on the terrain `entity`: `terrain.stroke` (`value` a TerrainStroke as a map), `terrain.import` (`path` a heightmap file, `value` a map with `format` and an optional `tile` [x, y]), `terrain.bake` (writes the enabled auto-material rules into the splat map and turns them off) and `terrain.restore` (`value` opaque: the tiles one of the others changed, as they were). The inverse of each is a `terrain.restore`. With the optional world.splines capability (protocol 1.12) there is `spline.carve` on a terrain `entity` (`value` a SplineCarve as a map), whose inverse is also a `terrain.restore`. Since protocol 1.14, `spawn`, `reparent` and `instantiate` take an optional `index`: the sibling position under `parent`, counted without the entity itself. Absent, or at or past the end, appends; a `reparent` to the same parent reorders. The inverse of a `reparent` carries the entity's old index, so undo restores the order. Since protocol 1.18 there is `prefab.state` (`value` opaque: prefab definition and instance base values), which `prefab.applyOverride` writes and whose inverse is another `prefab.state`. Clients do not author it; `edit.undo` and `edit.redo` replay it, and each replay bumps the prefab revision. */
 struct de_ep_edit_op {
     de_ep_str op;
     bool has_scene;
@@ -765,6 +954,8 @@ struct de_ep_edit_op {
     uint64_t base_rev;
     bool has_keep_world;
     bool keep_world;
+    bool has_index;
+    uint32_t index; /* spawn, reparent, instantiate: sibling position under parent (protocol 1.14); absent appends */
 };
 
 struct de_ep_empty {
@@ -873,6 +1064,14 @@ struct de_ep_gizmo_tool_params {
     de_ep_map_str colors; /* theme colors as #rrggbb: x, y, z, hover, selected */
 };
 
+struct de_ep_heightmap_export_params {
+    uint64_t entity;
+    de_ep_str path;
+    de_ep_str format; /* png16, raw16 or exr */
+    bool has_tile;
+    de_ep_list_u32 tile; /* [x, y]; absent for the whole terrain */
+};
+
 struct de_ep_hello_params {
     de_ep_str protocol;
     de_ep_str token;
@@ -891,12 +1090,14 @@ struct de_ep_limits {
 
 struct de_ep_hello_result {
     de_ep_str protocol; /* the agreed version: equal major, lower minor */
+    bool has_server_protocol;
+    de_ep_str server_protocol; /* the server native protocol version corresponding to schema; required from 1.9, absent in legacy replies */
     de_ep_list_str capabilities;
     de_ep_build_info build;
     de_ep_limits limits;
     uint32_t epoch;
     bool has_schema;
-    de_ep_str schema; /* the engine's schema hash: with an equal version it must equal the IDE's (DIDE-R154 AC1) */
+    de_ep_str schema; /* the engine native schema hash: compare only when serverProtocol equals the client native version (DIDE-R154 AC1) */
 };
 
 /* One input event. `type` is pointer, wheel, key, text, gesture or gamepad; the other fields are the ones that type uses. */
@@ -943,6 +1144,43 @@ struct de_ep_input_focus_params {
     bool focused;
 };
 
+struct de_ep_loc_locale_info {
+    de_ep_str locale;
+    uint32_t tables; /* how many string tables have the locale */
+};
+
+/* The locale state (de_loc_get_locale_state) and the published locales (de_loc_list_locales). */
+struct de_ep_loc_locales {
+    de_ep_str active;
+    de_ep_str selected; /* the game's own choice, kept during a preview */
+    de_ep_str preview; /* the previewed locale; "" when none */
+    de_ep_str fallback; /* the default locale at the end of the fallback chain */
+    uint64_t generation; /* changes when a locale switch is published */
+    bool previewing;
+    de_ep_list_loc_locale_info locales; /* sorted by tag (byte order) */
+};
+
+struct de_ep_loc_preview_params {
+    bool has_locale;
+    de_ep_str locale; /* the locale to preview; absent or null ends the preview. The switch is asynchronous: wait for a new generation. A tag that is not a valid identifier is invalid_params */
+};
+
+struct de_ep_loc_string {
+    de_ep_str key; /* the key hash, de_hash64 of the key name, as 16 hex digits */
+    bool has_name;
+    de_ep_str name; /* the key name when the engine has it (never in Release or Shipping) */
+    de_ep_str value;
+    de_ep_str locale; /* the fallback-chain locale that supplied the value */
+    uint64_t table; /* the string_table asset */
+};
+
+/* Every string de_loc resolves (de_loc_read_strings): in fallback-chain order, then table, then key; the first value for a key only. */
+struct de_ep_loc_strings {
+    de_ep_str locale; /* the active locale */
+    uint64_t generation;
+    de_ep_list_loc_string strings;
+};
+
 struct de_ep_log_record {
     double time;
     uint64_t frame;
@@ -960,6 +1198,74 @@ struct de_ep_log_subscribe_params {
     de_ep_str min_level; /* trace, debug, info, warn, error, fatal */
     bool has_categories;
     de_ep_list_str categories;
+};
+
+/* The node catalog of material graphs. */
+struct de_ep_material_graph_catalog {
+    de_ep_str json; /* the catalog in the graph Kind JSON shape {kind, conversions, types} */
+};
+
+/* Compiles the graph's generated module for each target. */
+struct de_ep_material_graph_compile_params {
+    de_ep_str graph; /* the graph file text, at most 4 MiB */
+    bool has_name;
+    de_ep_str name; /* a name for the generated module's header comment */
+    de_ep_list_str targets; /* 1 to 6 distinct targets: spirv, dxil, metallib, metal, spirv-asm, dxil-asm */
+};
+
+/* The generated Slang module, or the diagnostics that stopped it. A graph with errors is a normal result (ok false), not an error response. */
+struct de_ep_material_graph_generated {
+    bool ok; /* true when the graph has no errors (warnings possible) */
+    bool has_source;
+    de_ep_str source; /* the Slang module; absent when ok is false */
+    de_ep_list_material_graph_param params;
+    uint32_t features; /* DE_MATERIAL_FEATURE_* bits the layer outputs set */
+    de_ep_list_material_graph_diagnostic diagnostics;
+};
+
+struct de_ep_material_graph_compiled {
+    de_ep_material_graph_generated generated; /* the generation step; targets is empty when generated.ok is false */
+    de_ep_list_material_graph_target_result targets; /* one per requested target, in request order */
+};
+
+/* One problem, on the node and pin that caused it. */
+struct de_ep_material_graph_diagnostic {
+    de_ep_material_graph_severity severity;
+    de_ep_str node; /* node path ("n3", or "n4/n2" inside subgraph n4); empty for the whole graph or generated boilerplate */
+    de_ep_str pin; /* the pin, or empty */
+    de_ep_str message;
+    bool has_line;
+    uint32_t line; /* one-based line in the graph file; omitted when unknown */
+};
+
+/* Where an exposed parameter lives in the material's float4 rows or texture slots, and its default. */
+struct de_ep_material_graph_param {
+    de_ep_material_graph_param_kind kind;
+    de_ep_str name;
+    de_ep_str node; /* the first node that declares it */
+    uint32_t row; /* FLOAT and COLOR: float4 row 0..9 */
+    uint32_t component; /* FLOAT and COLOR: first component 0..3 */
+    uint32_t slot; /* TEXTURE: slot 0..18 */
+    de_ep_list_f32 value; /* the default: 1 value (FLOAT) or 3 (COLOR); empty for TEXTURE */
+    float min;
+    float max;
+};
+
+/* A material graph file's text (TOML, kind = "material", version = 1), usually the unsaved editor buffer. */
+struct de_ep_material_graph_params {
+    de_ep_str graph; /* the graph file text, at most 4 MiB */
+    bool has_name;
+    de_ep_str name; /* a name for the generated module's header comment */
+};
+
+struct de_ep_material_graph_target_result {
+    de_ep_str target;
+    de_ep_material_graph_target_status status; /* UNSUPPORTED: this engine build cannot compile for the target */
+    bool has_code_size;
+    uint64_t code_size; /* bytes of compiled code when OK */
+    de_ep_list_material_graph_diagnostic diagnostics; /* Slang errors and warnings mapped to graph nodes */
+    bool has_message;
+    de_ep_str message; /* Slang's unmapped diagnostics text, possibly cut */
 };
 
 /* Saved source-mode material rendered in an isolated preview world; no material edits or game-world mutation. */
@@ -1088,17 +1394,43 @@ struct de_ep_net_sim_params {
 };
 
 struct de_ep_override {
-    de_ep_str path;
-    de_ep_raw value;
+    de_ep_str path; /* Component.field for kind field, Component for the component kinds, empty for the entity kinds */
+    de_ep_raw value; /* the instance's value; for the structural kinds see OverrideKind */
+    uint64_t entity; /* the overridden entity (the query covers the entity's subtree); for entity_removed, the instance entity the removed one was under */
+    de_ep_raw base; /* the value the instance inherits; for the structural kinds see OverrideKind */
+    de_ep_str source; /* the prefab that sets the inherited value (variant base or nesting prefab); one of chain */
+    de_ep_list_str chain; /* the prefab chain, nearest first: the instance's prefab .. the root definition */
+    de_ep_list_u64 ids; /* the entity's prefab-local id in each chain level; as long as chain. For entity_added, the ids of parent; for entity_removed, of the removed entity */
+    bool has_kind;
+    de_ep_override_kind kind; /* what the override changes; absent means field (protocol 1.20, DIDE-387) */
+    bool has_parent;
+    uint64_t parent; /* entity_added and entity_removed: the instance entity the entity is or was under */
+    bool has_local;
+    uint64_t local; /* entity_removed: the removed entity's prefab-local id in chain[0] (ids[0]) */
 };
 
+/* The result of prefab.overrides. */
 struct de_ep_override_list {
     de_ep_list_override overrides;
+    de_ep_str asset; /* the instance's prefab */
+    uint64_t root; /* the instance root */
+    uint64_t revision; /* the prefab revision; bumps on every apply, undo and redo */
 };
 
+/* The params of prefab.applyOverride and prefab.revertOverride. */
 struct de_ep_override_path_params {
     uint64_t entity;
-    de_ep_str path;
+    de_ep_str path; /* Component.field for kind field, Component for the component kinds, empty for the entity kinds (the Override's path) */
+    bool has_target;
+    de_ep_str target; /* applyOverride only: the chain asset to write; absent means chain[0]. Not in the chain is INVALID_PARAMS reason target */
+    bool has_kind;
+    de_ep_override_kind kind; /* the Override's kind; absent means field (protocol 1.20, DIDE-387). A path or local that does not fit the kind is INVALID_PARAMS reason kind */
+    bool has_local;
+    uint64_t local; /* entity_removed only, and needed there: the Override's local; `entity` is then the instance entity it was under */
+    bool has_revision;
+    uint64_t revision; /* optimistic check against the prefab revision; a mismatch is CONFLICT reason stale */
+    bool has_tx;
+    uint32_t tx; /* join this open edit transaction instead of opening and committing one */
 };
 
 struct de_ep_path_result {
@@ -1139,6 +1471,14 @@ struct de_ep_pick_result {
     de_ep_list_f32 normal;
     bool has_distance;
     float distance;
+    bool has_ui_stack;
+    de_ep_list_ui_pick_hit ui_stack; /* ui.editor (protocol 1.15): every UI node under the point, topmost first; absent when there is none */
+};
+
+/* The error data of prefab.overrides, prefab.applyOverride, prefab.revertOverride and prefab.unpack. reason by code: not_found not_instance, no_field, no_component (1.20: not a component type), no_entity (1.20: local is not an entity of chain[0], or the entity is not under the instance); invalid_params path, target, params, kind (1.20: path or local does not fit kind); conflict stale, not_override; wrong_mode play_mode; unsupported no_definition, outside_prefab (an entity value refers outside the target prefab), kind (1.20: the engine cannot apply or revert this kind at this level), dependent_cycle (applyOverride, DENG-807: the base and nested links of the prefabs that reach target form a cycle); internal dependent_unreadable (applyOverride, DENG-807: a manifest prefab that may be a dependent of target cannot be read or loaded); busy memory, too_large. dependent_cycle and dependent_unreadable are found before anything is written. Edit errors pass through with reason edit. */
+struct de_ep_prefab_error_data {
+    de_ep_str reason;
+    uint64_t revision; /* the current prefab revision */
 };
 
 struct de_ep_prefab_instantiate_params {
@@ -1146,6 +1486,15 @@ struct de_ep_prefab_instantiate_params {
     uint64_t scene;
     bool has_parent;
     uint64_t parent;
+};
+
+/* The params of prefab.unpack. */
+struct de_ep_prefab_unpack_params {
+    uint64_t entity; /* the instance root; any other entity is NOT_FOUND reason not_instance */
+    bool has_revision;
+    uint64_t revision; /* optimistic check against the prefab revision; a mismatch is CONFLICT reason stale */
+    bool has_tx;
+    uint32_t tx; /* join this open edit transaction instead of opening and committing one */
 };
 
 struct de_ep_query_params {
@@ -1209,6 +1558,12 @@ struct de_ep_resource_list {
     de_ep_map_raw resources;
 };
 
+/* The result of prefab.revertOverride. */
+struct de_ep_revert_result {
+    uint32_t tx; /* the edit transaction that holds the set */
+    uint64_t revision; /* the prefab revision after the revert (a field or component revert does not change it) */
+};
+
 struct de_ep_scene_info {
     uint64_t scene;
     de_ep_str path;
@@ -1220,6 +1575,7 @@ struct de_ep_scene_list {
     de_ep_list_scene_info scenes;
 };
 
+/* Loads the scene file at `path`, replacing the loaded scenes unless `additive`. A malformed scene text is an INVALID_PARAMS error whose `data` is `{reason, line, entity, component}`: `reason` is one of `syntax` (not TOML), `shape` (wrong table or field layout), `id` (a missing or bad scene ID), `duplicate` (a scene ID used twice), `parent` (a parent that is not in the text) or `value` (a component value of the wrong type); `line` is 1-based, and `entity` (scene ID) and `component` name the failing table where there is one, else null. The text is either the keyed `[entity.0x<16 hex>]` layout (components as sub-tables, sorted by scene ID) or the legacy `[[entity]]` array. Both methods exist since protocol 1.17; documenting the error data is not a protocol change. A scene text may end with `[[prefab.nested]]` entries, one per prefab instance (DENG-799): `asset` is the prefab, `root` the scene ID of the instance root and `ids` a `[prefab-local ID, scene ID]` pair per entity of the instance, all IDs as `0x` and 16 hex digits. The method restores the instance links from them, and an entry that does not resolve is skipped with a warning. This is documentation of the text, not a wire change. */
 struct de_ep_scene_load_params {
     de_ep_str path;
     bool additive;
@@ -1229,11 +1585,13 @@ struct de_ep_scene_params {
     uint64_t scene;
 };
 
+/* Replaces scene `scene` with the entities in `text`. A malformed scene text is an INVALID_PARAMS error whose `data` is `{reason, line, entity, component}`: `reason` is one of `syntax` (not TOML), `shape` (wrong table or field layout), `id` (a missing or bad scene ID), `duplicate` (a scene ID used twice), `parent` (a parent that is not in the text) or `value` (a component value of the wrong type); `line` is 1-based, and `entity` (scene ID) and `component` name the failing table where there is one, else null. The text is either the keyed `[entity.0x<16 hex>]` layout (components as sub-tables, sorted by scene ID) or the legacy `[[entity]]` array. Both methods exist since protocol 1.17; documenting the error data is not a protocol change. A scene text may end with `[[prefab.nested]]` entries, one per prefab instance (DENG-799): `asset` is the prefab, `root` the scene ID of the instance root and `ids` a `[prefab-local ID, scene ID]` pair per entity of the instance, all IDs as `0x` and 16 hex digits. The method restores the instance links from them, and an entry that does not resolve is skipped with a warning. This is documentation of the text, not a wire change. */
 struct de_ep_scene_reload_params {
     uint64_t scene;
     de_ep_str text;
 };
 
+/* The text of a scene as `scene.serialize` returns it: the entities in scene-ID order, then one `[[prefab.nested]]` entry per prefab instance whose root the scene saves (DENG-799), in root scene-ID order. An entry is `asset = "props/crate"` (the prefab), `root = "0x<16 hex>"` (the scene ID of the instance root) and `ids = [["0x<16 hex>", "0x<16 hex>"], ...]` (a `[prefab-local ID, scene ID]` pair per entity of the instance, in prefab-local order). An unpacked instance has no entry. The same scene gives the same bytes. This documents the text; the wire format and the protocol version do not change. */
 struct de_ep_scene_text {
     de_ep_str text;
 };
@@ -1278,6 +1636,51 @@ struct de_ep_snap_params {
 
 struct de_ep_snap_result {
     uint32_t snap;
+};
+
+/* The `spline.carve` edit op's value. Terrain within `width` / 2 of the curve (horizontally) moves to the curve's height minus `depth`; the next `falloff` metres blend back to the terrain. */
+struct de_ep_spline_carve {
+    uint64_t spline; /* the spline entity */
+    float width; /* metres */
+    float falloff; /* metres */
+    float depth; /* metres below the curve */
+};
+
+struct de_ep_spline_info {
+    uint64_t entity;
+    de_ep_str component; /* the reflected spline component */
+    de_ep_str mesh_component; /* the reflected mesh-placement component */
+    de_ep_list_str kinds; /* the curve kinds this engine evaluates: catmullRom, bezier */
+    uint32_t max_points;
+    uint32_t count;
+    float length; /* arc length in metres */
+    uint64_t revision; /* the entity revision this reply describes */
+};
+
+/* The meshes placed along a spline as they render in the current frame. Without deform, an instance every `spacing` metres from `offset`, at scale 1. With deform, the curve is split into round(length / mesh length) pieces and each instance is stretched along +X to fill its piece. */
+struct de_ep_spline_instances {
+    uint64_t revision; /* the spline entity revision the instances were built from */
+    de_ep_str mesh;
+    bool deform;
+    de_ep_list_f32 transforms; /* world space, 10 values per instance: position xyz, rotation quaternion xyzw (+X along the curve), scale xyz */
+};
+
+struct de_ep_spline_params {
+    uint64_t entity;
+};
+
+struct de_ep_spline_sample_params {
+    uint64_t entity;
+    float step; /* metres between samples along the curve, at least 0.01; at most 4096 samples are returned */
+};
+
+/* The curve as the engine evaluates it, in world space, sampled evenly by arc length from the start (and back to it when closed). */
+struct de_ep_spline_samples {
+    uint64_t revision;
+    float length;
+    de_ep_list_f32 positions; /* 3 values per sample */
+    de_ep_list_f32 tangents; /* unit direction, 3 values per sample */
+    de_ep_list_f32 distances; /* arc length at each sample */
 };
 
 struct de_ep_stats_sample {
@@ -1349,6 +1752,78 @@ struct de_ep_system_list {
     de_ep_list_system_info systems;
 };
 
+struct de_ep_terrain_info {
+    uint64_t entity;
+    de_ep_str component; /* the reflected component holding layers, order and rules */
+    uint32_t resolution; /* height samples per edge of the whole terrain */
+    float size; /* edge length in metres */
+    float height; /* height range in metres; samples are 0..height */
+    de_ep_list_f64 origin; /* world [x, y, z] of sample (0, 0) */
+    uint32_t tile_size; /* samples per undo/import tile edge */
+    de_ep_list_u32 tiles; /* [x, y] tile counts */
+    de_ep_list_terrain_layer layers; /* in blend order, bottom first */
+    uint32_t max_layers;
+    uint32_t max_rules;
+    de_ep_list_str tools; /* the stroke tools this engine applies */
+    de_ep_list_str formats; /* heightmap formats: png16, raw16, exr */
+};
+
+struct de_ep_terrain_layer {
+    uint32_t slot; /* splat channel; stable when layers are reordered */
+    de_ep_str name;
+    de_ep_str material; /* material asset id; empty for an unused slot */
+    float tiling; /* metres per texture repeat */
+    float sharpness; /* height-blend sharpness, 0..1 */
+};
+
+struct de_ep_terrain_params {
+    uint64_t entity;
+};
+
+/* The terrain at a world point as it renders: height, slope, and splat weights by slot with auto-material rules applied. */
+struct de_ep_terrain_sample {
+    float height;
+    float slope; /* degrees */
+    de_ep_list_f32 weights;
+    de_ep_list_f32 baked; /* the splat map alone, without rules */
+    bool hole;
+};
+
+struct de_ep_terrain_sample_params {
+    uint64_t entity;
+    double x;
+    double z;
+};
+
+/* One stroke, or the dabs of one while it is drawn (the IDE merges those into one undo step with a mergeKey). `points` are world [x, y, z, pressure] dabs, already spaced. Weight at a sample is strength x falloff(distance / radius) x pressure. */
+struct de_ep_terrain_stroke {
+    de_ep_str tool; /* raise, lower, smooth, flatten, ramp, noise, terrace, erodeHydraulic, erodeThermal, stamp, paint or hole */
+    de_ep_list_f32 points; /* 4 values per dab */
+    float radius; /* metres */
+    float strength; /* 0..1 */
+    de_ep_list_f32 falloff; /* falloff curve, sampled evenly from the centre (1st) to the edge (last) */
+    bool has_target;
+    float target; /* flatten: the height in metres */
+    bool has_step;
+    float step; /* terrace: step height in metres */
+    bool has_seed;
+    uint32_t seed; /* noise */
+    bool has_scale;
+    float scale; /* noise: feature size in metres; stamp: height scale */
+    bool has_rotation;
+    float rotation; /* stamp: degrees */
+    bool has_stamp;
+    de_ep_str stamp; /* stamp: heightmap file path */
+    bool has_area;
+    de_ep_str area; /* erosion: brush (default) or tile */
+    bool has_iterations;
+    uint32_t iterations; /* erosion */
+    bool has_layer;
+    uint32_t layer; /* paint: layer slot */
+    bool has_erase;
+    bool erase; /* paint and hole: remove instead of add */
+};
+
 struct de_ep_tx_params {
     uint32_t tx;
 };
@@ -1372,6 +1847,182 @@ struct de_ep_type_info {
 
 struct de_ep_type_list {
     de_ep_list_type_info types;
+};
+
+struct de_ep_ui_check_error {
+    uint32_t line; /* 1-based; 0 when unknown */
+    uint32_t column; /* 1-based; 0 when unknown */
+    de_ep_str message;
+};
+
+/* The result of parsing a sheet without loading it (de_ui_check_stylesheet). */
+struct de_ep_ui_check_stylesheet {
+    bool ok;
+    bool has_error;
+    de_ep_ui_check_error error; /* present when ok is false */
+};
+
+struct de_ep_ui_check_stylesheet_params {
+    de_ep_str text; /* the sheet's TOML text, e.g. an unsaved editor buffer */
+};
+
+struct de_ep_ui_layout {
+    float scale; /* the UI scale the preview used */
+    de_ep_list_ui_layout_rect rects; /* root first, then its subtree in pre-order, children in sibling order */
+};
+
+/* Safe-area insets in physical pixels. */
+struct de_ep_ui_safe_insets {
+    float left;
+    float top;
+    float right;
+    float bottom;
+};
+
+struct de_ep_ui_layout_params {
+    uint64_t root; /* a live UI node (DeUiNode); not_found otherwise */
+    uint32_t width; /* physical pixels, above 0 */
+    uint32_t height; /* physical pixels, above 0 */
+    bool has_ui_scale;
+    float ui_scale; /* the ui.scale cvar for the preview, finite; absent for the live value */
+    bool has_safe;
+    de_ep_ui_safe_insets safe; /* safe-area insets; absent for none */
+    bool has_pixel_art;
+    bool pixel_art; /* pixel-art UI: a whole-number scale and no safe area */
+};
+
+struct de_ep_ui_layout_rect {
+    uint64_t entity;
+    de_ep_list_f32 rect; /* [x, y, w, h] in physical pixels of the preview viewport */
+};
+
+/* The result of ui.measureText (de_ui_measure_text). */
+struct de_ep_ui_measure_text {
+    de_ep_list_f32 size; /* [width, height] in layout pixels */
+    float scale; /* the layout scale used */
+    float line_height; /* layout pixels */
+    de_ep_list_ui_text_line lines;
+    bool overflow_x; /* wrapWidth is set and a line cannot break narrow enough */
+    bool overflow_y; /* boxHeight is set and the text is taller */
+};
+
+struct de_ep_ui_text_style {
+    de_ep_str font; /* the font asset (id or path); not_found when it is not loaded */
+    bool has_size_px;
+    float size_px; /* before scale; the engine multiplies it by the scale. Absent, 0 or less means 16 */
+    bool has_letter_spacing;
+    float letter_spacing; /* before scale; the engine multiplies it by the scale. Absent means 0 */
+    bool has_line_height;
+    float line_height; /* layout pixels, after scale (not multiplied). Absent or 0 for the font's own line height */
+    bool has_language;
+    de_ep_str language; /* a language tag for shaping; absent for none */
+};
+
+struct de_ep_ui_measure_text_params {
+    de_ep_str text;
+    de_ep_ui_text_style style;
+    bool has_align;
+    de_ep_ui_text_align align; /* absent means start */
+    bool has_wrap_width;
+    float wrap_width; /* layout pixels; absent or 0 means no wrap; negative or non-finite is invalid_params */
+    bool has_box_height;
+    float box_height; /* layout pixels; absent or 0 means no height limit; negative or non-finite is invalid_params */
+    bool has_scale;
+    float scale; /* the layout scale; absent means the current one. Pass the scale ui.layout returned to match a preview. Negative or non-finite is invalid_params */
+};
+
+struct de_ep_ui_node_corners {
+    uint64_t panel; /* the world-panel root */
+    de_ep_list_f64 corners; /* 12 numbers: the world-space x, y, z of the top-left, top-right, bottom-right and bottom-left corners */
+};
+
+struct de_ep_ui_node_corners_params {
+    uint64_t entity; /* a UI node on a placed world panel; not_found otherwise */
+};
+
+/* One UI node under a pick point (de_ui_pick_hit). */
+struct de_ep_ui_pick_hit {
+    uint64_t entity;
+    uint64_t root; /* the screen root or world-panel root the node is under */
+    de_ep_list_f32 rect; /* [x, y, w, h] in viewport pixels for a screen root, panel pixels for a world-panel root */
+    uint32_t depth; /* the node's depth below its root (the root is 0) */
+};
+
+struct de_ep_ui_preview_theme_params {
+    bool has_name;
+    de_ep_str name; /* the theme to preview, "" for the base variables; absent or null ends the preview and applies the game's choice. Over 63 bytes is invalid_params; undeclared is not_found */
+};
+
+/* A style sheet parse error (de_ui_sheet_error). */
+struct de_ep_ui_sheet_error {
+    de_ep_str file; /* the sheet's manifest source, relative to the asset root (the same as UiSheet.source) */
+    uint32_t line; /* 1-based; 0 when unknown */
+    uint32_t column; /* 1-based; 0 when unknown */
+    de_ep_str message;
+};
+
+/* One UI style sheet the engine loaded or tried to load (de_ui_list_sheets). */
+struct de_ep_ui_sheet {
+    uint32_t index; /* load order; the same index as a theme variable's sheet */
+    de_ep_str path; /* the manifest asset path; "" for a built-in or source sheet */
+    de_ep_str asset; /* the asset id; "" when there is none */
+    de_ep_str source; /* the manifest source, relative to the asset root; "" when there is none */
+    bool builtin;
+    bool loaded; /* false when the first load failed; a rejected hot reload keeps the old rules and stays true */
+    bool has_error;
+    de_ep_ui_sheet_error error; /* the last load or reload error, until a good reload */
+};
+
+struct de_ep_ui_stylesheets {
+    de_ep_str suffix; /* the file suffix of UI style sheets (DE_UI_STYLESHEET_SUFFIX, e.g. ".uistyle.toml"); the IDE finds sheets by it */
+    de_ep_list_ui_sheet sheets; /* loaded sheets in load order, then the sheets whose first load failed */
+};
+
+/* One laid-out line (de_text_layout_lines). */
+struct de_ep_ui_text_line {
+    uint32_t start; /* UTF-8 byte offset of the first byte. Ranges include trailing blanks and the line break and are contiguous */
+    uint32_t end; /* UTF-8 byte offset after the last byte */
+    float x;
+    float y;
+    float width; /* leaves out trailing blanks */
+    float height;
+};
+
+struct de_ep_ui_theme_info {
+    de_ep_str name;
+    uint32_t sheets; /* how many loaded sheets declare the theme */
+};
+
+struct de_ep_ui_theme_var {
+    de_ep_str name;
+    de_ep_str value; /* TOML text, at most 127 bytes */
+    de_ep_str sheet; /* the sheet that declares it */
+    bool themed; /* the theme overrides the base value */
+    bool truncated; /* value was cut at a UTF-8 boundary */
+};
+
+struct de_ep_ui_theme_vars {
+    de_ep_list_ui_theme_var vars; /* per sheet in load order: base keys in order, then keys only the theme declares */
+};
+
+struct de_ep_ui_theme_vars_params {
+    bool has_theme;
+    de_ep_str theme; /* absent: the active theme; "": the base variables; an undeclared theme is not_found */
+};
+
+/* The theme state (de_ui_get_theme_state) and the declared themes (de_ui_list_themes). */
+struct de_ep_ui_themes {
+    de_ep_str active; /* the applied theme; "" for the base variables */
+    de_ep_str selected; /* the game's own choice, kept during a preview */
+    bool previewing;
+    de_ep_list_ui_theme_info themes; /* sorted by name (byte order) */
+};
+
+/* The result of prefab.unpack. */
+struct de_ep_unpack_result {
+    uint32_t tx; /* the edit transaction that holds the unpack; one undo step */
+    uint64_t revision; /* the prefab revision (an unpack does not change it) */
+    uint64_t root; /* the unpacked root entity, now a plain entity */
 };
 
 struct de_ep_unsubscribe_params {
@@ -1458,6 +2109,64 @@ struct de_ep_view_show_flags_params {
     de_ep_list_str show_flags;
 };
 
+/* A river's flow map, generated from its spline: inside width / 2 of the curve the water flows along the curve, fastest (flowSpeed) at the centre and 0 at the banks; outside it is 0. The engine regenerates it in the frame that applies an edit to the river or its spline. */
+struct de_ep_water_flow_map {
+    uint64_t revision; /* the river entity revision; the spline's edits bump it too */
+    de_ep_list_f32 origin; /* world [x, z] of the map's first texel corner */
+    de_ep_list_f32 size; /* [width along x, depth along z] in metres */
+    uint32_t width; /* texels along x */
+    uint32_t height; /* texels along z */
+    de_ep_list_f32 flow; /* world velocity [x, z] in m/s, 2 values per texel, rows along +z */
+    float max_speed; /* the fastest texel in m/s */
+};
+
+struct de_ep_water_flow_params {
+    uint64_t entity; /* a river */
+    uint32_t resolution; /* texels along the longer side, 2 to 128 */
+};
+
+struct de_ep_water_info {
+    uint64_t entity;
+    de_ep_str component; /* the reflected water component */
+    de_ep_str buoyancy_component; /* the reflected buoyancy probe component */
+    de_ep_list_str kinds; /* the body kinds this engine renders: ocean, river, lake */
+    de_ep_list_str spectra; /* the wave spectra this engine simulates: phillips, jonswap, pierson_moskowitz */
+    de_ep_str kind; /* this body's kind */
+    float wave_height; /* significant wave height in metres for an ocean at its current wind and spectrum; 0 for a river or a lake */
+    uint32_t max_probes; /* probes per buoyancy component */
+    uint64_t revision; /* the entity revision this reply describes */
+};
+
+struct de_ep_water_params {
+    uint64_t entity;
+};
+
+struct de_ep_water_probes_params {
+    bool has_entities;
+    de_ep_list_u64 entities; /* bodies with the buoyancy component; absent for the ones water.showProbes shows. Entities without it are skipped. */
+};
+
+/* The engine draws these bodies' probes in every viewport (a sphere per probe, coloured by how deep it is) until the next call. An empty list hides them. */
+struct de_ep_water_show_probes_params {
+    de_ep_list_u64 entities;
+};
+
+/* The body's surface height over a square, as the current frame renders it. Ocean waves move with game time, which advances in Play and Simulate only. */
+struct de_ep_water_surface {
+    uint64_t revision; /* the entity revision the surface was built from */
+    float time; /* game time in seconds the surface is at */
+    float wave_height; /* as WaterInfo.waveHeight */
+    de_ep_list_f32 heights; /* world y, resolution x resolution, rows along +z, each row along +x */
+};
+
+struct de_ep_water_surface_params {
+    uint64_t entity;
+    float x; /* world x of the square's centre */
+    float z; /* world z of the square's centre */
+    float size; /* side of the square in metres, above 0 */
+    uint32_t resolution; /* samples per side, 2 to 64 */
+};
+
 struct de_ep_world_delta {
     uint32_t subscription;
     bool has_resync;
@@ -1477,6 +2186,8 @@ void de_ep_write_animation_preview(mpack_writer_t *w, const de_ep_animation_prev
 void de_ep_read_animation_preview(mpack_reader_t *r, de_ep_arena *a, de_ep_animation_preview *out);
 void de_ep_write_animation_preview_params(mpack_writer_t *w, const de_ep_animation_preview_params *v);
 void de_ep_read_animation_preview_params(mpack_reader_t *r, de_ep_arena *a, de_ep_animation_preview_params *out);
+void de_ep_write_apply_result(mpack_writer_t *w, const de_ep_apply_result *v);
+void de_ep_read_apply_result(mpack_reader_t *r, de_ep_arena *a, de_ep_apply_result *out);
 void de_ep_write_archetype(mpack_writer_t *w, const de_ep_archetype *v);
 void de_ep_read_archetype(mpack_reader_t *r, de_ep_arena *a, de_ep_archetype *out);
 void de_ep_write_archetype_list(mpack_writer_t *w, const de_ep_archetype_list *v);
@@ -1511,6 +2222,8 @@ void de_ep_write_blob_ref(mpack_writer_t *w, const de_ep_blob_ref *v);
 void de_ep_read_blob_ref(mpack_reader_t *r, de_ep_arena *a, de_ep_blob_ref *out);
 void de_ep_write_build_info(mpack_writer_t *w, const de_ep_build_info *v);
 void de_ep_read_build_info(mpack_reader_t *r, de_ep_arena *a, de_ep_build_info *out);
+void de_ep_write_buoyancy_probes(mpack_writer_t *w, const de_ep_buoyancy_probes *v);
+void de_ep_read_buoyancy_probes(mpack_reader_t *r, de_ep_arena *a, de_ep_buoyancy_probes *out);
 void de_ep_write_c_var(mpack_writer_t *w, const de_ep_c_var *v);
 void de_ep_read_c_var(mpack_reader_t *r, de_ep_arena *a, de_ep_c_var *out);
 void de_ep_write_c_var_list(mpack_writer_t *w, const de_ep_c_var_list *v);
@@ -1595,6 +2308,8 @@ void de_ep_write_gizmo_drag_update(mpack_writer_t *w, const de_ep_gizmo_drag_upd
 void de_ep_read_gizmo_drag_update(mpack_reader_t *r, de_ep_arena *a, de_ep_gizmo_drag_update *out);
 void de_ep_write_gizmo_tool_params(mpack_writer_t *w, const de_ep_gizmo_tool_params *v);
 void de_ep_read_gizmo_tool_params(mpack_reader_t *r, de_ep_arena *a, de_ep_gizmo_tool_params *out);
+void de_ep_write_heightmap_export_params(mpack_writer_t *w, const de_ep_heightmap_export_params *v);
+void de_ep_read_heightmap_export_params(mpack_reader_t *r, de_ep_arena *a, de_ep_heightmap_export_params *out);
 void de_ep_write_hello_params(mpack_writer_t *w, const de_ep_hello_params *v);
 void de_ep_read_hello_params(mpack_reader_t *r, de_ep_arena *a, de_ep_hello_params *out);
 void de_ep_write_hello_result(mpack_writer_t *w, const de_ep_hello_result *v);
@@ -1607,10 +2322,36 @@ void de_ep_write_input_focus_params(mpack_writer_t *w, const de_ep_input_focus_p
 void de_ep_read_input_focus_params(mpack_reader_t *r, de_ep_arena *a, de_ep_input_focus_params *out);
 void de_ep_write_limits(mpack_writer_t *w, const de_ep_limits *v);
 void de_ep_read_limits(mpack_reader_t *r, de_ep_arena *a, de_ep_limits *out);
+void de_ep_write_loc_locale_info(mpack_writer_t *w, const de_ep_loc_locale_info *v);
+void de_ep_read_loc_locale_info(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_locale_info *out);
+void de_ep_write_loc_locales(mpack_writer_t *w, const de_ep_loc_locales *v);
+void de_ep_read_loc_locales(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_locales *out);
+void de_ep_write_loc_preview_params(mpack_writer_t *w, const de_ep_loc_preview_params *v);
+void de_ep_read_loc_preview_params(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_preview_params *out);
+void de_ep_write_loc_string(mpack_writer_t *w, const de_ep_loc_string *v);
+void de_ep_read_loc_string(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_string *out);
+void de_ep_write_loc_strings(mpack_writer_t *w, const de_ep_loc_strings *v);
+void de_ep_read_loc_strings(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_strings *out);
 void de_ep_write_log_record(mpack_writer_t *w, const de_ep_log_record *v);
 void de_ep_read_log_record(mpack_reader_t *r, de_ep_arena *a, de_ep_log_record *out);
 void de_ep_write_log_subscribe_params(mpack_writer_t *w, const de_ep_log_subscribe_params *v);
 void de_ep_read_log_subscribe_params(mpack_reader_t *r, de_ep_arena *a, de_ep_log_subscribe_params *out);
+void de_ep_write_material_graph_catalog(mpack_writer_t *w, const de_ep_material_graph_catalog *v);
+void de_ep_read_material_graph_catalog(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_catalog *out);
+void de_ep_write_material_graph_compile_params(mpack_writer_t *w, const de_ep_material_graph_compile_params *v);
+void de_ep_read_material_graph_compile_params(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_compile_params *out);
+void de_ep_write_material_graph_compiled(mpack_writer_t *w, const de_ep_material_graph_compiled *v);
+void de_ep_read_material_graph_compiled(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_compiled *out);
+void de_ep_write_material_graph_diagnostic(mpack_writer_t *w, const de_ep_material_graph_diagnostic *v);
+void de_ep_read_material_graph_diagnostic(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_diagnostic *out);
+void de_ep_write_material_graph_generated(mpack_writer_t *w, const de_ep_material_graph_generated *v);
+void de_ep_read_material_graph_generated(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_generated *out);
+void de_ep_write_material_graph_param(mpack_writer_t *w, const de_ep_material_graph_param *v);
+void de_ep_read_material_graph_param(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_param *out);
+void de_ep_write_material_graph_params(mpack_writer_t *w, const de_ep_material_graph_params *v);
+void de_ep_read_material_graph_params(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_params *out);
+void de_ep_write_material_graph_target_result(mpack_writer_t *w, const de_ep_material_graph_target_result *v);
+void de_ep_read_material_graph_target_result(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_target_result *out);
 void de_ep_write_material_render_params(mpack_writer_t *w, const de_ep_material_render_params *v);
 void de_ep_read_material_render_params(mpack_reader_t *r, de_ep_arena *a, de_ep_material_render_params *out);
 void de_ep_write_model_attribute(mpack_writer_t *w, const de_ep_model_attribute *v);
@@ -1661,8 +2402,12 @@ void de_ep_write_pick_rect_params(mpack_writer_t *w, const de_ep_pick_rect_param
 void de_ep_read_pick_rect_params(mpack_reader_t *r, de_ep_arena *a, de_ep_pick_rect_params *out);
 void de_ep_write_pick_result(mpack_writer_t *w, const de_ep_pick_result *v);
 void de_ep_read_pick_result(mpack_reader_t *r, de_ep_arena *a, de_ep_pick_result *out);
+void de_ep_write_prefab_error_data(mpack_writer_t *w, const de_ep_prefab_error_data *v);
+void de_ep_read_prefab_error_data(mpack_reader_t *r, de_ep_arena *a, de_ep_prefab_error_data *out);
 void de_ep_write_prefab_instantiate_params(mpack_writer_t *w, const de_ep_prefab_instantiate_params *v);
 void de_ep_read_prefab_instantiate_params(mpack_reader_t *r, de_ep_arena *a, de_ep_prefab_instantiate_params *out);
+void de_ep_write_prefab_unpack_params(mpack_writer_t *w, const de_ep_prefab_unpack_params *v);
+void de_ep_read_prefab_unpack_params(mpack_reader_t *r, de_ep_arena *a, de_ep_prefab_unpack_params *out);
 void de_ep_write_query_params(mpack_writer_t *w, const de_ep_query_params *v);
 void de_ep_read_query_params(mpack_reader_t *r, de_ep_arena *a, de_ep_query_params *out);
 void de_ep_write_query_result(mpack_writer_t *w, const de_ep_query_result *v);
@@ -1683,6 +2428,8 @@ void de_ep_write_replay_tick(mpack_writer_t *w, const de_ep_replay_tick *v);
 void de_ep_read_replay_tick(mpack_reader_t *r, de_ep_arena *a, de_ep_replay_tick *out);
 void de_ep_write_resource_list(mpack_writer_t *w, const de_ep_resource_list *v);
 void de_ep_read_resource_list(mpack_reader_t *r, de_ep_arena *a, de_ep_resource_list *out);
+void de_ep_write_revert_result(mpack_writer_t *w, const de_ep_revert_result *v);
+void de_ep_read_revert_result(mpack_reader_t *r, de_ep_arena *a, de_ep_revert_result *out);
 void de_ep_write_scene_info(mpack_writer_t *w, const de_ep_scene_info *v);
 void de_ep_read_scene_info(mpack_reader_t *r, de_ep_arena *a, de_ep_scene_info *out);
 void de_ep_write_scene_list(mpack_writer_t *w, const de_ep_scene_list *v);
@@ -1711,6 +2458,18 @@ void de_ep_write_snap_params(mpack_writer_t *w, const de_ep_snap_params *v);
 void de_ep_read_snap_params(mpack_reader_t *r, de_ep_arena *a, de_ep_snap_params *out);
 void de_ep_write_snap_result(mpack_writer_t *w, const de_ep_snap_result *v);
 void de_ep_read_snap_result(mpack_reader_t *r, de_ep_arena *a, de_ep_snap_result *out);
+void de_ep_write_spline_carve(mpack_writer_t *w, const de_ep_spline_carve *v);
+void de_ep_read_spline_carve(mpack_reader_t *r, de_ep_arena *a, de_ep_spline_carve *out);
+void de_ep_write_spline_info(mpack_writer_t *w, const de_ep_spline_info *v);
+void de_ep_read_spline_info(mpack_reader_t *r, de_ep_arena *a, de_ep_spline_info *out);
+void de_ep_write_spline_instances(mpack_writer_t *w, const de_ep_spline_instances *v);
+void de_ep_read_spline_instances(mpack_reader_t *r, de_ep_arena *a, de_ep_spline_instances *out);
+void de_ep_write_spline_params(mpack_writer_t *w, const de_ep_spline_params *v);
+void de_ep_read_spline_params(mpack_reader_t *r, de_ep_arena *a, de_ep_spline_params *out);
+void de_ep_write_spline_sample_params(mpack_writer_t *w, const de_ep_spline_sample_params *v);
+void de_ep_read_spline_sample_params(mpack_reader_t *r, de_ep_arena *a, de_ep_spline_sample_params *out);
+void de_ep_write_spline_samples(mpack_writer_t *w, const de_ep_spline_samples *v);
+void de_ep_read_spline_samples(mpack_reader_t *r, de_ep_arena *a, de_ep_spline_samples *out);
 void de_ep_write_stats_sample(mpack_writer_t *w, const de_ep_stats_sample *v);
 void de_ep_read_stats_sample(mpack_reader_t *r, de_ep_arena *a, de_ep_stats_sample *out);
 void de_ep_write_stats_subscribe_params(mpack_writer_t *w, const de_ep_stats_subscribe_params *v);
@@ -1729,6 +2488,18 @@ void de_ep_write_system_info(mpack_writer_t *w, const de_ep_system_info *v);
 void de_ep_read_system_info(mpack_reader_t *r, de_ep_arena *a, de_ep_system_info *out);
 void de_ep_write_system_list(mpack_writer_t *w, const de_ep_system_list *v);
 void de_ep_read_system_list(mpack_reader_t *r, de_ep_arena *a, de_ep_system_list *out);
+void de_ep_write_terrain_info(mpack_writer_t *w, const de_ep_terrain_info *v);
+void de_ep_read_terrain_info(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_info *out);
+void de_ep_write_terrain_layer(mpack_writer_t *w, const de_ep_terrain_layer *v);
+void de_ep_read_terrain_layer(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_layer *out);
+void de_ep_write_terrain_params(mpack_writer_t *w, const de_ep_terrain_params *v);
+void de_ep_read_terrain_params(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_params *out);
+void de_ep_write_terrain_sample(mpack_writer_t *w, const de_ep_terrain_sample *v);
+void de_ep_read_terrain_sample(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_sample *out);
+void de_ep_write_terrain_sample_params(mpack_writer_t *w, const de_ep_terrain_sample_params *v);
+void de_ep_read_terrain_sample_params(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_sample_params *out);
+void de_ep_write_terrain_stroke(mpack_writer_t *w, const de_ep_terrain_stroke *v);
+void de_ep_read_terrain_stroke(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_stroke *out);
 void de_ep_write_tx_params(mpack_writer_t *w, const de_ep_tx_params *v);
 void de_ep_read_tx_params(mpack_reader_t *r, de_ep_arena *a, de_ep_tx_params *out);
 void de_ep_write_tx_result(mpack_writer_t *w, const de_ep_tx_result *v);
@@ -1737,6 +2508,54 @@ void de_ep_write_type_info(mpack_writer_t *w, const de_ep_type_info *v);
 void de_ep_read_type_info(mpack_reader_t *r, de_ep_arena *a, de_ep_type_info *out);
 void de_ep_write_type_list(mpack_writer_t *w, const de_ep_type_list *v);
 void de_ep_read_type_list(mpack_reader_t *r, de_ep_arena *a, de_ep_type_list *out);
+void de_ep_write_ui_check_error(mpack_writer_t *w, const de_ep_ui_check_error *v);
+void de_ep_read_ui_check_error(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_check_error *out);
+void de_ep_write_ui_check_stylesheet(mpack_writer_t *w, const de_ep_ui_check_stylesheet *v);
+void de_ep_read_ui_check_stylesheet(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_check_stylesheet *out);
+void de_ep_write_ui_check_stylesheet_params(mpack_writer_t *w, const de_ep_ui_check_stylesheet_params *v);
+void de_ep_read_ui_check_stylesheet_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_check_stylesheet_params *out);
+void de_ep_write_ui_layout(mpack_writer_t *w, const de_ep_ui_layout *v);
+void de_ep_read_ui_layout(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_layout *out);
+void de_ep_write_ui_layout_params(mpack_writer_t *w, const de_ep_ui_layout_params *v);
+void de_ep_read_ui_layout_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_layout_params *out);
+void de_ep_write_ui_layout_rect(mpack_writer_t *w, const de_ep_ui_layout_rect *v);
+void de_ep_read_ui_layout_rect(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_layout_rect *out);
+void de_ep_write_ui_measure_text(mpack_writer_t *w, const de_ep_ui_measure_text *v);
+void de_ep_read_ui_measure_text(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_measure_text *out);
+void de_ep_write_ui_measure_text_params(mpack_writer_t *w, const de_ep_ui_measure_text_params *v);
+void de_ep_read_ui_measure_text_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_measure_text_params *out);
+void de_ep_write_ui_node_corners(mpack_writer_t *w, const de_ep_ui_node_corners *v);
+void de_ep_read_ui_node_corners(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_node_corners *out);
+void de_ep_write_ui_node_corners_params(mpack_writer_t *w, const de_ep_ui_node_corners_params *v);
+void de_ep_read_ui_node_corners_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_node_corners_params *out);
+void de_ep_write_ui_pick_hit(mpack_writer_t *w, const de_ep_ui_pick_hit *v);
+void de_ep_read_ui_pick_hit(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_pick_hit *out);
+void de_ep_write_ui_preview_theme_params(mpack_writer_t *w, const de_ep_ui_preview_theme_params *v);
+void de_ep_read_ui_preview_theme_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_preview_theme_params *out);
+void de_ep_write_ui_safe_insets(mpack_writer_t *w, const de_ep_ui_safe_insets *v);
+void de_ep_read_ui_safe_insets(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_safe_insets *out);
+void de_ep_write_ui_sheet(mpack_writer_t *w, const de_ep_ui_sheet *v);
+void de_ep_read_ui_sheet(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_sheet *out);
+void de_ep_write_ui_sheet_error(mpack_writer_t *w, const de_ep_ui_sheet_error *v);
+void de_ep_read_ui_sheet_error(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_sheet_error *out);
+void de_ep_write_ui_stylesheets(mpack_writer_t *w, const de_ep_ui_stylesheets *v);
+void de_ep_read_ui_stylesheets(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_stylesheets *out);
+void de_ep_write_ui_text_line(mpack_writer_t *w, const de_ep_ui_text_line *v);
+void de_ep_read_ui_text_line(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_text_line *out);
+void de_ep_write_ui_text_style(mpack_writer_t *w, const de_ep_ui_text_style *v);
+void de_ep_read_ui_text_style(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_text_style *out);
+void de_ep_write_ui_theme_info(mpack_writer_t *w, const de_ep_ui_theme_info *v);
+void de_ep_read_ui_theme_info(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_theme_info *out);
+void de_ep_write_ui_theme_var(mpack_writer_t *w, const de_ep_ui_theme_var *v);
+void de_ep_read_ui_theme_var(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_theme_var *out);
+void de_ep_write_ui_theme_vars(mpack_writer_t *w, const de_ep_ui_theme_vars *v);
+void de_ep_read_ui_theme_vars(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_theme_vars *out);
+void de_ep_write_ui_theme_vars_params(mpack_writer_t *w, const de_ep_ui_theme_vars_params *v);
+void de_ep_read_ui_theme_vars_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_theme_vars_params *out);
+void de_ep_write_ui_themes(mpack_writer_t *w, const de_ep_ui_themes *v);
+void de_ep_read_ui_themes(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_themes *out);
+void de_ep_write_unpack_result(mpack_writer_t *w, const de_ep_unpack_result *v);
+void de_ep_read_unpack_result(mpack_reader_t *r, de_ep_arena *a, de_ep_unpack_result *out);
 void de_ep_write_unsubscribe_params(mpack_writer_t *w, const de_ep_unsubscribe_params *v);
 void de_ep_read_unsubscribe_params(mpack_reader_t *r, de_ep_arena *a, de_ep_unsubscribe_params *out);
 void de_ep_write_view_camera_params(mpack_writer_t *w, const de_ep_view_camera_params *v);
@@ -1765,6 +2584,22 @@ void de_ep_write_view_resized(mpack_writer_t *w, const de_ep_view_resized *v);
 void de_ep_read_view_resized(mpack_reader_t *r, de_ep_arena *a, de_ep_view_resized *out);
 void de_ep_write_view_show_flags_params(mpack_writer_t *w, const de_ep_view_show_flags_params *v);
 void de_ep_read_view_show_flags_params(mpack_reader_t *r, de_ep_arena *a, de_ep_view_show_flags_params *out);
+void de_ep_write_water_flow_map(mpack_writer_t *w, const de_ep_water_flow_map *v);
+void de_ep_read_water_flow_map(mpack_reader_t *r, de_ep_arena *a, de_ep_water_flow_map *out);
+void de_ep_write_water_flow_params(mpack_writer_t *w, const de_ep_water_flow_params *v);
+void de_ep_read_water_flow_params(mpack_reader_t *r, de_ep_arena *a, de_ep_water_flow_params *out);
+void de_ep_write_water_info(mpack_writer_t *w, const de_ep_water_info *v);
+void de_ep_read_water_info(mpack_reader_t *r, de_ep_arena *a, de_ep_water_info *out);
+void de_ep_write_water_params(mpack_writer_t *w, const de_ep_water_params *v);
+void de_ep_read_water_params(mpack_reader_t *r, de_ep_arena *a, de_ep_water_params *out);
+void de_ep_write_water_probes_params(mpack_writer_t *w, const de_ep_water_probes_params *v);
+void de_ep_read_water_probes_params(mpack_reader_t *r, de_ep_arena *a, de_ep_water_probes_params *out);
+void de_ep_write_water_show_probes_params(mpack_writer_t *w, const de_ep_water_show_probes_params *v);
+void de_ep_read_water_show_probes_params(mpack_reader_t *r, de_ep_arena *a, de_ep_water_show_probes_params *out);
+void de_ep_write_water_surface(mpack_writer_t *w, const de_ep_water_surface *v);
+void de_ep_read_water_surface(mpack_reader_t *r, de_ep_arena *a, de_ep_water_surface *out);
+void de_ep_write_water_surface_params(mpack_writer_t *w, const de_ep_water_surface_params *v);
+void de_ep_read_water_surface_params(mpack_reader_t *r, de_ep_arena *a, de_ep_water_surface_params *out);
 void de_ep_write_world_delta(mpack_writer_t *w, const de_ep_world_delta *v);
 void de_ep_read_world_delta(mpack_reader_t *r, de_ep_arena *a, de_ep_world_delta *out);
 
@@ -1805,7 +2640,13 @@ typedef enum de_ep_method {
     DE_EP_METHOD_HELLO,
     DE_EP_METHOD_INPUT_EVENTS,
     DE_EP_METHOD_INPUT_FOCUS,
+    DE_EP_METHOD_LOC_LOCALES,
+    DE_EP_METHOD_LOC_PREVIEW_LOCALE,
+    DE_EP_METHOD_LOC_STRINGS,
     DE_EP_METHOD_LOG_SUBSCRIBE,
+    DE_EP_METHOD_MATERIAL_GRAPH_CATALOG,
+    DE_EP_METHOD_MATERIAL_GRAPH_COMPILE,
+    DE_EP_METHOD_MATERIAL_GRAPH_GENERATE,
     DE_EP_METHOD_NET_CHECKSUMS,
     DE_EP_METHOD_NET_SIM,
     DE_EP_METHOD_PICK,
@@ -1815,6 +2656,7 @@ typedef enum de_ep_method {
     DE_EP_METHOD_PREFAB_INSTANTIATE,
     DE_EP_METHOD_PREFAB_OVERRIDES,
     DE_EP_METHOD_PREFAB_REVERT_OVERRIDE,
+    DE_EP_METHOD_PREFAB_UNPACK,
     DE_EP_METHOD_REFLECT_ASSET_TYPES,
     DE_EP_METHOD_REFLECT_CVARS,
     DE_EP_METHOD_REFLECT_DEBUG_OUTPUTS,
@@ -1838,8 +2680,22 @@ typedef enum de_ep_method {
     DE_EP_METHOD_SNAPSHOT_RELEASE,
     DE_EP_METHOD_SNAPSHOT_RESTORE,
     DE_EP_METHOD_SNAPSHOT_TAKE,
+    DE_EP_METHOD_SPLINE_INFO,
+    DE_EP_METHOD_SPLINE_INSTANCES,
+    DE_EP_METHOD_SPLINE_SAMPLE,
     DE_EP_METHOD_STATS_SUBSCRIBE,
     DE_EP_METHOD_SUBSCRIBE,
+    DE_EP_METHOD_TERRAIN_EXPORT_HEIGHTMAP,
+    DE_EP_METHOD_TERRAIN_INFO,
+    DE_EP_METHOD_TERRAIN_SAMPLE,
+    DE_EP_METHOD_UI_CHECK_STYLESHEET,
+    DE_EP_METHOD_UI_LAYOUT,
+    DE_EP_METHOD_UI_MEASURE_TEXT,
+    DE_EP_METHOD_UI_NODE_CORNERS,
+    DE_EP_METHOD_UI_PREVIEW_THEME,
+    DE_EP_METHOD_UI_STYLESHEETS,
+    DE_EP_METHOD_UI_THEME_VARS,
+    DE_EP_METHOD_UI_THEMES,
     DE_EP_METHOD_UNSUBSCRIBE,
     DE_EP_METHOD_VIEW_CREATE,
     DE_EP_METHOD_VIEW_DESTROY,
@@ -1851,6 +2707,11 @@ typedef enum de_ep_method {
     DE_EP_METHOD_VIEW_SET_PAUSED,
     DE_EP_METHOD_VIEW_SET_RENDER_MODE,
     DE_EP_METHOD_VIEW_SET_SHOW_FLAGS,
+    DE_EP_METHOD_WATER_FLOW_MAP,
+    DE_EP_METHOD_WATER_INFO,
+    DE_EP_METHOD_WATER_PROBES,
+    DE_EP_METHOD_WATER_SHOW_PROBES,
+    DE_EP_METHOD_WATER_SURFACE,
     DE_EP_METHOD_WORLD_ARCHETYPES,
     DE_EP_METHOD_WORLD_CHECKSUM,
     DE_EP_METHOD_WORLD_ENTITY,
@@ -1979,8 +2840,20 @@ bool de_ep_read_params_input_events(const de_ep_request *req, de_ep_arena *a, de
 void de_ep_write_response_input_events(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_input_focus(const de_ep_request *req, de_ep_arena *a, de_ep_input_focus_params *out);
 void de_ep_write_response_input_focus(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_loc_locales(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
+void de_ep_write_response_loc_locales(mpack_writer_t *w, uint64_t id, const de_ep_loc_locales *result);
+bool de_ep_read_params_loc_preview_locale(const de_ep_request *req, de_ep_arena *a, de_ep_loc_preview_params *out);
+void de_ep_write_response_loc_preview_locale(mpack_writer_t *w, uint64_t id, const de_ep_loc_locales *result);
+bool de_ep_read_params_loc_strings(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
+void de_ep_write_response_loc_strings(mpack_writer_t *w, uint64_t id, const de_ep_loc_strings *result);
 bool de_ep_read_params_log_subscribe(const de_ep_request *req, de_ep_arena *a, de_ep_log_subscribe_params *out);
 void de_ep_write_response_log_subscribe(mpack_writer_t *w, uint64_t id, const de_ep_subscribe_result *result);
+bool de_ep_read_params_material_graph_catalog(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
+void de_ep_write_response_material_graph_catalog(mpack_writer_t *w, uint64_t id, const de_ep_material_graph_catalog *result);
+bool de_ep_read_params_material_graph_compile(const de_ep_request *req, de_ep_arena *a, de_ep_material_graph_compile_params *out);
+void de_ep_write_response_material_graph_compile(mpack_writer_t *w, uint64_t id, const de_ep_material_graph_compiled *result);
+bool de_ep_read_params_material_graph_generate(const de_ep_request *req, de_ep_arena *a, de_ep_material_graph_params *out);
+void de_ep_write_response_material_graph_generate(mpack_writer_t *w, uint64_t id, const de_ep_material_graph_generated *result);
 bool de_ep_read_params_net_checksums(const de_ep_request *req, de_ep_arena *a, de_ep_net_checksums_params *out);
 void de_ep_write_response_net_checksums(mpack_writer_t *w, uint64_t id, const de_ep_net_checksums *result);
 bool de_ep_read_params_net_sim(const de_ep_request *req, de_ep_arena *a, de_ep_net_sim_params *out);
@@ -1992,13 +2865,15 @@ void de_ep_write_response_pick_rect(mpack_writer_t *w, uint64_t id, const de_ep_
 bool de_ep_read_params_ping(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
 void de_ep_write_response_ping(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_prefab_apply_override(const de_ep_request *req, de_ep_arena *a, de_ep_override_path_params *out);
-void de_ep_write_response_prefab_apply_override(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+void de_ep_write_response_prefab_apply_override(mpack_writer_t *w, uint64_t id, const de_ep_apply_result *result);
 bool de_ep_read_params_prefab_instantiate(const de_ep_request *req, de_ep_arena *a, de_ep_prefab_instantiate_params *out);
 void de_ep_write_response_prefab_instantiate(mpack_writer_t *w, uint64_t id, const de_ep_entity_result_one *result);
 bool de_ep_read_params_prefab_overrides(const de_ep_request *req, de_ep_arena *a, de_ep_entity_ref *out);
 void de_ep_write_response_prefab_overrides(mpack_writer_t *w, uint64_t id, const de_ep_override_list *result);
 bool de_ep_read_params_prefab_revert_override(const de_ep_request *req, de_ep_arena *a, de_ep_override_path_params *out);
-void de_ep_write_response_prefab_revert_override(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+void de_ep_write_response_prefab_revert_override(mpack_writer_t *w, uint64_t id, const de_ep_revert_result *result);
+bool de_ep_read_params_prefab_unpack(const de_ep_request *req, de_ep_arena *a, de_ep_prefab_unpack_params *out);
+void de_ep_write_response_prefab_unpack(mpack_writer_t *w, uint64_t id, const de_ep_unpack_result *result);
 bool de_ep_read_params_reflect_asset_types(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
 void de_ep_write_response_reflect_asset_types(mpack_writer_t *w, uint64_t id, const de_ep_asset_type_list *result);
 bool de_ep_read_params_reflect_cvars(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
@@ -2045,10 +2920,38 @@ bool de_ep_read_params_snapshot_restore(const de_ep_request *req, de_ep_arena *a
 void de_ep_write_response_snapshot_restore(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_snapshot_take(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
 void de_ep_write_response_snapshot_take(mpack_writer_t *w, uint64_t id, const de_ep_snap_result *result);
+bool de_ep_read_params_spline_info(const de_ep_request *req, de_ep_arena *a, de_ep_spline_params *out);
+void de_ep_write_response_spline_info(mpack_writer_t *w, uint64_t id, const de_ep_spline_info *result);
+bool de_ep_read_params_spline_instances(const de_ep_request *req, de_ep_arena *a, de_ep_spline_params *out);
+void de_ep_write_response_spline_instances(mpack_writer_t *w, uint64_t id, const de_ep_spline_instances *result);
+bool de_ep_read_params_spline_sample(const de_ep_request *req, de_ep_arena *a, de_ep_spline_sample_params *out);
+void de_ep_write_response_spline_sample(mpack_writer_t *w, uint64_t id, const de_ep_spline_samples *result);
 bool de_ep_read_params_stats_subscribe(const de_ep_request *req, de_ep_arena *a, de_ep_stats_subscribe_params *out);
 void de_ep_write_response_stats_subscribe(mpack_writer_t *w, uint64_t id, const de_ep_subscribe_result *result);
 bool de_ep_read_params_subscribe(const de_ep_request *req, de_ep_arena *a, de_ep_subscribe_params *out);
 void de_ep_write_response_subscribe(mpack_writer_t *w, uint64_t id, const de_ep_subscribe_result *result);
+bool de_ep_read_params_terrain_export_heightmap(const de_ep_request *req, de_ep_arena *a, de_ep_heightmap_export_params *out);
+void de_ep_write_response_terrain_export_heightmap(mpack_writer_t *w, uint64_t id, const de_ep_path_result *result);
+bool de_ep_read_params_terrain_info(const de_ep_request *req, de_ep_arena *a, de_ep_terrain_params *out);
+void de_ep_write_response_terrain_info(mpack_writer_t *w, uint64_t id, const de_ep_terrain_info *result);
+bool de_ep_read_params_terrain_sample(const de_ep_request *req, de_ep_arena *a, de_ep_terrain_sample_params *out);
+void de_ep_write_response_terrain_sample(mpack_writer_t *w, uint64_t id, const de_ep_terrain_sample *result);
+bool de_ep_read_params_ui_check_stylesheet(const de_ep_request *req, de_ep_arena *a, de_ep_ui_check_stylesheet_params *out);
+void de_ep_write_response_ui_check_stylesheet(mpack_writer_t *w, uint64_t id, const de_ep_ui_check_stylesheet *result);
+bool de_ep_read_params_ui_layout(const de_ep_request *req, de_ep_arena *a, de_ep_ui_layout_params *out);
+void de_ep_write_response_ui_layout(mpack_writer_t *w, uint64_t id, const de_ep_ui_layout *result);
+bool de_ep_read_params_ui_measure_text(const de_ep_request *req, de_ep_arena *a, de_ep_ui_measure_text_params *out);
+void de_ep_write_response_ui_measure_text(mpack_writer_t *w, uint64_t id, const de_ep_ui_measure_text *result);
+bool de_ep_read_params_ui_node_corners(const de_ep_request *req, de_ep_arena *a, de_ep_ui_node_corners_params *out);
+void de_ep_write_response_ui_node_corners(mpack_writer_t *w, uint64_t id, const de_ep_ui_node_corners *result);
+bool de_ep_read_params_ui_preview_theme(const de_ep_request *req, de_ep_arena *a, de_ep_ui_preview_theme_params *out);
+void de_ep_write_response_ui_preview_theme(mpack_writer_t *w, uint64_t id, const de_ep_ui_themes *result);
+bool de_ep_read_params_ui_stylesheets(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
+void de_ep_write_response_ui_stylesheets(mpack_writer_t *w, uint64_t id, const de_ep_ui_stylesheets *result);
+bool de_ep_read_params_ui_theme_vars(const de_ep_request *req, de_ep_arena *a, de_ep_ui_theme_vars_params *out);
+void de_ep_write_response_ui_theme_vars(mpack_writer_t *w, uint64_t id, const de_ep_ui_theme_vars *result);
+bool de_ep_read_params_ui_themes(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
+void de_ep_write_response_ui_themes(mpack_writer_t *w, uint64_t id, const de_ep_ui_themes *result);
 bool de_ep_read_params_unsubscribe(const de_ep_request *req, de_ep_arena *a, de_ep_unsubscribe_params *out);
 void de_ep_write_response_unsubscribe(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_view_create(const de_ep_request *req, de_ep_arena *a, de_ep_view_create_params *out);
@@ -2071,6 +2974,16 @@ bool de_ep_read_params_view_set_render_mode(const de_ep_request *req, de_ep_aren
 void de_ep_write_response_view_set_render_mode(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_view_set_show_flags(const de_ep_request *req, de_ep_arena *a, de_ep_view_show_flags_params *out);
 void de_ep_write_response_view_set_show_flags(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_water_flow_map(const de_ep_request *req, de_ep_arena *a, de_ep_water_flow_params *out);
+void de_ep_write_response_water_flow_map(mpack_writer_t *w, uint64_t id, const de_ep_water_flow_map *result);
+bool de_ep_read_params_water_info(const de_ep_request *req, de_ep_arena *a, de_ep_water_params *out);
+void de_ep_write_response_water_info(mpack_writer_t *w, uint64_t id, const de_ep_water_info *result);
+bool de_ep_read_params_water_probes(const de_ep_request *req, de_ep_arena *a, de_ep_water_probes_params *out);
+void de_ep_write_response_water_probes(mpack_writer_t *w, uint64_t id, const de_ep_buoyancy_probes *result);
+bool de_ep_read_params_water_show_probes(const de_ep_request *req, de_ep_arena *a, de_ep_water_show_probes_params *out);
+void de_ep_write_response_water_show_probes(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_water_surface(const de_ep_request *req, de_ep_arena *a, de_ep_water_surface_params *out);
+void de_ep_write_response_water_surface(mpack_writer_t *w, uint64_t id, const de_ep_water_surface *result);
 bool de_ep_read_params_world_archetypes(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
 void de_ep_write_response_world_archetypes(mpack_writer_t *w, uint64_t id, const de_ep_archetype_list *result);
 bool de_ep_read_params_world_checksum(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);

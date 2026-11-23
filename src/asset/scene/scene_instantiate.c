@@ -84,8 +84,9 @@ static void inst_rollback(de_world *w, const de_entity *ents, u32 n) {
             de_entity_despawn(w, ents[i]);
 }
 
-de_result de_prefab_instantiate(de_asset_system *s, de_world *w, de_prefab p, de_entity parent,
-                                de_entity *out_root) {
+static de_result instantiate(de_asset_system *s, de_world *w, de_prefab p, de_entity parent,
+                             de_entity *out_root, u64 *out_sids, de_entity *out_ents, u32 cap,
+                             u32 *out_count) {
     if (out_root != NULL)
         *out_root = DE_ENTITY_NULL;
     if (s == NULL || w == NULL)
@@ -213,7 +214,98 @@ de_result de_prefab_instantiate(de_asset_system *s, de_world *w, de_prefab p, de
         inst_rollback(w, ents, v->entity_count);
         if (out_root != NULL)
             *out_root = DE_ENTITY_NULL;
+    } else if (out_count != NULL) {
+        *out_count = 0;
+        for (u32 i = 0; i < v->entity_count && i < cap; ++i) {
+            out_sids[i] = de__scene_entity_at(v, i).scene_id;
+            out_ents[i] = ents[i];
+            *out_count = i + 1;
+        }
     }
     de_scratch_end(sc);
+    return r;
+}
+
+de_result de_prefab_instantiate(de_asset_system *s, de_world *w, de_prefab p, de_entity parent,
+                                de_entity *out_root) {
+    return instantiate(s, w, p, parent, out_root, NULL, NULL, 0, NULL);
+}
+
+de_result de__prefab_instantiate_ids(de_asset_system *s, de_world *w, de_prefab p,
+                                     de_entity parent, de_entity *out_root, u64 *sids,
+                                     de_entity *ents, u32 cap, u32 *count) {
+    if (count != NULL)
+        *count = 0;
+    return instantiate(s, w, p, parent, out_root, sids, ents, cap, count);
+}
+
+/* Entity references stay scene ids: the visitor sees prefab-local ids. */
+static u64 visit_sid_identity(u64 scene_id, void *user) {
+    (void)user;
+    return scene_id;
+}
+
+de_result de__prefab_visit(de_asset_system *s, de_world *w, de_prefab p, de__prefab_visit_fn fn,
+                           void *user) {
+    if (s == NULL || w == NULL || fn == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de__prefab_visit: NULL argument");
+    const de__slot *sl = de__slot_get(s, p.id);
+    if (sl == NULL || (sl->type_hash != de_hash64_str(DE__SCENE_TYPE_NAME) &&
+                       sl->type_hash != de_hash64_str(DE__PREFAB_TYPE_NAME)))
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de__prefab_visit: 0x%x is not a prefab",
+                       (unsigned)p.id);
+    const de__scene_object *o = (const de__scene_object *)de__slot_object(sl);
+    if (o == NULL)
+        return DE_FAIL(DE_ERR_NOT_FOUND, "de__prefab_visit: asset %016llx is not loaded",
+                       (unsigned long long)sl->id.hash);
+    const de__scene_view *v = &o->view;
+    const de_type_registry *reg = de_world_types(w);
+    inst_ctx ictx = {s, v, NULL};
+    de_ser_context sctx = {inst_entity_to_scene_id, visit_sid_identity, inst_asset_to_id,
+                           inst_id_to_asset, &ictx};
+    de_ser_options opt = {DE_SER_BINARY, DE_FIELD_SERIALIZE, &sctx};
+    const de_allocator *al = de_heap_allocator();
+    de_result r = DE_OK;
+    for (u32 i = 0; i < v->entity_count && r == DE_OK; ++i) {
+        de__scene_entity_rec e = de__scene_entity_at(v, i);
+        /* The entity itself, with its parent's scene id (0: a root, DENG-811). */
+        const u64 parent_sid =
+            e.parent != DE__SCENE_NO_PARENT && e.parent < v->entity_count
+                ? de__scene_entity_at(v, e.parent).scene_id
+                : 0;
+        fn(user, e.scene_id, (de_type_id){0}, NULL, &parent_sid);
+        for (u32 k = 0; k < e.component_count && r == DE_OK; ++k) {
+            de__scene_comp_rec c = de__scene_comp_at(v, e.first_component + k);
+            de__scene_type_rec tr = de__scene_type_at(v, c.type_index);
+            if (strcmp(tr.name, "DeChildOf") == 0 || strcmp(tr.name, "DeChildren") == 0)
+                continue;
+            const de_component comp = de_component_find(w, tr.name);
+            const ecs_component_info *ci =
+                DE_HANDLE_VALID(comp) ? ecs_component_get(w, comp.id) : NULL;
+            if (ci == NULL)
+                continue;
+            if (ci->size == 0) { /* a tag: present, no data */
+                fn(user, e.scene_id, ci->type, tr.name, NULL);
+                continue;
+            }
+            void *obj = DE_ALLOC(al, ci->size, ci->align > 8 ? ci->align : 8, DE_MEM_GENERAL);
+            if (obj == NULL)
+                return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de__prefab_visit: no memory");
+            memset(obj, 0, ci->size);
+            if (ci->hooks.construct != NULL)
+                ci->hooks.construct(obj);
+            de_mem_reader mr;
+            de_mem_reader_init(&mr, c.data, c.size);
+            de_reader rd = de_reader_from_mem(&mr);
+            const de_result cr = de_deserialize_binary(reg, ci->type, obj, &opt, NULL, &rd);
+            if (cr == DE_OK)
+                fn(user, e.scene_id, ci->type, tr.name, obj);
+            else
+                de_error_clear(); /* dropped at instantiate too (version mismatch) */
+            if (ci->hooks.destruct != NULL)
+                ci->hooks.destruct(obj);
+            DE_FREE(al, obj, ci->size);
+        }
+    }
     return r;
 }

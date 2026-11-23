@@ -18,6 +18,10 @@ endif()
 # Precise sleep and frame pacing (DENG-249). Label `timing`: wall-clock bounds, loosened when
 # DE_CI or CI is set (shared runners).
 de_add_test(NAME pacing SOURCES test_pacing.c LIBS de_platform LABELS unit timing)
+if(TARGET test_pacing)
+    # DENG-726: the contention test uses the internal header src/platform/de_atomic.h.
+    target_include_directories(test_pacing PRIVATE "${DE_ROOT_DIR}/src")
+endif()
 if(TARGET test_pacing AND NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR))
     # Run the timing tests alone: under `ctest -j` the stress tests of other modules preempt the
     # spin for tens of milliseconds. de_add_test() registers one CTest entry per TEST from a

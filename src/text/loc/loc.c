@@ -32,6 +32,9 @@ typedef struct loc_set {
     struct loc_set *next;
     u64 expires;
     char locale[36];
+    /* DENG-781: the fallback chain the entries were requested for, in lookup order. */
+    char chain[LOCALE_CHAIN][36];
+    u32 languages;
     u32 count, tables;
     bool reported, children_requested;
     bool pseudo;
@@ -54,6 +57,9 @@ struct de__loc {
     const de__manifest *seen_manifest;
     u64 frame;
     char desired[36], default_locale[36];
+    /* DENG-781: the game's de_loc_set_locale choice, and the editor preview that overrides it. */
+    char selected[36], preview[36];
+    bool previewing;
     bool pseudo, refresh;
     de_log_category log;
     missing_string missing[MISSING_SLOTS];
@@ -206,6 +212,8 @@ static de_result request(de__loc *loc) {
     set->count = (u32)entries;
     set->tables = tables;
     memcpy(set->locale, loc->desired, 36);
+    memcpy(set->chain, locales, sizeof set->chain);
+    set->languages = languages;
     set->pseudo = loc->pseudo;
     de_result result = DE_OK;
     for (u32 t = 0; t < tables; ++t) {
@@ -289,6 +297,7 @@ de_result de__loc_create(const de_allocator *a, de_asset_system *assets, de__loc
     loc->alloc = a;
     loc->assets = assets;
     memcpy(loc->desired, "en", 3);
+    memcpy(loc->selected, "en", 3);
     memcpy(loc->default_locale, "en", 3);
     loc->refresh = true;
     de_atomic_init_ptr(&loc->active, NULL);
@@ -313,15 +322,143 @@ void de__loc_destroy(de__loc *loc) {
     }
     DE_FREE(loc->alloc, loc, sizeof *loc);
 }
+static de_result switch_to(de__loc *loc, const char normalized[36]) {
+    if (!strcmp(loc->desired, normalized) && !loc->refresh)
+        return DE_OK;
+    memcpy(loc->desired, normalized, 36);
+    return request(loc);
+}
 de_result de__loc_set_locale(de__loc *loc, const char *locale) {
     if (!loc || !de__loc_valid_locale(locale))
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "invalid locale identifier");
     char normalized[36] = {0};
     normalize(locale, normalized);
-    if (!strcmp(loc->desired, normalized) && !loc->refresh)
+    if (loc->previewing) { /* DENG-781: applied when the preview ends */
+        memcpy(loc->selected, normalized, 36);
         return DE_OK;
-    memcpy(loc->desired, normalized, 36);
-    return request(loc);
+    }
+    DE_TRY(switch_to(loc, normalized));
+    memcpy(loc->selected, normalized, 36);
+    return DE_OK;
+}
+de_result de__loc_preview_locale(de__loc *loc, const char *locale) {
+    if (!loc)
+        return DE_ERR_INVALID_ARGUMENT;
+    if (!locale) {
+        if (!loc->previewing)
+            return DE_OK;
+        DE_TRY(switch_to(loc, loc->selected));
+        loc->previewing = false;
+        memset(loc->preview, 0, sizeof loc->preview);
+        return DE_OK;
+    }
+    if (!de__loc_valid_locale(locale))
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "invalid locale identifier");
+    char normalized[36] = {0};
+    normalize(locale, normalized);
+    DE_TRY(switch_to(loc, normalized));
+    memcpy(loc->preview, normalized, 36);
+    loc->previewing = true;
+    return DE_OK;
+}
+de_result de__loc_state(const de__loc *loc, de_loc_locale_state *out) {
+    if (!loc || !out)
+        return DE_ERR_INVALID_ARGUMENT;
+    memset(out, 0, sizeof *out);
+    memcpy(out->active, de__loc_locale(loc), strlen(de__loc_locale(loc)) + 1);
+    memcpy(out->selected, loc->selected, 36);
+    memcpy(out->preview, loc->preview, 36);
+    memcpy(out->fallback, loc->default_locale, 36);
+    out->generation = de__loc_generation(loc);
+    out->previewing = loc->previewing;
+    return DE_OK;
+}
+/* DENG-781: the locales of the published set, from each parent table (keyed by locale). */
+static const de__loc_table *parent_table(const de__loc *loc, const loc_entry *e) {
+    if (!loc->assets || !e->request.id)
+        return NULL;
+    const de__slot *slot = de__slot_get(loc->assets, de__slot_find(loc->assets, e->id));
+    const loaded_table *object = slot ? de__slot_object(slot) : NULL;
+    return object ? &object->table : NULL;
+}
+static const char *table_value(const de__loc_table *table, u32 k) {
+    const u8 *entry = table->data + 32 + (u64)k * 16;
+    return (const char *)table->data + table->blob + de__loc_u32(entry + 8);
+}
+de_result de__loc_list_locales(const de__loc *loc, de_loc_locale_info *out, u32 capacity,
+                               u32 *count) {
+    if (!loc || !count || (!out && capacity))
+        return DE_ERR_INVALID_ARGUMENT;
+    const loc_set *set = de_atomic_load_ptr(&((de__loc *)loc)->active, DE_ATOMIC_ACQUIRE);
+    /* Selection by order: no allocation, and the number of locales is small. */
+    const char *previous = NULL;
+    u32 n = 0;
+    for (;;) {
+        const char *best = NULL;
+        u32 tables = 0;
+        for (u32 t = 0; set && t < set->tables; ++t) {
+            const de__loc_table *table = parent_table(loc, &set->entries[t]);
+            for (u32 k = 0; table && k < table->count; ++k) {
+                const char *locale = table_value(table, k);
+                if (strlen(locale) >= DE_LOC_LOCALE_MAX ||
+                    (previous && strcmp(locale, previous) <= 0))
+                    continue;
+                int order = best ? strcmp(locale, best) : -1;
+                if (order < 0) {
+                    best = locale;
+                    tables = 1;
+                } else if (order == 0)
+                    ++tables;
+            }
+        }
+        if (!best)
+            break;
+        if (n < capacity) {
+            memset(&out[n], 0, sizeof out[n]);
+            memcpy(out[n].locale, best, strlen(best) + 1);
+            out[n].tables = tables;
+        }
+        ++n;
+        previous = best;
+    }
+    *count = n;
+    return DE_OK;
+}
+de_result de__loc_read_strings(const de__loc *loc, de_loc_string *out, de_asset_id *table_assets,
+                               u32 capacity, u32 *count) {
+    if (!loc || !count || (!out && capacity))
+        return DE_ERR_INVALID_ARGUMENT;
+    const loc_set *set = de_atomic_load_ptr(&((de__loc *)loc)->active, DE_ATOMIC_ACQUIRE);
+    u32 n = 0;
+    for (u32 i = set ? set->tables : 0; set && i < set->count; ++i) {
+        const de__loc_table *table = &set->entries[i].table;
+        if (!table->data)
+            continue;
+        u32 language = i / set->tables - 1;
+        for (u32 k = 0; k < table->count; ++k) {
+            const u8 *entry = table->data + 32 + (u64)k * 16;
+            de_name key = {de__loc_u64(entry)};
+            bool shadowed = false; /* de__loc_lookup returns the first entry that has the key */
+            for (u32 j = set->tables; j < i && !shadowed; ++j)
+                shadowed = de__loc_table_lookup(&set->entries[j].table, key).ptr != NULL;
+            if (shadowed)
+                continue;
+            if (n < capacity) {
+                de_loc_string *s = &out[n];
+                memset(s, 0, sizeof *s);
+                s->key = key;
+                s->key_name = de_name_str(key);
+                s->value = (de_str){table_value(table, k), de__loc_u32(entry + 12)};
+                s->locale = language < set->languages ? set->chain[language] : "";
+                s->table = i % set->tables;
+                if (table_assets)
+                    table_assets[n] = set->entries[i].id;
+            }
+            ++n;
+        }
+    }
+    *count = n;
+    return DE_OK;
 }
 de_result de__loc_set_default_locale(de__loc *loc, const char *locale) {
     if (!loc || !de__loc_valid_locale(locale))
