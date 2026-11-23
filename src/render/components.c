@@ -402,22 +402,95 @@ static de_result reg_particle_system(de_world *w, de_component *out) {
 static void construct_terrain(void *obj) {
     DeTerrain *t = (DeTerrain *)obj;
     memset(t, 0, sizeof *t);
-    t->cell_size = 1.0f;
-    t->height_scale = 100.0f;
+    /* As the DIDE mock engine (mock-engine/src/terrain.rs, protocol 1.11). */
+    t->resolution = DE_TERRAIN_RES;
+    t->size = 32.0f;
+    t->height = 32.0f;
+    for (u32 i = 0; i < DE_TERRAIN_RES * DE_TERRAIN_RES; ++i)
+        t->splat[i * DE_TERRAIN_LAYERS] = 255;
+    memcpy(t->layers[0].name, "Ground", sizeof "Ground");
+    for (u32 l = 0; l < DE_TERRAIN_LAYERS; ++l) {
+        t->layers[l].tiling = 4.0f;
+        t->layers[l].sharpness = 0.5f;
+        t->order[l] = (u8)l;
+    }
+}
+
+/* Version 1 had cell_size and height_scale beside an external heightmap blob that nothing read:
+ * they set the size (cell_size per sample step) and the height; the rest takes the defaults. */
+static bool migrate_terrain(void *obj, u32 from_version, const void *old_data,
+                            const de_field_info *old_fields, u32 old_field_count) {
+    DeTerrain *t = (DeTerrain *)obj;
+    if (from_version >= 2)
+        return true;
+    for (u32 i = 0; i < old_field_count; ++i) {
+        if (old_fields[i].kind != DE_FK_F32)
+            continue;
+        f32 v;
+        memcpy(&v, (const u8 *)old_data + old_fields[i].offset, sizeof v);
+        if (!(v > 0.0f) || v > 1e6f)
+            continue;
+        if (strcmp(old_fields[i].name, "cell_size") == 0)
+            t->size = v * (f32)(DE_TERRAIN_RES - 1);
+        else if (strcmp(old_fields[i].name, "height_scale") == 0)
+            t->height = v;
+    }
+    return true;
 }
 
 static de_result reg_terrain(de_world *w, de_component *out) {
-    static const de_field_info k_fields[] = {
-        DE_FIELD_EX(DeTerrain, heightmap, DE_FK_ASSET, ASSET_REF, {0, 0, 0, 0, "blob", 0}),
-        DE_FIELD_EX(DeTerrain, layers, DE_FK_FIXED_ARRAY, ASSET_REF,
-                    {0, 0, 0, "Splat material layers", "asset", 8}),
-        DE_FIELD_EX(DeTerrain, layer_count, DE_FK_U32, AUTHORED, {0, 8, 0, "Layers in use", 0, 0}),
-        DE_FIELD_EX(DeTerrain, cell_size, DE_FK_F32, AUTHORED,
-                    {0, 0, "m", "Distance between heightmap samples", 0, 0}),
-        DE_FIELD_EX(DeTerrain, height_scale, DE_FK_F32, AUTHORED,
-                    {0, 0, "m", "Height of the heightmap's largest value", 0, 0}),
+    static const de_field_info k_layer[] = {
+        DE_FIELD_EX(de_terrain_layer, name, DE_FK_STRING, AUTHORED, {0, 0, 0, 0, 0, 0}),
+        DE_FIELD_EX(de_terrain_layer, material, DE_FK_ASSET, ASSET_REF,
+                    {0, 0, 0, 0, "material", 0}),
+        DE_FIELD_EX(de_terrain_layer, tiling, DE_FK_F32, AUTHORED,
+                    {0.1, 100, "m", "Metres per texture repeat", 0, 0}),
+        DE_FIELD_EX(de_terrain_layer, sharpness, DE_FK_F32, AUTHORED,
+                    {0, 1, 0, "Height-blend sharpness", 0, 0}),
     };
-    return register_component(w, DE_TYPE_DESC(DeTerrain, 1, k_fields), construct_terrain, out);
+    static const de_field_info k_rule[] = {
+        DE_FIELD_EX(de_terrain_rule, enabled, DE_FK_BOOL, AUTHORED, {0, 0, 0, 0, 0, 0}),
+        DE_FIELD_EX(de_terrain_rule, layer, DE_FK_U8, AUTHORED,
+                    {0, DE_TERRAIN_LAYERS - 1, 0, "Layer slot", 0, 0}),
+        DE_FIELD_EX(de_terrain_rule, min_slope, DE_FK_F32, AUTHORED, {0, 90, "deg", 0, 0, 0}),
+        DE_FIELD_EX(de_terrain_rule, max_slope, DE_FK_F32, AUTHORED, {0, 90, "deg", 0, 0, 0}),
+        DE_FIELD_EX(de_terrain_rule, min_height, DE_FK_F32, AUTHORED, {0, 0, "m", 0, 0, 0}),
+        DE_FIELD_EX(de_terrain_rule, max_height, DE_FK_F32, AUTHORED, {0, 0, "m", 0, 0, 0}),
+        DE_FIELD_EX(de_terrain_rule, min_curvature, DE_FK_F32, AUTHORED, {0, 0, "1/m", 0, 0, 0}),
+        DE_FIELD_EX(de_terrain_rule, max_curvature, DE_FK_F32, AUTHORED, {0, 0, "1/m", 0, 0, 0}),
+    };
+    de_type_id t;
+    de_type_desc layer = DE_TYPE_DESC(de_terrain_layer, 1, k_layer);
+    de_type_desc rule = DE_TYPE_DESC(de_terrain_rule, 1, k_rule);
+    DE_TRY(ensure_type(de_world_types(w), &layer, &t));
+    DE_TRY(ensure_type(de_world_types(w), &rule, &t));
+#define RO (AUTHORED | DE_FIELD_READONLY)
+#define HIDDEN (AUTHORED | DE_FIELD_EDITOR_HIDDEN)
+    static const de_field_info k_fields[] = {
+        DE_FIELD_EX(DeTerrain, resolution, DE_FK_U32, RO, {0, 0, 0, "Samples per side", 0, 0}),
+        DE_FIELD_EX(DeTerrain, size, DE_FK_F32, RO, {0, 0, "m", "Width and depth", 0, 0}),
+        DE_FIELD_EX(DeTerrain, height, DE_FK_F32, RO, {0, 0, "m", "Height of the largest sample",
+                                                       0, 0}),
+        DE_FIELD_EX(DeTerrain, heights, DE_FK_FIXED_ARRAY, HIDDEN,
+                    {0, 0, 0, 0, "u16", DE_TERRAIN_RES * DE_TERRAIN_RES}),
+        DE_FIELD_EX(DeTerrain, splat, DE_FK_FIXED_ARRAY, HIDDEN,
+                    {0, 0, 0, 0, "u8", DE_TERRAIN_RES * DE_TERRAIN_RES * DE_TERRAIN_LAYERS}),
+        DE_FIELD_EX(DeTerrain, holes, DE_FK_FIXED_ARRAY, HIDDEN,
+                    {0, 0, 0, 0, "u8", DE_TERRAIN_RES * DE_TERRAIN_RES}),
+        DE_FIELD_EX(DeTerrain, layers, DE_FK_FIXED_ARRAY, AUTHORED,
+                    {0, 0, 0, "Splat layer slots", "de_terrain_layer", DE_TERRAIN_LAYERS}),
+        DE_FIELD_EX(DeTerrain, order, DE_FK_FIXED_ARRAY, AUTHORED,
+                    {0, DE_TERRAIN_LAYERS - 1, 0, "Layer slots in blend order, bottom first",
+                     "u8", DE_TERRAIN_LAYERS}),
+        DE_FIELD_EX(DeTerrain, rules, DE_FK_FIXED_ARRAY, AUTHORED,
+                    {0, 0, 0, "Procedural splat rules; later rules win", "de_terrain_rule",
+                     DE_TERRAIN_RULES}),
+    };
+#undef RO
+#undef HIDDEN
+    de_type_desc d = DE_TYPE_DESC(DeTerrain, 2, k_fields);
+    d.hooks.migrate = migrate_terrain;
+    return register_component(w, d, construct_terrain, out);
 }
 
 /* ---- DeWater ----------------------------------------------------------------------------- */

@@ -907,12 +907,41 @@ typedef struct DeParticleSystem {
     f32 time_scale;
     u32 seed;
 } DeParticleSystem;
+/** DeTerrain's grid (DENG-580, DIDE protocol 1.11 world.terrain): DE_TERRAIN_RES x
+ * DE_TERRAIN_RES height samples in DE_TERRAIN_TILE-sample tiles (undo keeps changed tiles only),
+ * DE_TERRAIN_LAYERS splat slots and DE_TERRAIN_RULES procedural rules. */
+#define DE_TERRAIN_RES    33u
+#define DE_TERRAIN_TILE   16u
+#define DE_TERRAIN_LAYERS 4u
+#define DE_TERRAIN_RULES  4u
+/** A splat layer slot (reflected as "de_terrain_layer"). */
+typedef struct de_terrain_layer {
+    char name[32];
+    de_material material;
+    f32 tiling;    /**< metres per texture repeat, 0.1..100 */
+    f32 sharpness; /**< height-blend sharpness, 0..1 */
+} de_terrain_layer;
+/** A procedural splat rule (reflected as "de_terrain_rule"). Where every range holds, the rule's
+ * layer replaces the painted weights; a range with max <= min is unbounded; later rules win. */
+typedef struct de_terrain_rule {
+    bool enabled;
+    u8 layer;                         /**< slot, below DE_TERRAIN_LAYERS */
+    f32 min_slope, max_slope;         /**< degrees */
+    f32 min_height, max_height;       /**< metres above the entity */
+    f32 min_curvature, max_curvature; /**< 1/m, the Laplacian of the height */
+} de_terrain_rule;
+/** A heightmap terrain, its origin the entity's position, its grid along +x and +z (version 2;
+ * version 1 had an external heightmap blob that nothing read). */
 typedef struct DeTerrain {
-    de_blob heightmap;
-    de_material layers[8];
-    u32 layer_count;
-    f32 cell_size;
-    f32 height_scale;
+    u32 resolution;                                       /**< samples per side (read-only) */
+    f32 size;                                             /**< metres per side (read-only) */
+    f32 height;                                           /**< metres at the largest sample */
+    u16 heights[DE_TERRAIN_RES * DE_TERRAIN_RES];         /**< row-major, z rows of x */
+    u8 splat[DE_TERRAIN_RES * DE_TERRAIN_RES * DE_TERRAIN_LAYERS]; /**< weights, sum 255 */
+    u8 holes[DE_TERRAIN_RES * DE_TERRAIN_RES];            /**< 1: no surface */
+    de_terrain_layer layers[DE_TERRAIN_LAYERS];
+    u8 order[DE_TERRAIN_LAYERS]; /**< layer slots in blend order, bottom first */
+    de_terrain_rule rules[DE_TERRAIN_RULES];
 } DeTerrain;
 /** The kind of a water body (DeWater.kind; reflected as "de_water_kind": ocean, river, lake). */
 typedef enum de_water_kind {
@@ -979,8 +1008,9 @@ typedef struct DeWater {
  * - DeSky: 12 h, latitude 45 degrees, turbidity 2, cloud_coverage 0.5.
  * - DeFogVolume: extent 10 x 10 x 10 m, density 0.02 /m, white albedo.
  * - DeDecal: extent 1 x 1 x 1 m, angle_fade 1. DeParticleSystem: playing, time_scale 1.
- * - DeTerrain: cell_size 1 m, height_scale 100 m. DeWater: ocean, Pierson-
- *   Moskowitz, wind (5, 0) m/s, choppiness 1, extent 64 x 8 x 64 m, width 4 m, flow_speed 1 m/s,
+ * - DeTerrain: 33 x 33 samples over 32 x 32 m, height 32 m, flat at 0, all splat weight in slot
+ *   0 ("Ground"), every layer tiling 4 m and sharpness 0.5, order 0..3, no rules enabled.
+ * - DeWater: ocean, Pierson-Moskowitz, wind (5, 0) m/s, choppiness 1, extent 64 x 8 x 64 m, width 4 m, flow_speed 1 m/s,
  *   fog_color (0.05, 0.2, 0.25, 1), fog_density 0.1 /m.
  *
  * Idempotent per world: a second call on the same world (de_renderer_attach after a world

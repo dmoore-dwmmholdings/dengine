@@ -167,6 +167,15 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
     target_sources(de_host PRIVATE editor/editor_water.c)
 endif()
 
+# DENG-580: terrain.info/sample/exportHeightmap and the terrain.* edit ops (DIDE protocol 1.11,
+# world.terrain). DeTerrain is a render component. png16 uses stb_image (linked with render below);
+# exr heightmaps use tinyexr in Debug and Dev only, as the path tracer export does.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
+    target_sources(de_host PRIVATE editor/editor_terrain.c)
+    target_link_libraries(de_host PRIVATE "$<$<CONFIG:Debug,Dev>:de_tp_tinyexr>")
+    set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS "$<$<CONFIG:Debug,Dev>:de_tp_tinyexr>")
+endif()
+
 # DENG-778: ui.layout (DIDE protocol 1.14, ui.editor) reads the UI module's layout preview.
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_UI)
     target_sources(de_host PRIVATE editor/editor_ui.c)
