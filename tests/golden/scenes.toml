@@ -596,3 +596,31 @@ size = [1280, 720]
 tiers = ["base"]
 threshold_mean = 0.002
 threshold_p99 = 0.02
+
+[scene.sky_sunrise]
+description = "Physical sky at sunrise, latitude 45, day 80, looking east over a lit ground slab and columns; the sky drives the sun light (DENG-837, DENG-206 AC1)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.sky_noon]
+description = "Physical sky at noon, latitude 45, day 80, looking south over a lit ground slab and columns (DENG-837, DENG-206 AC1)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.sky_sunset]
+description = "Physical sky at sunset, latitude 45, day 80, looking west over a lit ground slab and columns (DENG-837, DENG-206 AC1)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.sky_night]
+description = "Physical sky at night, latitude 45, day 80: the night sky and the moon-driven light over the ground slab and columns (DENG-837, DENG-206 AC1)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
