@@ -56,7 +56,9 @@ TEST_F(shape_cache, fallback_identity_change_with_repeated_generation_changes_ke
     de__text_lock(runtime);
     de__text_watch_font(f->t, f->emoji);
     de__text_unlock(runtime);
-    EXPECT_EQ(observed_generation, next_generation);
+    // The watch high-water already absorbed the integrated generation, so the
+    // replacement advances past it rather than reusing it (DENG-690).
+    EXPECT_EQ(observed_generation, next_generation + 1);
     EXPECT_NE(observed_epoch, old_epoch);
     EXPECT_NE(old_hash, new_hash);
     EXPECT_NE(before.generations, after.generations);
