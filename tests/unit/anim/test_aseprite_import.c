@@ -61,7 +61,7 @@ TEST_F(aseprite_import, builtin_atlas_clip_geometry_tags_slices_and_keep_layers,
     de_asset_type_desc descriptor;
     ASSERT_TRUE(de_cooker_builtin_importer("aseprite", &descriptor));
     EXPECT_EQ(descriptor.extension_count, 2u);
-    EXPECT_EQ(descriptor.importer_version, 2u);
+    EXPECT_EQ(descriptor.importer_version, 3u);
     const de__manifest_kv settings[] = {
         {.key = "layers", .value = {.type = DE_ASSET_SETTING_STRING, .u.s = "keep"}},
         {.key = "pixels_per_meter", .value = {.type = DE_ASSET_SETTING_INT, .u.i = 20}},
@@ -122,6 +122,90 @@ TEST_F(aseprite_import, builtin_atlas_clip_geometry_tags_slices_and_keep_layers,
     /* Hidden green pixels at (0,0) cannot expand the measured bounds. */
     const de__sprite_frame frame = de__sprite_frame_at(&layer, 0);
     EXPECT_EQ(frame.trim[0], 1u);
+}
+/* DENG-827: per-frame events come from the user-data text of cels, one `event: <name>` line each
+ * (tests/data/aseprite/generate.py, events.aseprite). */
+static void load_source(ase_import_fx *f, const char *name) {
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s", DE_ASEPRITE_DATA_DIR, name);
+    FILE *file = fopen(path, "rb");
+    ASSERT_TRUE(file != NULL);
+    f->source_bytes = fread(f->source, 1, sizeof f->source, file);
+    const bool ok = feof(file) && !ferror(file);
+    fclose(file);
+    ASSERT_TRUE(ok);
+}
+static u32 events_of(const de__sprite_clip_view *v, de__sprite_event *out, u32 cap) {
+    u32 n = v->event_count < cap ? v->event_count : cap;
+    for (u32 i = 0; i < n; ++i)
+        out[i] = de__sprite_event_at(v, i);
+    return v->event_count;
+}
+/* The events a clip must hold, by (frame, hash) as the format stores them. */
+static void expect_events(const de__sprite_clip_view *v, const u32 *frames,
+                          const char *const *names, u32 count) {
+    ASSERT_EQ(v->event_count, count);
+    de__sprite_event got[16];
+    ASSERT_GE(16u, count);
+    (void)events_of(v, got, 16);
+    for (u32 i = 0; i < count; ++i) {
+        bool found = false;
+        for (u32 k = 0; k < count && !found; ++k)
+            found = got[k].frame == frames[i] && got[k].name == de_hash64_str(names[i]);
+        EXPECT_TRUE(found);
+    }
+}
+TEST_F(aseprite_import, cel_user_data_event_lines_become_clip_events, ase_import_fx) {
+    load_source(f, "events.aseprite");
+    f->ctx.source_rel = "events.aseprite";
+    const de__manifest_kv keep[] = {
+        {.key = "layers", .value = {.type = DE_ASSET_SETTING_STRING, .u.s = "keep"}}};
+    de__import_ctx_release(&f->ctx);
+    de__import_ctx_init(&f->ctx, f->cooker, &f->type);
+    f->ctx.source = f->source;
+    f->ctx.source_size = f->source_bytes;
+    f->ctx.source_rel = "events.aseprite";
+    f->ctx.id_str = "hero/events";
+    f->ctx.id = de_asset_id_from(f->ctx.id_str);
+    f->ctx.settings = keep;
+    f->ctx.setting_count = 1;
+    ASSERT_EQ(de__cooker_run_import(&f->ctx), DE_OK);
+    ASSERT_EQ(f->ctx.sub_count, 3u);
+    EXPECT_STREQ(f->ctx.subs[1].name, "layer/Body");
+    EXPECT_STREQ(f->ctx.subs[2].name, "layer/Fx");
+    /* The flattened clip: every cel's lines, an event of two layers once, empty names, other
+     * text and a wrong-case prefix ignored, a UTF-8 name hashed by its bytes. */
+    de__sprite_clip_view all;
+    ASSERT_TRUE(de__sprite_clip_parse(f->ctx.out, f->ctx.out_size, &all, NULL));
+    EXPECT_EQ(all.frame_count, 4u);
+    const u32 all_frames[] = {0, 0, 2, 2, 2, 3};
+    const char *const all_names[] = {"footstep", "spark", "footstep", "land", "hit",
+                                     "\xc3\xa9t\xc3\xa9"};
+    expect_events(&all, all_frames, all_names, 6);
+    /* A keep-layers clip has the events of its own layer's cels. */
+    de__sprite_clip_view body, fx;
+    ASSERT_TRUE(
+        de__sprite_clip_parse(f->ctx.subs[1].data, f->ctx.subs[1].size, &body, NULL));
+    ASSERT_TRUE(de__sprite_clip_parse(f->ctx.subs[2].data, f->ctx.subs[2].size, &fx, NULL));
+    const u32 body_frames[] = {0, 2, 2, 2, 3};
+    const char *const body_names[] = {"footstep", "footstep", "land", "hit", "\xc3\xa9t\xc3\xa9"};
+    expect_events(&body, body_frames, body_names, 5);
+    const u32 fx_frames[] = {0, 2};
+    const char *const fx_names[] = {"spark", "land"};
+    expect_events(&fx, fx_frames, fx_names, 2);
+    /* The records are in the format's canonical order, and the tables around them still agree. */
+    EXPECT_EQ(all.slice_count, 0u);
+    EXPECT_EQ(all.tag_count, 0u);
+}
+TEST_F(aseprite_import, a_source_without_event_lines_has_no_events_and_a_new_cook_is_identical,
+       ase_import_fx) {
+    ASSERT_EQ(cook(f, NULL, 0), DE_OK);
+    de__sprite_clip_view v;
+    ASSERT_TRUE(de__sprite_clip_parse(f->ctx.out, f->ctx.out_size, &v, NULL));
+    EXPECT_EQ(v.event_count, 0u);
+    /* Events do not move the other tables: the events offset equals the slice offset. */
+    EXPECT_EQ(de_cooked_get_u32((const u8 *)f->ctx.out + 32),
+              de_cooked_get_u32((const u8 *)f->ctx.out + 80));
 }
 TEST_F(aseprite_import, full_cooker_twice_is_byte_identical_on_files_and_subassets, ase_import_fx) {
     de_asset_type_desc descriptor;

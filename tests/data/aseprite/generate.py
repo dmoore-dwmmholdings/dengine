@@ -195,6 +195,19 @@ def main():
     files["slice-overrides.aseprite"] = document([
         frame([layer(), cel(bytes([123, 45, 67, 255])), *bare_slices]),
         frame([cel(b"", kind=1, linked=0)])], width=8, height=6)
+    # DENG-827: events from cel user data. Body and Fx are visible layers (two keep-layers clips).
+    pixel = bytes([255, 0, 0, 255])
+    files["events.aseprite"] = document([
+        frame([layer("Body"), layer("Fx"),
+               cel(pixel, index=0, x=1, y=1), user("event: footstep\nnote: free text"),
+               cel(pixel, index=1, x=2, y=1), user("event:spark")]),
+        frame([cel(pixel, index=0, x=1, y=1), user("just a note"),
+               cel(pixel, index=1, x=2, y=1)], ms=40),
+        frame([cel(pixel, index=0, x=1, y=1),
+               user("event: footstep\r\nevent: land\r\n  event:\thit \t\r\nEvent: no"),
+               cel(pixel, index=1, x=2, y=1), user("event: land")], ms=60),
+        frame([cel(pixel, index=0, x=1, y=1), user("event:  \nevent:\nevent: \u00e9t\u00e9")],
+              ms=80)], width=8, height=6)
     # Independent little-endian DSCP v2 seed for the shared cooked-format fuzz reader.
     dscp = bytearray(248)
     dscp[:4] = b"DSCP"
