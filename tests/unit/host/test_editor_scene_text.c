@@ -1,3 +1,6 @@
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS /* getenv, fopen */
+#endif
 #include "de_test.h"
 #if !defined(DE_SHIPPING)
 #include "host/editor/editor_gizmo.h"

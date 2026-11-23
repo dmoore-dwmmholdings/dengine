@@ -1,3 +1,6 @@
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS /* strtok, via the included editor_assets.c */
+#endif
 #include "de_test.h"
 #include "host/editor/editor_internal.h"
 #include "host/host_internal.h"
