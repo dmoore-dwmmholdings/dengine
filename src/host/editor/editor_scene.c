@@ -16,6 +16,7 @@
 #include <dengine/de_platform.h>
 
 #include "asset/scene/scene_format.h"
+#include "asset/hot_reload_internal.h"
 #include "asset/slots_internal.h"
 #include "core/de_toml_internal.h"
 #include "ecs/ecs_internal.h"
@@ -1985,11 +1986,32 @@ static void on_overrides(de__editor *ed, const de_ep_request *req, de_ep_arena *
     de_ep_write_result_end(w);
 }
 
+/* ---------- Prefab source files (DENG-798) ----------
+ *
+ * A prefab.state op that changes definitions also writes their `*.prefab.toml` sources, before
+ * anything changes in memory. Its inverse carries each file's old bytes and a hash of the bytes
+ * written, so undo and redo restore exact bytes, and refuse ("source_changed") when the file was
+ * changed outside the editor in between. Every file is probed for writing first; a failed write
+ * puts back the files already written. */
+
+#define ED_FILES_MAX 128u
+
+static struct {
+    const char *reason; /* why the last prefab.state failed, for prefab_error */
+    u32 written;
+    char assets[ED_FILES_MAX][256];
+} g_files;
+
+const char *de__ed_prefab_fail_reason(void) {
+    return g_files.reason;
+}
+
 /* A planned definition change, and a planned instance base change. */
 typedef struct pf_dchg {
     ed_def *d;
     u64 sid;
     de_ep_raw old, val;
+    bool follow; /* a dependent that inherits the field (DENG-798) */
 } pf_dchg;
 
 typedef struct pf_bchg {
@@ -2105,7 +2127,7 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
             return;
         }
         dc[nd++] = (pf_dchg){lv[k].d, lv[k].sid, dval_raw(lv[k].d, def_get(lv[k].d, lv[k].sid, path)),
-                             v};
+                             v, false};
     }
     /* Dependents that did not set the field follow, level by level. */
     for (u32 i = 0; i < nd; ++i) {
@@ -2131,7 +2153,7 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
                                  "the change reaches too many prefabs");
                     return;
                 }
-                dc[nd++] = (pf_dchg){e, ev->sid, dval_raw(e, ev), next};
+                dc[nd++] = (pf_dchg){e, ev->sid, dval_raw(e, ev), next, true};
             }
         }
     }
@@ -2185,7 +2207,7 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
     mpack_write_cstr(&mw, "defs");
     mpack_start_array(&mw, nd);
     for (u32 i = 0; i < nd; ++i) {
-        mpack_start_map(&mw, 4);
+        mpack_start_map(&mw, 5);
         mpack_write_cstr(&mw, "asset");
         mpack_write_cstr(&mw, dc[i].d->asset);
         mpack_write_cstr(&mw, "sid");
@@ -2194,6 +2216,8 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
         mpack_write_cstr(&mw, path);
         mpack_write_cstr(&mw, "value");
         mpack_write_object_bytes(&mw, dc[i].val.ptr, dc[i].val.len);
+        mpack_write_cstr(&mw, "follow");
+        mpack_write_bool(&mw, dc[i].follow);
         mpack_finish_map(&mw);
     }
     mpack_finish_array(&mw);
@@ -2229,13 +2253,20 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
         ents[i] = bc[i].entity;
     de_ep_error code = DE_EP_OK;
     char msg[256];
+    g_files.reason = NULL;
+    g_files.written = 0;
     const u32 tx = de__ed_edit_run(ed, a, x.tx, instance_scene(root), ops, no, &code, msg, sizeof msg);
     if (tx == 0) {
-        prefab_error(w, req->id, code, "edit", "%s", msg);
+        prefab_error(w, req->id, code, g_files.reason ? g_files.reason : "edit", "%s", msg);
         return;
     }
     de_ep_write_result_begin(w, req->id);
-    mpack_start_map(w, 4);
+    mpack_start_map(w, 5);
+    mpack_write_cstr(w, "files"); /* the prefab sources written (DENG-798) */
+    mpack_start_array(w, g_files.written);
+    for (u32 i = 0; i < g_files.written; ++i)
+        mpack_write_cstr(w, g_files.assets[i]);
+    mpack_finish_array(w);
     mpack_write_cstr(w, "tx");
     mpack_write_u32(w, tx);
     mpack_write_cstr(w, "revision");
@@ -2323,6 +2354,7 @@ typedef struct pf_entry {
     u64 sid, root, entity;
     char path[128];
     de_ep_raw val;
+    bool follow;
 } pf_entry;
 
 static u32 state_read(mpack_reader_t *r, de_ep_arena *a, pf_entry **out) {
@@ -2346,6 +2378,8 @@ static u32 state_read(mpack_reader_t *r, de_ep_arena *a, pf_entry **out) {
                 e[i].root = mpack_expect_u64(r);
             } else if (strcmp(key, "entity") == 0) {
                 e[i].entity = mpack_expect_u64(r);
+            } else if (strcmp(key, "follow") == 0) {
+                e[i].follow = mpack_expect_bool(r);
             } else if (strcmp(key, "value") == 0) {
                 const char *begin = r->data;
                 mpack_discard(r);
@@ -2361,11 +2395,172 @@ static u32 state_read(mpack_reader_t *r, de_ep_arena *a, pf_entry **out) {
     return mpack_reader_error(r) == mpack_ok ? n : 0;
 }
 
+/* One `files` entry: the exact bytes to write, and the hash the file must have now. */
+typedef struct pf_snap {
+    char asset[256];
+    de_ep_raw bytes;
+    bool has_expect;
+    u64 expect;
+} pf_snap;
+
+static u32 snaps_read(mpack_reader_t *r, de_ep_arena *a, pf_snap **out) {
+    const u32 n = mpack_expect_array_max(r, ED_FILES_MAX);
+    pf_snap *e = n ? (pf_snap *)de__ed_alloc(a, sizeof(pf_snap) * n) : NULL;
+    if (n && e == NULL)
+        mpack_reader_flag_error(r, mpack_error_memory);
+    for (u32 i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        memset(&e[i], 0, sizeof e[i]);
+        const u32 keys = mpack_expect_map(r);
+        for (u32 k = 0; k < keys && mpack_reader_error(r) == mpack_ok; ++k) {
+            char key[16];
+            mpack_expect_cstr(r, key, sizeof key);
+            if (strcmp(key, "asset") == 0) {
+                mpack_expect_cstr(r, e[i].asset, sizeof e[i].asset);
+            } else if (strcmp(key, "bytes") == 0) {
+                const u32 len = mpack_expect_bin(r);
+                const char *p = len ? mpack_read_bytes_inplace(r, len) : "";
+                e[i].bytes = (de_ep_raw){p, len};
+                mpack_done_bin(r);
+            } else if (strcmp(key, "expect") == 0) {
+                e[i].has_expect = true;
+                e[i].expect = mpack_expect_u64(r);
+            } else {
+                mpack_discard(r);
+            }
+        }
+        mpack_done_map(r);
+    }
+    mpack_done_array(r);
+    *out = e;
+    return mpack_reader_error(r) == mpack_ok ? n : 0;
+}
+
+typedef struct pf_file {
+    const char *asset;
+    char vpath[1024];
+    void *old;
+    u64 old_len;
+    const char *next;
+    size_t next_len;
+    char *owned;
+    size_t owned_len;
+    bool write;
+} pf_file;
+
+static void files_release(pf_file *f, u32 n) {
+    for (u32 i = 0; i < n; ++i) {
+        if (f[i].old != NULL)
+            DE_FREE(de_heap_allocator(), f[i].old, f[i].old_len + 1);
+        de__ed_prefab_source_free(f[i].owned, f[i].owned_len);
+        f[i].old = NULL;
+        f[i].owned = NULL;
+    }
+}
+
+static bool files_fail(de_ep_error *code, char *msg, size_t cap, de_ep_error c, const char *reason,
+                       const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, cap, fmt, ap);
+    va_end(ap);
+    *code = c;
+    g_files.reason = reason;
+    return false;
+}
+
+/* Reads every source the op touches and works out its new bytes; nothing is written yet. */
+static bool files_prepare(de__editor *ed, de_ep_arena *a, const pf_entry *defs, u32 nd,
+                          const pf_snap *snaps, u32 ns, bool replay, pf_file *files, u32 *nf,
+                          de_ep_error *code, char *msg, size_t cap) {
+    *nf = 0;
+    const u32 want = replay ? ns : nd;
+    for (u32 i = 0; i < want; ++i) {
+        const char *asset = replay ? snaps[i].asset : defs[i].asset;
+        bool seen = false;
+        for (u32 k = 0; k < *nf && !seen; ++k)
+            seen = strcmp(files[k].asset, asset) == 0;
+        if (seen)
+            continue;
+        pf_file *f = &files[(*nf)++];
+        memset(f, 0, sizeof *f);
+        f->asset = asset;
+        if (!de__ed_asset_source_vpath(ed, asset, f->vpath, sizeof f->vpath) ||
+            de_file_read_all(f->vpath, de_heap_allocator(), &f->old, &f->old_len) != DE_OK) {
+            de_error_clear();
+            f->old = NULL;
+            return files_fail(code, msg, cap, DE_EP_ERR_UNSUPPORTED, "no_source",
+                              "prefab %s has no readable source file", asset);
+        }
+        if (replay) {
+            if (snaps[i].has_expect && de_hash64(f->old, (size_t)f->old_len, 0) != snaps[i].expect)
+                return files_fail(code, msg, cap, DE_EP_ERR_CONFLICT, "source_changed",
+                                  "%s changed outside the editor", f->vpath);
+            f->next = snaps[i].bytes.ptr;
+            f->next_len = snaps[i].bytes.len;
+        } else {
+            de__ed_src_edit *edits = (de__ed_src_edit *)de__ed_alloc(a, sizeof(de__ed_src_edit) * nd);
+            if (edits == NULL)
+                return files_fail(code, msg, cap, DE_EP_ERR_BUSY, "memory", "out of scratch memory");
+            u32 ne = 0;
+            for (u32 k = 0; k < nd; ++k)
+                if (strcmp(defs[k].asset, asset) == 0)
+                    edits[ne++] = (de__ed_src_edit){defs[k].sid, defs[k].path, defs[k].val.ptr,
+                                                    defs[k].val.len, defs[k].follow};
+            char why[200];
+            const char *reason =
+                de__ed_prefab_source_edit(ed->e->types, (const char *)f->old, (size_t)f->old_len,
+                                          edits, ne, &f->owned, &f->owned_len, why, sizeof why);
+            if (reason != NULL)
+                return files_fail(code, msg, cap,
+                                  strcmp(reason, "memory") == 0 ? DE_EP_ERR_BUSY
+                                                                : DE_EP_ERR_UNSUPPORTED,
+                                  reason, "%s: %s", f->vpath, why);
+            f->next = f->owned;
+            f->next_len = f->owned_len;
+        }
+        f->write = f->next_len != f->old_len || memcmp(f->next, f->old, f->next_len) != 0;
+    }
+    /* An atomic replace can rename over a read-only file: ask for write access first. */
+    for (u32 i = 0; i < *nf; ++i) {
+        de_file *h = NULL;
+        if (!files[i].write)
+            continue;
+        if (de_file_open(files[i].vpath, DE_FILE_APPEND, &h) != DE_OK) {
+            de_error_clear();
+            return files_fail(code, msg, cap, DE_EP_ERR_INTERNAL, "write", "%s is not writable",
+                              files[i].vpath);
+        }
+        de_file_close(h);
+    }
+    return true;
+}
+
+/* Writes the new bytes; on a failure puts back the files already written. */
+static bool files_commit(pf_file *files, u32 nf, de_ep_error *code, char *msg, size_t cap) {
+    for (u32 i = 0; i < nf; ++i) {
+        if (!files[i].write)
+            continue;
+        if (de_file_write_all_atomic(files[i].vpath, files[i].next, files[i].next_len) == DE_OK)
+            continue;
+        de_error_clear();
+        for (u32 k = 0; k < i; ++k)
+            if (files[k].write &&
+                de_file_write_all_atomic(files[k].vpath, files[k].old, files[k].old_len) != DE_OK)
+                de_error_clear();
+        return files_fail(code, msg, cap, DE_EP_ERR_INTERNAL, "write", "could not write %s",
+                          files[i].vpath);
+    }
+    return true;
+}
+
 bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_raw *inv,
                          de_ep_error *code, char *msg, size_t msg_cap) {
-    (void)ed;
     pf_entry *defs = NULL, *bases = NULL;
-    u32 nd = 0, nb = 0;
+    pf_snap *snaps = NULL;
+    u32 nd = 0, nb = 0, ns = 0;
+    bool replay = false;
+    g_files.reason = NULL;
+    g_files.written = 0;
     mpack_reader_t r;
     mpack_reader_init_data(&r, value.ptr, value.len);
     const u32 keys = mpack_expect_map(&r);
@@ -2376,7 +2571,10 @@ bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_
             nd = state_read(&r, a, &defs);
         else if (strcmp(key, "bases") == 0)
             nb = state_read(&r, a, &bases);
-        else
+        else if (strcmp(key, "files") == 0) {
+            replay = true;
+            ns = snaps_read(&r, a, &snaps);
+        } else
             mpack_discard(&r);
     }
     mpack_done_map(&r);
@@ -2403,16 +2601,48 @@ bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_
             return false;
         }
     }
-    /* The inverse: the same entries with the old values. */
+    /* The sources: read and edited, then checked for write access. */
+    pf_file *files = NULL;
+    u32 nf = 0;
+    const u32 fcap = replay ? ns : nd;
+    if (fcap != 0) {
+        files = (pf_file *)de__ed_alloc(a, sizeof(pf_file) * fcap);
+        if (files == NULL)
+            return files_fail(code, msg, msg_cap, DE_EP_ERR_BUSY, "memory",
+                              "out of scratch memory");
+    }
+    if (!files_prepare(ed, a, defs, nd, snaps, ns, replay, files, &nf, code, msg, msg_cap)) {
+        files_release(files, nf);
+        return false;
+    }
+    /* The inverse: the same entries with the old values, and the old bytes of each file. */
     mpack_writer_t mw;
     de__ed_raw_begin(a, &mw);
-    mpack_start_map(&mw, 2);
+    mpack_start_map(&mw, 3);
+    mpack_write_cstr(&mw, "files");
+    u32 nw = 0;
+    for (u32 i = 0; i < nf; ++i)
+        nw += files[i].write;
+    mpack_start_array(&mw, nw);
+    for (u32 i = 0; i < nf; ++i) {
+        if (!files[i].write)
+            continue;
+        mpack_start_map(&mw, 3);
+        mpack_write_cstr(&mw, "asset");
+        mpack_write_cstr(&mw, files[i].asset);
+        mpack_write_cstr(&mw, "bytes");
+        mpack_write_bin(&mw, (const char *)files[i].old, (u32)files[i].old_len);
+        mpack_write_cstr(&mw, "expect");
+        mpack_write_u64(&mw, de_hash64(files[i].next, files[i].next_len, 0));
+        mpack_finish_map(&mw);
+    }
+    mpack_finish_array(&mw);
     mpack_write_cstr(&mw, "defs");
     mpack_start_array(&mw, nd);
     for (u32 i = 0; i < nd; ++i) {
         const ed_def *d = def_find(defs[i].asset);
         const de_ep_raw old = dval_raw(d, def_get(d, defs[i].sid, defs[i].path));
-        mpack_start_map(&mw, 4);
+        mpack_start_map(&mw, 5);
         mpack_write_cstr(&mw, "asset");
         mpack_write_cstr(&mw, defs[i].asset);
         mpack_write_cstr(&mw, "sid");
@@ -2421,6 +2651,8 @@ bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_
         mpack_write_cstr(&mw, defs[i].path);
         mpack_write_cstr(&mw, "value");
         mpack_write_object_bytes(&mw, old.ptr, old.len);
+        mpack_write_cstr(&mw, "follow");
+        mpack_write_bool(&mw, defs[i].follow);
         mpack_finish_map(&mw);
     }
     mpack_finish_array(&mw);
@@ -2445,10 +2677,25 @@ bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_
     mpack_finish_map(&mw);
     *inv = de__ed_raw_end(a, &mw);
     if (inv->len == 0) {
-        *code = DE_EP_ERR_BUSY;
-        snprintf(msg, msg_cap, "out of scratch memory");
+        files_release(files, nf);
+        return files_fail(code, msg, msg_cap, DE_EP_ERR_BUSY, "too_large",
+                          "the prefab sources do not fit in scratch memory");
+    }
+    if (!files_commit(files, nf, code, msg, msg_cap)) {
+        files_release(files, nf);
         return false;
     }
+    /* Recook what was written (a no-op with hot reload off). */
+    for (u32 i = 0; i < nf; ++i) {
+        if (!files[i].write)
+            continue;
+        if (ed->e->assets != NULL)
+            (void)de__asset_reload_queue(ed->e->assets, de_asset_id_from(files[i].asset));
+        if (g_files.written < ED_FILES_MAX)
+            snprintf(g_files.assets[g_files.written++], sizeof g_files.assets[0], "%s",
+                     files[i].asset);
+    }
+    files_release(files, nf);
     bool ok = true;
     for (u32 i = 0; i < nd; ++i)
         ok &= def_put(def_find(defs[i].asset), defs[i].sid, defs[i].path, defs[i].val.ptr,

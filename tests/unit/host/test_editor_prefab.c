@@ -2,6 +2,8 @@
 #if !defined(DE_SHIPPING)
 #include "host/editor/editor_internal.h"
 #include "host/host_internal.h"
+#include "asset/hot_reload_internal.h"
+#include "asset/load_internal.h"
 #include <dengine/de_asset.h>
 #include <dengine/de_ecs.h>
 #include <dengine/de_math.h>
@@ -9,6 +11,9 @@
 #include <dengine/de_task.h>
 #include <math.h>
 #include <stdio.h>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 /* Actual editor handlers and CPU gizmo input; no renderer, window or transport. */
 typedef struct safety_fx {
@@ -19,6 +24,7 @@ typedef struct safety_fx {
     de_task_system *tasks;
     unsigned char arena[65536];
     char note[32768];
+    char copy[128]; /* DENG-798: "tmp798:/<dir>", the writable copy of the prefab fixtures */
 } safety_fx;
 
 static void safety_fx_setup(safety_fx *f) {
@@ -35,9 +41,11 @@ static void safety_fx_setup(safety_fx *f) {
     f->ed.note = f->note;
     f->ed.note_cap = sizeof f->note;
 }
+static void copy_remove(safety_fx *f);
 static void safety_fx_teardown(safety_fx *f) {
     for (u32 i = 0; i < f->ed.reset_count; ++i)
         f->ed.resets[i](&f->ed);
+    copy_remove(f);
     de_world_destroy(f->engine.world);
     if (f->engine.assets)
         de_asset_system_destroy(f->engine.assets);
@@ -373,7 +381,93 @@ typedef struct pf_world {
     de_component health, target;
 } pf_world;
 
+/* ---------- DENG-798: a writable copy of the fixtures, so apply can write the sources -------- */
+
+typedef struct copy_ctx {
+    const char *from, *to;
+    bool ok;
+} copy_ctx;
+
+static bool copy_one(const char *name, bool is_dir, void *user) {
+    copy_ctx *c = user;
+    if (is_dir)
+        return true;
+    char from[512], to[512];
+    snprintf(from, sizeof from, "%s/%s", c->from, name);
+    snprintf(to, sizeof to, "%s/%s", c->to, name);
+    void *data = NULL;
+    u64 size = 0;
+    c->ok = c->ok && de_file_read_all(from, de_heap_allocator(), &data, &size) == DE_OK &&
+            de_file_write_all_atomic(to, data, size) == DE_OK;
+    if (data != NULL)
+        DE_FREE(de_heap_allocator(), data, size + 1);
+    return c->ok;
+}
+
+static bool delete_one(const char *name, bool is_dir, void *user) {
+    char path[512];
+    if (!is_dir) {
+        snprintf(path, sizeof path, "%s/%s", (const char *)user, name);
+        (void)de_file_delete(path);
+    }
+    return true;
+}
+
+static void native_rmdir(const char *vpath) {
+    char native[1024];
+    if (de_fs_resolve(vpath, native, sizeof native) == DE_OK)
+        (void)remove(native);
+}
+
+/* Copies tests/unit/asset/data/scenes to a new directory under the build tree and mounts it,
+ * writable, as safe676:/. */
+static void copy_fixtures(safety_fx *f) {
+    static u32 counter;
+    ASSERT_EQ(de_fs_mount("src798", DE_EDITOR_SAFETY_DATA_DIR, 0, 0), DE_OK);
+    ASSERT_EQ(de_fs_mount("tmp798", DE_EDITOR_PREFAB_TMP_DIR, DE_MOUNT_WRITABLE, 0), DE_OK);
+#if defined(_WIN32)
+    const unsigned pid = 0;
+#else
+    const unsigned pid = (unsigned)getpid();
+#endif
+    snprintf(f->copy, sizeof f->copy, "tmp798:/%u-%llx-%u", pid,
+             (unsigned long long)de_time_now_ns(), ++counter);
+    char assets[256], native[1024];
+    snprintf(assets, sizeof assets, "%s/assets", f->copy);
+    ASSERT_EQ(de_dir_create(f->copy), DE_OK);
+    ASSERT_EQ(de_dir_create(assets), DE_OK);
+    copy_ctx top = {"src798:", f->copy, true};
+    ASSERT_TRUE(copy_one("assets.toml", false, &top));
+    copy_ctx all = {"src798:/assets", assets, true};
+    ASSERT_EQ(de_dir_list("src798:/assets", copy_one, &all), DE_OK);
+    ASSERT_TRUE(all.ok);
+    ASSERT_EQ(de_fs_resolve(f->copy, native, sizeof native), DE_OK);
+    ASSERT_EQ(de_fs_mount("safe676", native, DE_MOUNT_WRITABLE, 0), DE_OK);
+}
+
+static void copy_remove(safety_fx *f) {
+    if (f->copy[0] == 0)
+        return;
+    char assets[256], native[1024];
+    snprintf(assets, sizeof assets, "%s/assets", f->copy);
+    (void)de_dir_list(assets, delete_one, assets);
+    (void)de_dir_list(f->copy, delete_one, f->copy);
+    const bool resolved = de_fs_resolve(f->copy, native, sizeof native) == DE_OK;
+    native_rmdir(assets);
+    native_rmdir(f->copy);
+    if (resolved)
+        (void)de_fs_unmount("safe676", native);
+    (void)de_fs_unmount("tmp798", DE_EDITOR_PREFAB_TMP_DIR);
+    (void)de_fs_unmount("src798", DE_EDITOR_SAFETY_DATA_DIR);
+    f->copy[0] = 0;
+}
+
+static pf_world prefab_world_ex(safety_fx *f, bool hot_reload);
 static pf_world prefab_world(safety_fx *f) {
+    return prefab_world_ex(f, false);
+}
+
+static pf_world prefab_world_ex(safety_fx *f, bool hot_reload) {
     pf_world p;
     p.health = register_health(f);
     ASSERT_TRUE(DE_HANDLE_VALID(
@@ -381,15 +475,18 @@ static pf_world prefab_world(safety_fx *f) {
     p.target = de_component_register(f->engine.world, de_type_find(f->engine.types, "TTarget"),
                                      DE_COMP_SERIALIZE);
     ASSERT_TRUE(DE_HANDLE_VALID(p.target));
-    ASSERT_EQ(de_fs_mount("safe676", DE_EDITOR_SAFETY_DATA_DIR, 0, 0), DE_OK);
+    copy_fixtures(f);
     de_fp_env_init_thread();
     ASSERT_EQ(de_task_system_create(&(de_task_system_desc){.worker_count = 1}, &f->tasks), DE_OK);
     ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.tasks = f->tasks,
                                                              .types = f->engine.types,
                                                              .io_threads = 1,
-                                                             .cache_dir = "nocache676:/cache"},
+                                                             .cache_dir = "nocache676:/cache",
+                                                             .hot_reload = hot_reload},
                                      &f->engine.assets),
               DE_OK);
+    if (hot_reload)
+        de__asset_reload_set_watching(f->engine.assets, false); /* the test drives it */
     ASSERT_EQ(de_asset_manifest_load(f->engine.assets, "safe676:/assets.toml"), DE_OK);
     de__ed_scene_register(&f->ed);
     de__ed_edit_register(&f->ed);
@@ -747,6 +844,281 @@ TEST_F(editor_prefab_overrides, errors_are_structured, safety_fx) {
                  "play_mode");
     f->ed.mode = DE_EP_WORLD_MODE_EDIT;
     EXPECT_FLOAT_EQ(((THealth *)de_entity_get(f->engine.world, a, p.health))->max, 3, 0);
+}
+
+/* ---------- DENG-798: apply writes the prefab sources ---------- */
+
+#define CRATE "safe676:/assets/crate.prefab.toml"
+#define HEAVY "safe676:/assets/crate_heavy.prefab.toml"
+#define STACK "safe676:/assets/stack.prefab.toml"
+
+typedef struct text {
+    char s[4096];
+    size_t n;
+} text;
+
+static text read_text(const char *vpath) {
+    text t;
+    memset(&t, 0, sizeof t);
+    void *data = NULL;
+    u64 size = 0;
+    ASSERT_EQ(de_file_read_all(vpath, de_heap_allocator(), &data, &size), DE_OK);
+    ASSERT_TRUE(size < sizeof t.s);
+    memcpy(t.s, data, (size_t)size);
+    t.n = (size_t)size;
+    DE_FREE(de_heap_allocator(), data, size + 1);
+    return t;
+}
+
+static bool text_eq(text a, text b) {
+    return a.n == b.n && memcmp(a.s, b.s, a.n) == 0;
+}
+
+/* `t` with the one occurrence of `from` (which must be there) replaced by `to`. */
+static text replaced(text t, const char *from, const char *to) {
+    char *at = strstr(t.s, from);
+    ASSERT_TRUE(at != NULL);
+    ASSERT_TRUE(strstr(at + 1, from) == NULL);
+    text out;
+    memset(&out, 0, sizeof out);
+    const size_t head = (size_t)(at - t.s), lf = strlen(from), lt = strlen(to);
+    memcpy(out.s, t.s, head);
+    memcpy(out.s + head, to, lt);
+    memcpy(out.s + head + lt, at + lf, t.n - head - lf);
+    out.n = t.n - lf + lt;
+    return out;
+}
+
+/* Undo or redo that must fail with code and data.reason. */
+static void transaction_fails(safety_fx *f, de_ep_method method, u32 tx, de_ep_error code,
+                              const char *reason) {
+    char params[64], response[2048];
+    mpack_writer_t w;
+    mpack_writer_init(&w, params, sizeof params);
+    const de_ep_tx_params q = {.tx = tx};
+    de_ep_write_tx_params(&w, &q);
+    const size_t size = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    mpack_tree_t tree;
+    mpack_node_t root = request(f, method, (de_ep_raw){params, size}, &tree, response);
+    ASSERT_TRUE(mpack_node_map_contains_cstr(root, "error"));
+    mpack_node_t err = mpack_node_map_cstr(root, "error");
+    EXPECT_EQ(mpack_node_i32(mpack_node_map_cstr(err, "code")), (i32)code);
+    EXPECT_TRUE(node_streq(mpack_node_map_cstr(mpack_node_map_cstr(err, "data"), "reason"),
+                           reason));
+    EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
+}
+
+#if !defined(_WIN32)
+#include <sys/stat.h>
+static void set_mode(const char *vpath, unsigned mode) {
+    char native[1024];
+    ASSERT_EQ(de_fs_resolve(vpath, native, sizeof native), DE_OK);
+    ASSERT_EQ(chmod(native, (mode_t)mode), 0);
+}
+#endif
+
+TEST_F(editor_prefab_source, apply_writes_the_source_and_keeps_comments_and_order, safety_fx) {
+    const pf_world p = prefab_world(f);
+    const text crate = read_text(CRATE);
+    const de_entity a = spawn_prefab(f, "props/crate");
+    ((THealth *)de_entity_get(f->engine.world, a, p.health))->current = 70;
+    char response[2048];
+    mpack_tree_t tree;
+    mpack_node_t root = prefab_call(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a,
+                                    (pf_call){.path = "THealth.current"}, &tree, response);
+    ASSERT_TRUE(mpack_node_map_contains_cstr(root, "result"));
+    mpack_node_t files = mpack_node_map_cstr(mpack_node_map_cstr(root, "result"), "files");
+    ASSERT_EQ(mpack_node_array_length(files), 1u); /* no variant or nesting prefab is loaded */
+    EXPECT_TRUE(node_streq(mpack_node_array_at(files, 0), "props/crate"));
+    EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
+    /* Only the value changes: the comment, the key order and the layout stay. */
+    EXPECT_TRUE(text_eq(read_text(CRATE),
+                        replaced(crate, "current = 50.0\nmax = 50.0", "current = 70.0\nmax = 50.0")));
+    /* A field the file does not set yet is added to its table. */
+    snprintf(((THealth *)de_entity_get(f->engine.world, a, p.health))->label, 24, "big \"one\"");
+    const text before = read_text(CRATE);
+    prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.label"});
+    EXPECT_TRUE(text_eq(read_text(CRATE), replaced(before, "max = 50.0\n",
+                                                   "max = 50.0\nlabel = \"big \\\"one\\\"\"\n")));
+}
+
+TEST_F(editor_prefab_source, apply_writes_variant_and_nested_sources, safety_fx) {
+    const pf_world p = prefab_world(f);
+    const text crate = read_text(CRATE), heavy = read_text(HEAVY), stack = read_text(STACK);
+    /* Loaded prefabs that inherit the field follow the base (DENG-571). */
+    (void)spawn_prefab(f, "props/crate_heavy");
+    (void)spawn_prefab(f, "props/stack");
+    const de_entity a = spawn_prefab(f, "props/crate");
+    ((THealth *)de_entity_get(f->engine.world, a, p.health))->current = 70;
+    prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.current"});
+    EXPECT_TRUE(text_eq(read_text(CRATE), replaced(crate, "current = 50.0", "current = 70.0")));
+    /* The variant and the nested copy followed the base: their files follow too. */
+    EXPECT_TRUE(text_eq(read_text(HEAVY), replaced(heavy, "current = 50.0", "current = 70.0")));
+    EXPECT_TRUE(text_eq(read_text(STACK), replaced(stack, "current = 50.0", "current = 70.0")));
+    /* An apply to the variant itself writes the variant only. */
+    const de_entity v = spawn_prefab(f, "props/crate_heavy");
+    ((THealth *)de_entity_get(f->engine.world, v, p.health))->max = 81.5f;
+    const text crate2 = read_text(CRATE), stack2 = read_text(STACK), heavy2 = read_text(HEAVY);
+    prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, v, (pf_call){.path = "THealth.max"});
+    EXPECT_TRUE(text_eq(read_text(HEAVY), replaced(heavy2, "max = 80.3", "max = 81.5")));
+    EXPECT_TRUE(text_eq(read_text(CRATE), crate2));
+    EXPECT_TRUE(text_eq(read_text(STACK), stack2));
+    /* A nested entity applied to the nesting prefab: the stack's own table for 0x12. */
+    const de_entity s = spawn_prefab(f, "props/stack");
+    const de_entity leaf = first_child(f, first_child(f, s));
+    ((TTarget *)de_entity_get(f->engine.world, leaf, p.target))->speed = 4;
+    prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, leaf, (pf_call){.path = "TTarget.speed"});
+    EXPECT_TRUE(text_eq(read_text(STACK), replaced(stack2, "speed = 2.0", "speed = 4.0")));
+}
+
+TEST_F(editor_prefab_source, undo_and_redo_restore_the_exact_bytes, safety_fx) {
+    const pf_world p = prefab_world(f);
+    const text crate = read_text(CRATE), heavy = read_text(HEAVY), stack = read_text(STACK);
+    /* Loaded prefabs that inherit the field follow the base (DENG-571). */
+    (void)spawn_prefab(f, "props/crate_heavy");
+    (void)spawn_prefab(f, "props/stack");
+    const de_entity a = spawn_prefab(f, "props/crate");
+    ((THealth *)de_entity_get(f->engine.world, a, p.health))->current = 70;
+    const u32 tx =
+        prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.current"});
+    const text crate1 = read_text(CRATE), heavy1 = read_text(HEAVY), stack1 = read_text(STACK);
+    EXPECT_FALSE(text_eq(crate1, crate));
+    const u64 after = checksum(f);
+    transaction(f, DE_EP_METHOD_EDIT_UNDO, tx);
+    EXPECT_TRUE(text_eq(read_text(CRATE), crate));
+    EXPECT_TRUE(text_eq(read_text(HEAVY), heavy));
+    EXPECT_TRUE(text_eq(read_text(STACK), stack));
+    const u64 before = checksum(f);
+    transaction(f, DE_EP_METHOD_EDIT_REDO, tx);
+    EXPECT_TRUE(text_eq(read_text(CRATE), crate1));
+    EXPECT_TRUE(text_eq(read_text(HEAVY), heavy1));
+    EXPECT_TRUE(text_eq(read_text(STACK), stack1));
+    EXPECT_EQ(checksum(f), after);
+    /* A file changed outside the editor is not overwritten by undo; nothing changes. */
+    ASSERT_EQ(de_file_write_all_atomic(HEAVY, "# mine\n", 7), DE_OK);
+    transaction_fails(f, DE_EP_METHOD_EDIT_UNDO, tx, DE_EP_ERR_CONFLICT, "source_changed");
+    EXPECT_EQ(checksum(f), after);
+    EXPECT_TRUE(text_eq(read_text(CRATE), crate1));
+    ASSERT_EQ(de_file_write_all_atomic(HEAVY, heavy1.s, heavy1.n), DE_OK);
+    transaction(f, DE_EP_METHOD_EDIT_UNDO, tx);
+    EXPECT_EQ(checksum(f), before);
+    EXPECT_TRUE(text_eq(read_text(HEAVY), heavy));
+}
+
+#if !defined(_WIN32)
+TEST_F(editor_prefab_source, a_failed_write_is_structured_and_changes_nothing, safety_fx) {
+    const pf_world p = prefab_world(f);
+    const text crate = read_text(CRATE), heavy = read_text(HEAVY), stack = read_text(STACK);
+    /* Loaded prefabs that inherit the field follow the base (DENG-571). */
+    (void)spawn_prefab(f, "props/crate_heavy");
+    (void)spawn_prefab(f, "props/stack");
+    const de_entity a = spawn_prefab(f, "props/crate");
+    ((THealth *)de_entity_get(f->engine.world, a, p.health))->current = 70;
+    const u64 changed = checksum(f);
+    set_mode(HEAVY, 0444); /* the second of three files */
+    prefab_fails(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.current"},
+                 DE_EP_ERR_INTERNAL, "write");
+    EXPECT_EQ(checksum(f), changed);
+    EXPECT_TRUE(overrides_of(f, a, a, "THealth.current").found);
+    EXPECT_TRUE(text_eq(read_text(CRATE), crate));
+    EXPECT_TRUE(text_eq(read_text(HEAVY), heavy));
+    EXPECT_TRUE(text_eq(read_text(STACK), stack));
+    /* Undo that cannot write: the world and the files stay as they were. */
+    set_mode(HEAVY, 0644);
+    const u32 tx =
+        prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.current"});
+    const u64 after = checksum(f);
+    const text crate1 = read_text(CRATE), heavy1 = read_text(HEAVY);
+    set_mode(HEAVY, 0444);
+    transaction_fails(f, DE_EP_METHOD_EDIT_UNDO, tx, DE_EP_ERR_INTERNAL, "write");
+    EXPECT_EQ(checksum(f), after);
+    EXPECT_EQ(overrides_of(f, a, a, "THealth.current").count, 0u);
+    EXPECT_TRUE(text_eq(read_text(CRATE), crate1));
+    EXPECT_TRUE(text_eq(read_text(HEAVY), heavy1));
+    set_mode(HEAVY, 0644);
+    transaction(f, DE_EP_METHOD_EDIT_UNDO, tx);
+    EXPECT_EQ(checksum(f), changed);
+    EXPECT_TRUE(text_eq(read_text(CRATE), crate));
+}
+#endif
+
+TEST_F(editor_prefab_source, apply_recooks_the_written_prefab, safety_fx) {
+    const pf_world p = prefab_world_ex(f, true);
+    const de_entity a = spawn_prefab(f, "props/crate");
+    ((THealth *)de_entity_get(f->engine.world, a, p.health))->current = 70;
+    prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.current"});
+    de__asset_reload_stats st;
+    const u64 t0 = de_time_now_ns();
+    for (;;) {
+        de__asset_wake_reset(f->engine.assets);
+        de_asset_system_update(f->engine.assets, NULL);
+        de__asset_reload_get_stats(f->engine.assets, &st);
+        if (st.started != 0 && st.swapped + st.failed + st.superseded + st.discarded >= st.started)
+            break;
+        ASSERT_TRUE(de_time_now_ns() - t0 < 20000000000ull);
+        (void)de__asset_wake_block(f->engine.assets, 10000000u);
+    }
+    EXPECT_GE(st.swapped, 1u);
+    EXPECT_EQ(st.failed, 0u);
+    /* The cooked prefab itself has the new value, not only the editor's copy. */
+    const de_prefab pf = de_asset_prefab(f->engine.assets, de_asset_id_from("props/crate"));
+    de_entity root = DE_ENTITY_NULL;
+    ASSERT_EQ(de_prefab_instantiate(f->engine.assets, f->engine.world, pf, DE_ENTITY_NULL, &root),
+              DE_OK);
+    EXPECT_FLOAT_EQ(((THealth *)de_entity_get(f->engine.world, root, p.health))->current, 70, 0);
+}
+
+TEST_F(editor_prefab_source, the_written_bytes_are_deterministic, safety_fx) {
+    const pf_world p = prefab_world(f);
+    const de_entity a = spawn_prefab(f, "props/crate");
+    THealth *h = de_entity_get(f->engine.world, a, p.health);
+    h->current = 0.1f; /* not exact: the shortest text that reads back as the same f32 */
+    const u32 tx =
+        prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.current"});
+    const text first = read_text(CRATE), heavy = read_text(HEAVY);
+    EXPECT_TRUE(strstr(first.s, "current = 0.1\n") != NULL);
+    transaction(f, DE_EP_METHOD_EDIT_UNDO, tx);
+    h = de_entity_get(f->engine.world, a, p.health);
+    h->current = 0.1f;
+    prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.current"});
+    EXPECT_TRUE(text_eq(read_text(CRATE), first));
+    EXPECT_TRUE(text_eq(read_text(HEAVY), heavy));
+}
+
+TEST_F(editor_prefab_source, trailing_comments_crlf_and_unsupported_layouts, safety_fx) {
+    const pf_world p = prefab_world(f);
+    const de_entity a = spawn_prefab(f, "props/crate");
+    THealth *h = de_entity_get(f->engine.world, a, p.health);
+    /* The file as somebody edited it on Windows, after the cook: comments after values stay. */
+    static const char crlf[] =
+        "# crate\r\n[[entity]]\r\nid = \"0x1\" # root\r\n[entity.THealth]\r\n"
+        "current = 50.0   # hit points\r\nmax = 50.0\r\n\r\n[[entity]]\r\nid = \"0x2\"\r\n"
+        "parent = \"0x1\"\r\n[entity.TTarget]\r\ntarget = \"0x1\"\r\ntexture = \"ui/heart\"\r\n"
+        "speed = 1.0\r\n";
+    ASSERT_EQ(de_file_write_all_atomic(CRATE, crlf, sizeof crlf - 1), DE_OK);
+    h->current = 70;
+    h->offset = (de_vec3){1, 2.5f, -3};
+    prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.current"});
+    prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.offset"});
+    text want;
+    memcpy(want.s, crlf, sizeof crlf);
+    want.n = sizeof crlf - 1;
+    want = replaced(want, "current = 50.0   # hit points\r\nmax = 50.0\r\n",
+                    "current = 70.0   # hit points\r\nmax = 50.0\r\n"
+                    "offset = [1.0, 2.5, -3.0]\r\n");
+    EXPECT_TRUE(text_eq(read_text(CRATE), want));
+    /* Dotted keys are not rewritten: a structured error, and nothing changes. */
+    static const char dotted[] = "[[entity]]\nid = \"0x1\"\nTHealth.current = 70.0\n"
+                                 "THealth.max = 50.0\n";
+    ASSERT_EQ(de_file_write_all_atomic(CRATE, dotted, sizeof dotted - 1), DE_OK);
+    h->max = 9;
+    const u64 before = checksum(f);
+    prefab_fails(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.max"},
+                 DE_EP_ERR_UNSUPPORTED, "source_layout");
+    EXPECT_EQ(checksum(f), before);
+    EXPECT_TRUE(overrides_of(f, a, a, "THealth.max").found);
+    EXPECT_EQ(read_text(CRATE).n, sizeof dotted - 1);
 }
 #endif
 

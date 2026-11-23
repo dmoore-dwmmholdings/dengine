@@ -463,8 +463,11 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     de_add_test(NAME editor_prefab SOURCES test_editor_prefab.c
         LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
     target_include_directories(test_editor_prefab PRIVATE "${DE_ROOT_DIR}/src")
+    # DENG-798: apply writes the sources, so each test copies the fixtures under here first.
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/editor_prefab_tmp")
     target_compile_definitions(test_editor_prefab PRIVATE
-        DE_EDITOR_SAFETY_DATA_DIR="${DE_ROOT_DIR}/tests/unit/asset/data/scenes")
+        DE_EDITOR_SAFETY_DATA_DIR="${DE_ROOT_DIR}/tests/unit/asset/data/scenes"
+        DE_EDITOR_PREFAB_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/editor_prefab_tmp")
 endif()
 
 # DENG-676: production CPU gizmo paths, with no native graphics.
