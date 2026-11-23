@@ -412,9 +412,14 @@ static u32 text_entity_cap(const toml_datum_t *top) {
     return 0;
 }
 
-/* Spawns the entities of scene text into `scene`, in scene-ID order. False with `err` set on a
- * failure; nothing stays spawned then. */
-static bool spawn_text(de__editor *ed, const char *text, size_t len, u64 scene, scene_err *err) {
+static void link_instances(de__editor *ed, const toml_datum_t *top, const load_map *m,
+                           const de_ep_arena *scratch);
+
+/* Spawns the entities of scene text into `scene`, in scene-ID order, and restores the prefab
+ * instance links of its `[[prefab.nested]]` entries (DENG-799). False with `err` set on a
+ * failure; nothing stays spawned then. `a` is the caller's arena: its free part is scratch. */
+static bool spawn_text(de__editor *ed, de_ep_arena *a, const char *text, size_t len, u64 scene,
+                       scene_err *err) {
     de_world *w = ed->e->world;
     const de_allocator *al = de_heap_allocator();
     memset(err, 0, sizeof *err);
@@ -491,6 +496,12 @@ static bool spawn_text(de__editor *ed, const char *text, size_t len, u64 scene, 
                             "entity 0x%016llx: parent 0x%016llx makes a cycle",
                             (unsigned long long)te[i].sid, (unsigned long long)psid);
         }
+    }
+    if (ok) {
+        /* Scratch past what the caller keeps, 16-byte aligned like the arena's own. */
+        const size_t at = (a->used + 15u) & ~(size_t)15u;
+        const de_ep_arena scratch = {a->base + at, at < a->size ? a->size - at : 0, 0};
+        link_instances(ed, &tr.toptab, &m, &scratch);
     }
     if (!ok)
         for (u32 i = 0; i < m.n; ++i)
@@ -665,6 +676,8 @@ static int cmp_save(const void *x, const void *y) {
     return a->sid < b->sid ? -1 : a->sid > b->sid;
 }
 
+static void write_links(de__editor *ed, const save_ent *list, u32 n, de_mem_writer *out);
+
 static int cmp_cstr(const void *x, const void *y) {
     return strcmp(*(const char *const *)x, *(const char *const *)y);
 }
@@ -672,8 +685,9 @@ static int cmp_cstr(const void *x, const void *y) {
 /* The entities of `scene` (or `only`, when given) as scene text into `out` (DENG-570,
  * DIDE-R147): entities in scene-ID order, each `[entity.0x<16 hex>]` with its `parent`, then its
  * serialized components as `[entity.0x<16 hex>.<Type>]` in type-name order, fields in reflection
- * order, a blank line between entities. The same world always gives the same bytes, and moving
- * one entity changes only that entity's transform lines. */
+ * order, a blank line between entities. A whole scene then gets one `[[prefab.nested]]` entry per
+ * prefab instance whose root it saves (DENG-799). The same world always gives the same bytes, and
+ * moving one entity changes only that entity's transform lines. */
 static void write_scene(de__editor *ed, u64 scene, const u64 *only, u32 only_count,
                         de_mem_writer *out) {
     de_world *w = ed->e->world;
@@ -765,6 +779,8 @@ static void write_scene(de__editor *ed, u64 scene, const u64 *only, u32 only_cou
                     (const u8 *)ecs_chunk_column(a, ch, col) + (size_t)rec->row * ci->size, &opt);
         }
     }
+    if (only == NULL)
+        write_links(ed, list, n, out);
     DE_FREE(al, list, sizeof(save_ent) * (total + 1));
 }
 
@@ -780,8 +796,10 @@ static bool no_change_in_play(de__editor *ed, const de_ep_request *req, mpack_wr
 static void despawn_scene(de__editor *ed, u64 scene) {
     members_prune(ed);
     for (u32 i = 0; i < g_scene.member_count; ++i)
-        if (g_scene.members[i].scene == scene)
+        if (g_scene.members[i].scene == scene) {
+            de__ed_prefab_instance_drop(g_scene.members[i].entity);
             de_entity_despawn(ed->e->world, (de_entity){g_scene.members[i].entity});
+        }
     members_prune(ed);
     de__ed_world_touch(ed);
 }
@@ -863,7 +881,7 @@ static void on_load(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mp
     scene_err err;
     /* A missing file is a new, empty scene (the IDE creates it on save). */
     if (read_file(path, &text, &len)) {
-        const bool ok = spawn_text(ed, text, len, id, &err);
+        const bool ok = spawn_text(ed, a, text, len, id, &err);
         DE_FREE(de_heap_allocator(), text, len + 1);
         if (!ok) {
             scene_error_reply(w, req->id, path, &err);
@@ -992,14 +1010,16 @@ static void on_reload(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
     /* Old and new members share scene IDs until the old entities go: members are found by
      * entity, and the text's references resolve among its own entities. */
     scene_err err;
-    if (!spawn_text(ed, q.text.ptr, q.text.len, q.scene, &err)) {
+    if (!spawn_text(ed, a, q.text.ptr, q.text.len, q.scene, &err)) {
         if (old != NULL)
             DE_FREE(al, old, sizeof(u64) * (old_count + 1));
         scene_error_reply(w, req->id, NULL, &err);
         return;
     }
-    for (u32 i = 0; i < old_count; ++i)
+    for (u32 i = 0; i < old_count; ++i) {
+        de__ed_prefab_instance_drop(old[i]);
         de_entity_despawn(ed->e->world, (de_entity){old[i]});
+    }
     if (old != NULL)
         DE_FREE(al, old, sizeof(u64) * (old_count + 1));
     members_prune(ed);
@@ -1711,6 +1731,182 @@ static bool base_put(ed_instance *inst, ed_base *b, const void *raw, size_t len)
     inst->bytes = grown;
     inst->byte_count += len;
     return true;
+}
+
+/* ---------- Prefab instance links in scene text (DENG-799, DIDE-R37) ----------
+ *
+ * A saved scene keeps each prefab instance as a top-level `[[prefab.nested]]` entry, the same
+ * shape a prefab source uses for the prefabs nested in it:
+ *
+ *     [[prefab.nested]]
+ *     asset = "props/stack"
+ *     root = "0x<scene id of the root>"
+ *     ids = [["0x<prefab-local id>", "0x<scene id>"], ...]
+ *
+ * Entries are in root scene-ID order, pairs in prefab-local order. Only entities the scene saves
+ * appear. An unpacked instance has no record, so it writes no entry. On load, an entry that does
+ * not resolve is skipped with a warning: the entities still load, only the link is lost. */
+
+static de_ep_raw base_raw(const ed_instance *inst, const ed_base *b);
+
+static void put_toml_str(de_mem_writer *out, const char *str) {
+    de_writer w = de_writer_from_mem(out);
+    (void)w.write(w.user, "\"", 1);
+    for (const char *c = str; *c != '\0'; ++c) {
+        if (*c == '"' || *c == '\\')
+            (void)w.write(w.user, "\\", 1);
+        (void)w.write(w.user, c, 1);
+    }
+    (void)w.write(w.user, "\"", 1);
+}
+
+static u64 saved_sid(const save_ent *list, u32 n, u64 entity, bool *found) {
+    for (u32 i = 0; i < n; ++i)
+        if (list[i].entity == entity) {
+            *found = true;
+            return list[i].sid;
+        }
+    *found = false;
+    return 0;
+}
+
+typedef struct link_pair {
+    u64 local, sid;
+} link_pair;
+
+static int cmp_link_pair(const void *x, const void *y) {
+    const link_pair *a = (const link_pair *)x, *b = (const link_pair *)y;
+    if (a->local != b->local)
+        return a->local < b->local ? -1 : 1;
+    return a->sid < b->sid ? -1 : a->sid > b->sid;
+}
+
+static void write_links(de__editor *ed, const save_ent *list, u32 n, de_mem_writer *out) {
+    (void)ed;
+    const de_allocator *al = de_heap_allocator();
+    const u32 count = g_scene.instance_count;
+    if (count == 0)
+        return;
+    save_ent *roots = (save_ent *)DE_ALLOC(al, sizeof(save_ent) * count, 8, DE_MEM_GENERAL);
+    link_pair *pairs =
+        (link_pair *)DE_ALLOC(al, sizeof(link_pair) * ED_LOCAL_CAP, 8, DE_MEM_GENERAL);
+    if (roots == NULL || pairs == NULL) {
+        if (roots != NULL)
+            DE_FREE(al, roots, sizeof(save_ent) * count);
+        if (pairs != NULL)
+            DE_FREE(al, pairs, sizeof(link_pair) * ED_LOCAL_CAP);
+        return;
+    }
+    u32 rn = 0;
+    for (u32 i = 0; i < count; ++i) {
+        bool found = false;
+        const u64 sid = saved_sid(list, n, g_scene.instances[i].root, &found);
+        if (found)
+            roots[rn++] = (save_ent){i, sid}; /* entity holds the instance index here */
+    }
+    qsort(roots, rn, sizeof(save_ent), cmp_save);
+    for (u32 r = 0; r < rn; ++r) {
+        const ed_instance *inst = &g_scene.instances[roots[r].entity];
+        u32 pn = 0;
+        for (u32 k = 0; k < inst->local_count && pn < ED_LOCAL_CAP; ++k) {
+            bool found = false;
+            const u64 sid = saved_sid(list, n, inst->local_ent[k], &found);
+            if (found)
+                pairs[pn++] = (link_pair){inst->local_sid[k], sid};
+        }
+        qsort(pairs, pn, sizeof(link_pair), cmp_link_pair);
+        putf(out, "\n[[prefab.nested]]\nasset = ");
+        put_toml_str(out, inst->asset);
+        putf(out, "\nroot = \"0x%016llx\"\nids = [", (unsigned long long)roots[r].sid);
+        for (u32 k = 0; k < pn; ++k)
+            putf(out, "%s[\"0x%016llx\", \"0x%016llx\"]", k ? ", " : "",
+                 (unsigned long long)pairs[k].local, (unsigned long long)pairs[k].sid);
+        putf(out, "]\n");
+    }
+    DE_FREE(al, roots, sizeof(save_ent) * count);
+    DE_FREE(al, pairs, sizeof(link_pair) * ED_LOCAL_CAP);
+}
+
+/* The instance's fields as the prefab gives them, where the prefab has them: what a fresh spawn
+ * would have recorded. A field the prefab does not have keeps its current value. */
+static void link_base(de__editor *ed, ed_instance *inst, const de_ep_arena *scratch) {
+    instance_base(ed, inst, scratch);
+    const ed_def *d = prefab_def_load(ed, inst->asset, 0);
+    if (d == NULL)
+        return;
+    for (u32 i = 0; i < inst->base_count; ++i) {
+        ed_base *b = &inst->base[i];
+        u64 lsid = 0;
+        if (!local_sid_of(inst, b->entity, &lsid))
+            continue;
+        const ed_dval *v = def_get(d, lsid, b->path);
+        ed_kind kind = {0};
+        if (v == NULL || !path_field(ed, b->path, &kind))
+            continue;
+        de_ep_arena a = *scratch;
+        de_ep_raw nv = {NULL, 0};
+        if (remap(&a, kind, dval_raw(d, v), inst->local_sid, inst->local_ent, inst->local_count,
+                  &nv) &&
+            !raw_eq(nv, base_raw(inst, b)))
+            (void)base_put(inst, b, nv.ptr, nv.len);
+    }
+}
+
+static void link_instances(de__editor *ed, const toml_datum_t *top, const load_map *m,
+                           const de_ep_arena *scratch) {
+    const toml_datum_t *prefab = tab_get(top, "prefab");
+    const toml_datum_t *nested = prefab != NULL ? tab_get(prefab, "nested") : NULL;
+    if (nested == NULL)
+        return;
+    if (nested->type != TOML_ARRAY) {
+        DE_WARN(ed->log, "scene: prefab.nested is no array of tables; prefab links skipped");
+        return;
+    }
+    for (int32_t i = 0; i < nested->u.arr.size; ++i) {
+        const toml_datum_t *e = &nested->u.arr.elem[i];
+        const toml_datum_t *asset = tab_get(e, "asset");
+        const toml_datum_t *root = tab_get(e, "root");
+        const toml_datum_t *ids = tab_get(e, "ids");
+        const u64 root_sid = root != NULL ? parse_sid(root) : 0;
+        const u64 root_ent = root_sid != 0 ? map_sid_to_entity(root_sid, (void *)m) : 0;
+        if (asset == NULL || asset->type != TOML_STRING || asset->u.str.len == 0 ||
+            asset->u.str.len >= 256 || ids == NULL || ids->type != TOML_ARRAY || root_ent == 0 ||
+            instance_rooted(root_ent) != NULL) {
+            DE_WARN(ed->log, "scene: prefab link %d (line %d) does not resolve; skipped", i,
+                    e->lineno);
+            continue;
+        }
+        u64 *block = (u64 *)DE_ALLOC(de_heap_allocator(), sizeof(u64) * ED_LOCAL_CAP * 2, 8,
+                                     DE_MEM_GENERAL);
+        if (block == NULL)
+            return;
+        u32 ln = 0;
+        for (int32_t k = 0; k < ids->u.arr.size && ln < ED_LOCAL_CAP; ++k) {
+            const toml_datum_t *pr = &ids->u.arr.elem[k];
+            if (pr->type != TOML_ARRAY || pr->u.arr.size != 2)
+                continue;
+            const u64 local = parse_sid(&pr->u.arr.elem[0]);
+            const u64 sid = parse_sid(&pr->u.arr.elem[1]);
+            const u64 ent = sid != 0 ? map_sid_to_entity(sid, (void *)m) : 0;
+            if (local == 0 || ent == 0)
+                continue;
+            block[ln] = local;
+            block[ED_LOCAL_CAP + ln] = ent;
+            ++ln;
+        }
+        ed_instance *inst = instance_push();
+        if (inst == NULL) {
+            DE_FREE(de_heap_allocator(), block, sizeof(u64) * ED_LOCAL_CAP * 2);
+            return;
+        }
+        inst->root = root_ent;
+        snprintf(inst->asset, sizeof inst->asset, "%s", asset->u.str.ptr);
+        /* One block, as a spawn keeps it: the ids, then the entities. */
+        inst->local_sid = block;
+        inst->local_ent = block + ED_LOCAL_CAP;
+        inst->local_count = ln;
+        link_base(ed, inst, scratch);
+    }
 }
 
 bool de__ed_prefab_spawn(de__editor *ed, de_ep_arena *a, const char *asset, u64 scene,
