@@ -70,6 +70,15 @@ typedef struct TTarget {
     u32 texture;
     f32 speed;
 } TTarget;
+/* DENG-802: entity ids nested in a struct and in an array. */
+typedef struct TRef {
+    de_entity a;
+    i32 n;
+} TRef;
+typedef struct TLinks {
+    TRef ref;
+    de_entity list[3];
+} TLinks;
 #endif
 static const de_field_info health_fields[] = {
     DE_FIELD(THealth, current, DE_FK_F32, DE_FIELD_DEFAULT),
@@ -98,6 +107,14 @@ static const de_field_info target_fields[] = {
     DE_FIELD_EX(TTarget, texture, DE_FK_ASSET, DE_FIELD_DEFAULT | DE_FIELD_ASSET_REF,
                 {0, 0, 0, 0, "blob", 0}),
     DE_FIELD(TTarget, speed, DE_FK_F32, DE_FIELD_DEFAULT),
+};
+static const de_field_info ref_fields[] = {
+    DE_FIELD(TRef, a, DE_FK_ENTITY, DE_FIELD_DEFAULT),
+    DE_FIELD(TRef, n, DE_FK_I32, DE_FIELD_DEFAULT),
+};
+static const de_field_info links_fields[] = {
+    DE_FIELD_EX(TLinks, ref, DE_FK_STRUCT, DE_FIELD_DEFAULT, {0, 0, 0, 0, "TRef", 0}),
+    DE_FIELD_EX(TLinks, list, DE_FK_FIXED_ARRAY, DE_FIELD_DEFAULT, {0, 0, 0, 0, "entity", 3}),
 };
 #endif
 static mpack_node_t request(safety_fx *f, de_ep_method method, de_ep_raw params, mpack_tree_t *tree,
@@ -378,7 +395,7 @@ TEST_F(editor_safety, prefab_revert_restores_only_the_field_and_rejects_missing_
 /* ---------- DENG-571: prefab overrides with variants and nesting (protocol 1.18) ---------- */
 
 typedef struct pf_world {
-    de_component health, target;
+    de_component health, target, links;
 } pf_world;
 
 /* ---------- DENG-798: a writable copy of the fixtures, so apply can write the sources -------- */
@@ -475,6 +492,13 @@ static pf_world prefab_world_ex(safety_fx *f, bool hot_reload) {
     p.target = de_component_register(f->engine.world, de_type_find(f->engine.types, "TTarget"),
                                      DE_COMP_SERIALIZE);
     ASSERT_TRUE(DE_HANDLE_VALID(p.target));
+    ASSERT_TRUE(DE_HANDLE_VALID(
+        de_type_register(f->engine.types, &DE_TYPE_DESC(TRef, 1, ref_fields))));
+    ASSERT_TRUE(DE_HANDLE_VALID(
+        de_type_register(f->engine.types, &DE_TYPE_DESC(TLinks, 1, links_fields))));
+    p.links = de_component_register(f->engine.world, de_type_find(f->engine.types, "TLinks"),
+                                    DE_COMP_SERIALIZE);
+    ASSERT_TRUE(DE_HANDLE_VALID(p.links));
     copy_fixtures(f);
     de_fp_env_init_thread();
     ASSERT_EQ(de_task_system_create(&(de_task_system_desc){.worker_count = 1}, &f->tasks), DE_OK);
@@ -775,6 +799,56 @@ TEST_F(editor_prefab_overrides, apply_to_an_ancestor_through_variants_and_nestin
     prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, leaf, (pf_call){.path = "TTarget.target"});
     const de_entity leaf2 = first_child(f, first_child(f, s2));
     EXPECT_EQ(((TTarget *)de_entity_get(f->engine.world, leaf2, p.target))->target.bits, s2.bits);
+}
+
+/* DENG-802: entity ids nested in struct and array fields map between id spaces like direct ones. */
+TEST_F(editor_prefab_overrides, apply_maps_entity_ids_in_struct_and_array_fields, safety_fx) {
+    const pf_world p = prefab_world(f);
+    const de_entity root = spawn_prefab(f, "props/links");
+    const de_entity child = first_child(f, root);
+    const de_entity other = spawn_prefab(f, "props/crate");
+    const de_entity r2 = spawn_prefab(f, "props/links"); /* another instance takes the apply */
+    const de_entity c2 = first_child(f, r2);
+    TLinks *l = de_entity_get(f->engine.world, child, p.links);
+    ASSERT_TRUE(l != NULL);
+    EXPECT_EQ(l->ref.a.bits, root.bits);
+    EXPECT_EQ(l->list[1].bits, child.bits);
+    /* A reference outside the prefab is refused, nested or not. */
+    l->ref.a = other;
+    prefab_fails(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, child, (pf_call){.path = "TLinks.ref"},
+                 DE_EP_ERR_UNSUPPORTED, "outside_prefab");
+    l->ref.a = root;
+    l->list[2] = other;
+    prefab_fails(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, child, (pf_call){.path = "TLinks.list"},
+                 DE_EP_ERR_UNSUPPORTED, "outside_prefab");
+    /* Inside the prefab: stored in the prefab's ids, applied to the next instance. */
+    l->ref.a = child;
+    l->ref.n = 7;
+    l->list[0] = child;
+    l->list[2] = root;
+    const u64 before = checksum(f);
+    const u32 tx = prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, child,
+                             (pf_call){.path = "TLinks.ref"});
+    const u32 tx2 = prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, child,
+                              (pf_call){.path = "TLinks.list"});
+    EXPECT_FALSE(overrides_of(f, root, child, "TLinks.ref").found);
+    EXPECT_FALSE(overrides_of(f, root, child, "TLinks.list").found);
+    /* Undo puts everything back; redo applies again. */
+    transaction(f, DE_EP_METHOD_EDIT_UNDO, tx2);
+    transaction(f, DE_EP_METHOD_EDIT_UNDO, tx);
+    EXPECT_EQ(checksum(f), before);
+    EXPECT_TRUE(overrides_of(f, root, child, "TLinks.ref").found);
+    EXPECT_TRUE(overrides_of(f, root, child, "TLinks.list").found);
+    transaction(f, DE_EP_METHOD_EDIT_REDO, tx);
+    transaction(f, DE_EP_METHOD_EDIT_REDO, tx2);
+    EXPECT_FALSE(overrides_of(f, root, child, "TLinks.ref").found);
+    const TLinks *m = de_entity_get(f->engine.world, c2, p.links);
+    ASSERT_TRUE(m != NULL);
+    EXPECT_EQ(m->ref.a.bits, c2.bits);
+    EXPECT_EQ(m->ref.n, 7);
+    EXPECT_EQ(m->list[0].bits, c2.bits);
+    EXPECT_EQ(m->list[1].bits, c2.bits);
+    EXPECT_EQ(m->list[2].bits, r2.bits);
 }
 
 TEST_F(editor_prefab_overrides, revert_is_undoable_and_apply_joins_an_open_transaction,

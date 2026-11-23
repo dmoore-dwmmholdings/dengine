@@ -167,7 +167,16 @@ static bool field_raw(de__editor *ed, de_ep_arena *a, const ecs_archetype *arch,
     }
     mpack_writer_t w;
     de__ed_raw_begin(a, &w);
-    de__ed_write_field(ed, &w, (de_type_id){0}, 0, f, data + off);
+    /* A whole array field needs its place in the component type to find its element (DENG-802). */
+    de_type_id owner = {0};
+    u32 index = 0, nf = 0;
+    const de_field_info *top = de_type_fields(ed->e->types, ci->type, &nf);
+    for (u32 i = 0; f->kind == DE_FK_FIXED_ARRAY && top != NULL && i < nf; ++i)
+        if (strcmp(top[i].name, dot + 1) == 0) {
+            owner = ci->type;
+            index = i;
+        }
+    de__ed_write_field(ed, &w, owner, index, f, data + off);
     *out = de__ed_raw_end(a, &w);
     return true;
 }
