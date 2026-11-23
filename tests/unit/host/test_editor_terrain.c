@@ -23,6 +23,13 @@
 #include <unistd.h>
 #endif
 
+/* The same condition as DE_ED_TERRAIN_EXR in editor_terrain.c: exr needs tinyexr (Debug, Dev). */
+#if (defined(DE_DEBUG) || defined(DE_DEV)) && !defined(DE_SHIPPING)
+#define TEST_HAS_EXR 1
+#else
+#define TEST_HAS_EXR 0
+#endif
+
 #define STORAGE  (2u << 20)
 #define RESPONSE (512u << 10)
 #define OX       10.0
@@ -267,9 +274,13 @@ TEST_F(editor_terrain, capability_and_info_shape, terrain_fx) {
     EXPECT_TRUE(str_is(mpack_node_array_at(tools, 0), "raise"));
     EXPECT_TRUE(str_is(mpack_node_array_at(tools, 11), "hole"));
     const mpack_node_t formats = mpack_node_map_cstr(r, "formats");
-    ASSERT_EQ(mpack_node_array_length(formats), 3u); /* Dev builds read and write exr */
+    /* Debug and Dev builds read and write exr; Release has no tinyexr (DENG-795). */
+    ASSERT_EQ(mpack_node_array_length(formats), TEST_HAS_EXR ? 3u : 2u);
     EXPECT_TRUE(str_is(mpack_node_array_at(formats, 0), "png16"));
+    EXPECT_TRUE(str_is(mpack_node_array_at(formats, 1), "raw16"));
+#if TEST_HAS_EXR
     EXPECT_TRUE(str_is(mpack_node_array_at(formats, 2), "exr"));
+#endif
 }
 
 TEST_F(editor_terrain, sample_reads_height_weights_and_hole, terrain_fx) {
@@ -541,7 +552,11 @@ TEST_F(editor_terrain, raw16_round_trip, terrain_fx) {
     round_trip_whole(f, "r16");
 }
 TEST_F(editor_terrain, exr_round_trip, terrain_fx) {
+#if TEST_HAS_EXR
     round_trip_whole(f, "exr");
+#else
+    (void)f; /* DENG-795: no tinyexr in Release, so there is no exr path to round-trip */
+#endif
 }
 
 TEST_F(editor_terrain, tile_export_and_import_touch_only_the_tile, terrain_fx) {

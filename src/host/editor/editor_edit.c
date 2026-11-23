@@ -718,11 +718,23 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
         }
         if (field != NULL && (field->flags & DE_FIELD_READONLY))
             return fail(f, DE_EP_ERR_INVALID_PARAMS, "%s is read-only", path);
+        /* A fixed array's element needs its owner and field index, for the old value and for the
+         * new one alike (DENG-793); whole arrays go through the struct. */
+        de_type_id owner = {0};
+        u32 index = 0;
+        if (field != NULL) {
+            u32 fc = 0;
+            const de_field_info *fields = de_type_fields(ed->e->types, type, &fc);
+            for (; index < fc && &fields[index] != field; ++index) {
+            }
+            if (index < fc)
+                owner = type;
+        }
         /* The old value, for the inverse. */
         mpack_writer_t mw;
         de__ed_raw_begin(a, &mw);
         if (field != NULL)
-            de__ed_write_field(ed, &mw, (de_type_id){0}, 0, field, data + off);
+            de__ed_write_field(ed, &mw, owner, index, field, data + off);
         else
             de__ed_write_object(ed, &mw, type, data);
         const de_ep_raw old = de__ed_raw_end(a, &mw);
@@ -736,13 +748,7 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
         mpack_tree_parse(&tree);
         bool ok = mpack_tree_error(&tree) == mpack_ok;
         if (ok && field != NULL) {
-            /* A fixed array's element needs its owner; whole arrays go through the struct. */
-            u32 fc = 0, index = 0;
-            const de_field_info *fields = de_type_fields(ed->e->types, type, &fc);
-            for (; index < fc && &fields[index] != field; ++index) {
-            }
-            ok = de__ed_read_field(ed, mpack_tree_root(&tree), index < fc ? type : (de_type_id){0},
-                                   index, field, copy + off);
+            ok = de__ed_read_field(ed, mpack_tree_root(&tree), owner, index, field, copy + off);
         } else if (ok) {
             ok = de__ed_read_object(ed, mpack_tree_root(&tree), type, copy);
         }

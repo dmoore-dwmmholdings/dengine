@@ -23,6 +23,8 @@
 
 #define HEADER "kind = \"material\"\nversion = 1\nnext_id = 64\n"
 
+/* The graphs and expect_fails are used only where the cooker runs (DENG-795). */
+#if DE_HAS_COOKER
 /* Two colour and float parameters, one texture, layered output. */
 static const char rock_graph[] =
     HEADER "[[node]]\nid = \"n1\"\ntype = \"param.color\"\n"
@@ -39,6 +41,7 @@ static const char rock_graph[] =
 /* A link from a node that does not exist. */
 static const char broken_graph[] = HEADER "[[node]]\nid = \"n5\"\ntype = \"output.base\"\n"
                                           "[[link]]\nfrom = \"n99.out\"\nto = \"n5.roughness\"\n";
+#endif
 
 /* ---- mg_import.table ------------------------------------------------------------------------- */
 
@@ -392,9 +395,9 @@ TEST(mg_import, deterministic) {
 
 /* ---- mg_import.errors ------------------------------------------------------------------------ */
 
+#if DE_HAS_COOKER
 static void expect_fails(const char *sub, const char *graph, const char *line,
                          const char *const *needles) {
-#if DE_HAS_COOKER
     cct_fresh(sub);
     put_project(sub, "rock.mgraph.toml", graph, line);
     EXPECT_NE(cook_project(sub), DE_COOK_EXIT_OK);
@@ -404,10 +407,8 @@ static void expect_fails(const char *sub, const char *graph, const char *line,
             printf("missing \"%s\" in:\n%s\n", *n, g_cct.err.p);
         EXPECT_TRUE(found);
     }
-#else
-    (void)sub, (void)graph, (void)line, (void)needles;
-#endif
 }
+#endif
 
 #define ROCK(extra)                                                                                \
     "\"mats/rock\" = { type = \"material_graph\", source = \"rock.mgraph.toml\"" extra " }"
