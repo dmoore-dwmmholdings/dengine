@@ -139,6 +139,28 @@ def main():
                     assert nonblack >= MIN_PIXELS, (mode, "is black on the mesh", nonblack)
                     assert diff >= MIN_PIXELS, (mode, "does not differ from Lit", diff)
                 call("view.destroy", view=view["view"])
+
+                # DENG-818: orthoHeight <= 0 keeps the perspective camera (fovY > 0), and a
+                # positive orthoHeight renders the meshes orthographically, not black.
+                def mesh_lit(cam, name):
+                    v = call("view.create", width=W, height=H, scale=1., camera=cam,
+                             renderMode="lit", showFlags=[], game=False)
+                    nonlocal view
+                    view = v
+                    img = frame()
+                    for _ in range(40):
+                        if lit_pixels(img) >= MIN_PIXELS:
+                            break
+                        img = frame()
+                    call("view.destroy", view=v["view"])
+                    assert lit_pixels(img) >= MIN_PIXELS, (name, "is black on the mesh")
+                    return img
+
+                persp = mesh_lit(camera, "perspective")
+                zero = mesh_lit(dict(camera, orthoHeight=0.), "orthoHeight 0")
+                assert differing(persp, zero) < MIN_PIXELS, "orthoHeight 0 did not stay perspective"
+                ortho = mesh_lit(dict(camera, orthoHeight=8.), "orthoHeight 8")
+                assert differing(persp, ortho) >= MIN_PIXELS, "orthoHeight 8 is not orthographic"
                 print("PASS: mesh_scene Scene modes differ from Lit and are non-black "
                       "(non-black px, differing px):", results)
             except BaseException:
