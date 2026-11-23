@@ -184,6 +184,10 @@ void de__nav_soup_free(de__nav_soup *s) {
         DE_FREE(s->alloc, s->obstacles, sizeof(f32) * DE__NAV_RC_OBSTACLE_FLOATS * s->obstacle_cap);
     s->obstacles = NULL;
     s->obstacle_count = s->obstacle_cap = 0;
+    if (s->offmesh != NULL)
+        DE_FREE(s->alloc, s->offmesh, sizeof(f32) * DE__NAV_RC_OFFMESH_FLOATS * s->offmesh_cap);
+    s->offmesh = NULL;
+    s->offmesh_count = s->offmesh_cap = 0;
     s->verts = NULL;
     s->tris = NULL;
     s->vert_count = s->vert_cap = s->tri_count = s->tri_cap = 0;
@@ -308,6 +312,24 @@ void de__nav_soup_add_obstacle(de__nav_soup *s, const de__nav_pose *p, de_vec3 h
     const f32 q[10] = {lo[0], lo[2], hi[0], lo[2], hi[0], hi[2], lo[0], hi[2], lo[1], hi[1]};
     memcpy(o, q, sizeof q);
     ++s->obstacle_count;
+}
+
+void de__nav_soup_add_offmesh(de__nav_soup *s, de_dvec3 from, de_dvec3 to, f32 radius,
+                              bool bidirectional, u8 area) {
+    if (s->failed)
+        return;
+    if (!grow(s->alloc, (void **)&s->offmesh, &s->offmesh_cap, s->offmesh_count + 1u,
+              sizeof(f32) * DE__NAV_RC_OFFMESH_FLOATS)) {
+        s->failed = true;
+        return;
+    }
+    f32 *o = &s->offmesh[s->offmesh_count * DE__NAV_RC_OFFMESH_FLOATS];
+    de__nav_world_to_recast(&s->origin, from, &o[0]);
+    de__nav_world_to_recast(&s->origin, to, &o[3]);
+    o[6] = radius;
+    o[7] = bidirectional ? 1.0f : 0.0f;
+    o[8] = (f32)area;
+    ++s->offmesh_count;
 }
 
 #define LATHE_SEGMENTS 8u
@@ -481,6 +503,8 @@ de_result de__nav_build_tile(const de_allocator *a, const de__nav_settings *st,
         c.agent_max_climb = st->desc.agent_max_climb;
         c.obstacles = soup->obstacles;
         c.obstacle_count = (i32)soup->obstacle_count;
+        c.offmesh = soup->offmesh;
+        c.offmesh_count = (i32)soup->offmesh_count;
         r = de__nav_rc_build_tile(a, &c, soup->verts, (i32)soup->vert_count, sel, (i32)m, data,
                                   size);
     }

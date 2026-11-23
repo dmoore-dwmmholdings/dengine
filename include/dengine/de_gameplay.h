@@ -37,17 +37,44 @@ DE_API void de_nav_update(de_nav *n);
 /** Registers the `navmesh` asset type with `assets` and uses it for de_nav_add_navmesh. */
 DE_API de_result de_nav_use_assets(de_nav *n, de_asset_system *assets);
 DE_API de_navmesh de_asset_navmesh(de_asset_system *s, de_asset_id id);
-/* Path queries (DENG-77) and crowd agents (DENG-78) are declared below but not implemented yet. */
 
+/* ---- DENG-77: queries, off-mesh links, dynamic obstacles ----
+ * Queries run on the main thread or on a frame worker of the nav's task system (one Detour
+ * query object per frame worker, made with the first navmesh); not on background workers, and
+ * not while de_nav_update runs. They allocate nothing but the path points (from `a`).
+ * de_nav_find_path: A* over the polygons, then string pulling (corner points, `from` first).
+ * `area_mask` bit i admits area i (walkable ground is area 0; off-mesh links carry their own
+ * area); 0 = every area. When `to` cannot be reached the path ends at the reachable point nearest
+ * to it and `partial` is true. DE_ERR_NOT_FOUND when `from` or `to` is not near the navmesh.
+ * de_nav_raycast: walks the surface from `from` toward `to`; true at a wall (`*hit` is the point,
+ * on the surface) or when `from` is off the navmesh (`*hit` = `from`), false when it gets there.
+ * de_nav_nearest_point: the navmesh point nearest to `p` within `search_radius` m on each axis.
+ * Off-mesh links (jumps, ladders, doors) join two points `radius` m from the navmesh; they are
+ * built into the tile of `from` by later rebuilds (de_nav_rebuild_tiles, obstacle rebuilds).
+ * Obstacles (de_nav_add_obstacle): each de_nav_update rebuilds, a few per frame, the tiles of
+ * obstacles that were added, resized, removed, or moved more than two cells or turned since they
+ * were carved; queries see the change when the rebuild lands. Deterministic mode (SPEC §5.7):
+ * queries use de_dmath instead of libm, and de_nav_update applies every pending rebuild at once
+ * (it waits for them), so the navmesh changes on the same frame on every machine. */
 typedef struct de_nav_path {
-    de_dvec3 *points;
+    de_dvec3 *points; /* from the allocator given to de_nav_find_path */
     u32 count;
     bool partial;
 } de_nav_path;
 DE_API de_result de_nav_find_path(de_nav *n, de_dvec3 from, de_dvec3 to, u32 area_mask,
                                   const de_allocator *a, de_nav_path *out);
+/** Frees `path->points` to `a` (the allocator given to de_nav_find_path) and zeroes `path`. */
+DE_API void de_nav_path_free(const de_allocator *a, de_nav_path *path);
 DE_API bool de_nav_raycast(de_nav *n, de_dvec3 from, de_dvec3 to, de_dvec3 *hit);
 DE_API bool de_nav_nearest_point(de_nav *n, de_dvec3 p, f32 search_radius, de_dvec3 *out);
+/** Adds an off-mesh link from `from` to `to` (both ways when `bidirectional`), area `area`
+ *  (0..15; de_nav_find_path's `area_mask` bit). Main thread only. */
+DE_API de_result de_nav_add_offmesh_link(de_nav *n, de_dvec3 from, de_dvec3 to, f32 radius,
+                                         bool bidirectional, u8 area);
+/** Removes the obstacle of `e`; its tiles are rebuilt by a later de_nav_update. */
+DE_API void de_nav_remove_obstacle(de_nav *n, de_entity e);
+/** Deterministic query mode (off by default; SPEC §5.7). Main thread only. */
+DE_API void de_nav_set_deterministic(de_nav *n, bool on);
 
 /* Crowd agents with local avoidance. */
 typedef struct DeNavAgent {

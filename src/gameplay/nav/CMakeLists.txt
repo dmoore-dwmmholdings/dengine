@@ -1,7 +1,8 @@
 # src/gameplay/nav: module `nav` (target de_nav), layer gameplay. SPEC §21.2; DENG-76.
 # Tiled navmesh generation with the vendored Recast / Detour (third_party/recastnavigation): the
 # runtime de_nav (nav.c), its input from static DeColliders (nav_input.c) and the `navmesh` asset
-# type (nav_asset.c). Path queries (DENG-77), crowds (DENG-78) and nav2d (DENG-79) come later.
+# type (nav_asset.c). Queries and deterministic mode (nav_query.c), off-mesh links and dynamic
+# obstacles (nav_obstacles.c) are DENG-77; crowds (DENG-78) and nav2d (DENG-79) come later.
 de_add_module(
     NAME nav
     LAYER gameplay
@@ -10,6 +11,8 @@ de_add_module(
         nav.c
         nav_input.c
         nav_asset.c
+        nav_query.c
+        nav_obstacles.c
     DEPS ecs asset
     OPTIONAL_DEPS physics
     OPTIONAL_OPTION DE_WITH_NAV

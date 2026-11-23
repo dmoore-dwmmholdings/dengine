@@ -13,6 +13,10 @@
 # Contraction of a*b+c into FMA is off (DE_DETERMINISTIC_FLAGS), so a tile build makes the same
 # float decisions on hosts whose compilers contract by default. Recast still calls libm (cosf,
 # sqrtf, floorf), so tiles are byte-identical on one platform, best effort across platforms.
+#
+# de_detour_math.h (DENG-77, local file) replaces Detour's DetourMath.h: it is force-included
+# (PUBLIC, C++ only) so every TU that compiles or includes Detour sees the same dtMath* inlines.
+# They call libm, or de_dmath (de_core) while a nav query runs in deterministic mode.
 file(GLOB _de_recast_sources CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Recast/Source/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/Detour/Source/*.cpp"
@@ -26,6 +30,11 @@ target_include_directories(de_tp_recastnavigation SYSTEM PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/DetourTileCache/Include"
     "${CMAKE_CURRENT_SOURCE_DIR}/DetourCrowd/Include")
 target_compile_definitions(de_tp_recastnavigation PUBLIC DT_POLYREF64=1)
+set(_de_detour_math "${CMAKE_CURRENT_SOURCE_DIR}/de_detour_math.h")
+set(_de_msvc "$<STREQUAL:${DE_COMPILER_FRONTEND},MSVC>")
+set(_de_fi "$<IF:${_de_msvc},/FI${_de_detour_math},-include${_de_detour_math}>")
+target_compile_options(de_tp_recastnavigation PUBLIC "$<$<COMPILE_LANGUAGE:CXX>:${_de_fi}>")
+target_link_libraries(de_tp_recastnavigation PUBLIC de_core)
 # Vendored code: no engine warning flags, and its own warnings are off (CONVENTIONS §6).
 target_compile_options(de_tp_recastnavigation PRIVATE
     $<IF:$<STREQUAL:${DE_COMPILER_FRONTEND},MSVC>,/w,-w>

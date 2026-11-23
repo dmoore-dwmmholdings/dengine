@@ -110,6 +110,8 @@ typedef struct de__nav_soup {
     bool failed;          /* an allocation failed; the soup is incomplete */
     f32 *obstacles;       /* DE__NAV_RC_OBSTACLE_FLOATS per obstacle */
     u32 obstacle_count, obstacle_cap;
+    f32 *offmesh;         /* DE__NAV_RC_OFFMESH_FLOATS per off-mesh link (DENG-77) */
+    u32 offmesh_count, offmesh_cap;
 } de__nav_soup;
 
 /** A pose: position and unit rotation quaternion (x, y, z, w), f64. Scale is not used. */
@@ -137,6 +139,10 @@ void de__nav_soup_add_capsule(de__nav_soup *s, const de__nav_pose *p, f32 radius
 /** A box obstacle: its footprint (the box's xz outline in Recast space, from its 8 corners
  *  bounding rectangle when rotated off the vertical) is carved, inflated by the agent radius. */
 void de__nav_soup_add_obstacle(de__nav_soup *s, const de__nav_pose *p, de_vec3 half_extents);
+/** An off-mesh link between two world points (DENG-77); every tile build gets it, Detour keeps
+ *  it in the tile that holds `from`. */
+void de__nav_soup_add_offmesh(de__nav_soup *s, de_dvec3 from, de_dvec3 to, f32 radius,
+                              bool bidirectional, u8 area);
 /** The convex hull of `count` local points (brute force; at most 64 points). */
 void de__nav_soup_add_hull(de__nav_soup *s, const de__nav_pose *p, const de_vec3 *points,
                            u32 count);
