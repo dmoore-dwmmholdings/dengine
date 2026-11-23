@@ -2,19 +2,39 @@
 #include <string.h>
 #include <wchar.h>
 typedef struct rt_library {
-    wchar_t name[32], original[128];
+    wchar_t name[32];
+    wchar_t *original; /* UTF-16 entry name from the device allocator; original_units long */
+    size_t original_units;
     D3D12_EXPORT_DESC export;
     D3D12_DXIL_LIBRARY_DESC library;
 } rt_library;
-static void library(rt_library *l, de_gpu_shader_blob b, u32 index) {
+_Static_assert(sizeof(wchar_t) == sizeof(u16), "wchar_t is UTF-16 on Windows");
+/* Fills `l`. On failure `l` owns nothing; on success it owns `original` (see library_release). */
+static de_result library(de_gpu_device *d, rt_library *l, de_gpu_shader_blob b, u32 index) {
     memset(l, 0, sizeof *l);
+    u16 *original = NULL;
+    de_result r = de__d3d12_rt_entry_to_utf16(d->alloc, b.entry, &original, &l->original_units);
+    if (r != DE_OK) {
+        l->original_units = 0;
+        return de__gpu_fail(d, r,
+                            r == DE_ERR_OUT_OF_MEMORY
+                                ? "DXR entry name: out of memory"
+                                : "DXR entry name is empty or not valid UTF-8");
+    }
+    l->original = (wchar_t *)original;
     swprintf(l->name, 32, L"deRtStage%u", index);
-    MultiByteToWideChar(CP_UTF8, 0, b.entry ? b.entry : "main", -1, l->original, 128);
     l->export.Name = l->name;
     l->export.ExportToRename = l->original;
     l->library.DXILLibrary = (D3D12_SHADER_BYTECODE){b.code, (SIZE_T)b.size};
     l->library.NumExports = 1;
     l->library.pExports = &l->export;
+    return DE_OK;
+}
+static void library_release(de_gpu_device *d, rt_library *l) {
+    if (l->original)
+        DE_FREE(d->alloc, l->original, l->original_units * sizeof(u16));
+    l->original = NULL;
+    l->original_units = 0;
 }
 de_result de__d3d12_rt_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
                                        const de_gpu_pipeline_desc *desc) {
@@ -42,7 +62,9 @@ de_result de__d3d12_rt_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
     if (!libs || !sub || !groups || !names || !handles)
         goto cleanup;
     for (u32 i = 0; i < 1 + r.miss_count; ++i) {
-        library(&libs[nlibs], i ? r.miss[i - 1] : r.raygen, nlibs);
+        result = library(d, &libs[nlibs], i ? r.miss[i - 1] : r.raygen, nlibs);
+        if (result != DE_OK)
+            goto cleanup;
         memcpy(names[i], libs[nlibs].name, sizeof names[i]);
         sub[count++] = (D3D12_STATE_SUBOBJECT){D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,
                                                &libs[nlibs++].library};
@@ -53,12 +75,16 @@ de_result de__d3d12_rt_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
         swprintf(names[1 + r.miss_count + i], 32, L"deRtHit%u", i);
         g->HitGroupExport = names[1 + r.miss_count + i];
         g->Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
-        library(&libs[nlibs], r.hit_groups[i].closest_hit, nlibs);
+        result = library(d, &libs[nlibs], r.hit_groups[i].closest_hit, nlibs);
+        if (result != DE_OK)
+            goto cleanup;
         g->ClosestHitShaderImport = libs[nlibs].name;
         sub[count++] = (D3D12_STATE_SUBOBJECT){D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,
                                                &libs[nlibs++].library};
         if (r.hit_groups[i].any_hit.code) {
-            library(&libs[nlibs], r.hit_groups[i].any_hit, nlibs);
+            result = library(d, &libs[nlibs], r.hit_groups[i].any_hit, nlibs);
+            if (result != DE_OK)
+                goto cleanup;
             g->AnyHitShaderImport = libs[nlibs].name;
             sub[count++] = (D3D12_STATE_SUBOBJECT){D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,
                                                    &libs[nlibs++].library};
@@ -109,8 +135,11 @@ state_fail:
         out->rt_state = NULL;
     }
 cleanup:
-    if (libs)
+    if (libs) {
+        for (u32 i = 0; i < nlibs; ++i)
+            library_release(d, &libs[i]);
         DE_FREE(d->alloc, libs, (size_t)capacity * sizeof *libs);
+    }
     if (sub)
         DE_FREE(d->alloc, sub, (size_t)(capacity + r.hit_group_count + 3) * sizeof *sub);
     if (groups)
