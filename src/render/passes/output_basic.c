@@ -154,7 +154,10 @@ static void debug_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
         .gb0 = debug_texture(p, pass, vc->gbuffer[DE__GB0]),
         .gb1 = debug_texture(p, pass, vc->gbuffer[DE__GB1]),
         .gb2 = debug_texture(p, pass, vc->gbuffer[DE__GB2]),
-        .motion = debug_texture(p, pass, vc->gbuffer[DE__GB_MOTION]),
+        /* vis.motion is created sampled only when something samples it (resolve.c). */
+        .motion = p->mode == DE_VIEW_RENDER_MOTION
+                      ? debug_texture(p, pass, vc->gbuffer[DE__GB_MOTION])
+                      : 0u,
         .depth = debug_texture(p, pass, vc->depth),
         .emission = debug_texture(p, pass, vc->gbuffer[DE__GB_LIGHTING]),
         .dst = de_gpu_texture_bindless(p->ob->vis->dev, de_rg_texture(pass, p->dst), 0, true),

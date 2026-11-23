@@ -138,6 +138,12 @@ def main():
                     results[mode] = (nonblack, diff)
                     assert nonblack >= MIN_PIXELS, (mode, "is black on the mesh", nonblack)
                     assert diff >= MIN_PIXELS, (mode, "does not differ from Lit", diff)
+                # DENG-819: every other mode must render without a GPU usage error (the log is
+                # checked below); the output is not compared, only produced.
+                for mode in ("unlit", "baseColor", "roughness", "metallic", "ao", "emissive",
+                             "motionVectors", "depth"):
+                    call("view.setRenderMode", view=view["view"], renderMode=mode)
+                    frame()
                 call("view.destroy", view=view["view"])
 
                 # DENG-818: orthoHeight <= 0 keeps the perspective camera (fovY > 0), and a
@@ -161,6 +167,11 @@ def main():
                 assert differing(persp, zero) < MIN_PIXELS, "orthoHeight 0 did not stay perspective"
                 ortho = mesh_lit(dict(camera, orthoHeight=8.), "orthoHeight 8")
                 assert differing(persp, ortho) >= MIN_PIXELS, "orthoHeight 8 is not orthographic"
+                log.flush()
+                log.seek(0)
+                bad = [l for l in log.read().splitlines()
+                       if "[error][gpu]" in l or "lacks DE_USAGE_" in l]
+                assert not bad, ("engine logged GPU usage errors", bad[:5])
                 print("PASS: mesh_scene Scene modes differ from Lit and are non-black "
                       "(non-black px, differing px):", results)
             except BaseException:
