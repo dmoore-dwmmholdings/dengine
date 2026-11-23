@@ -2009,7 +2009,7 @@ TEST_F(editor_prefab_structural, a_removed_component_is_listed_reverted_and_appl
     /* Revert puts the prefab's component back, remapped, without a new prefab revision. */
     const u64 rev = o.revision;
     const pf_call call = {.path = "TTarget", .kind = "component_removed"};
-    const u32 rt = prefab_ok(f, DE_EP_METHOD_PREFAB_REVERT_OVERRIDE, a, call);
+    const u32 rt = prefab_ok(f, DE_EP_METHOD_PREFAB_REVERT_OVERRIDE, ca, call);
     ASSERT_TRUE(has_comp(f, ca, p.target));
     const TTarget *t = de_entity_get(f->engine.world, ca, p.target);
     EXPECT_EQ(t->target.bits, a.bits);
@@ -2024,7 +2024,7 @@ TEST_F(editor_prefab_structural, a_removed_component_is_listed_reverted_and_appl
     /* Apply removes the table from the prefab and from the variant, which inherits it; the
      * nesting prefab sets its own TTarget (speed 2.0) and keeps it. Every instance follows. */
     static const char *const names[] = {"crate.prefab.toml", "crate_heavy.prefab.toml"};
-    const u32 tx = apply_files(f, a, call, names, 2);
+    const u32 tx = apply_files(f, ca, call, names, 2);
     const text crate1 = read_text(CRATE), heavy1 = read_text(HEAVY);
     EXPECT_TRUE(text_eq(crate1, replaced(crate, CRATE_TARGET, "")));
     EXPECT_TRUE(text_eq(heavy1, replaced(heavy, CRATE_TARGET, "")));
@@ -2074,7 +2074,7 @@ TEST_F(editor_prefab_structural, an_added_component_is_listed_reverted_and_appli
     EXPECT_FALSE(overrides_of(f, a, ca, "THealth.current").found);
 
     const pf_call call = {.path = "THealth", .kind = "component_added"};
-    const u32 rt = prefab_ok(f, DE_EP_METHOD_PREFAB_REVERT_OVERRIDE, a, call);
+    const u32 rt = prefab_ok(f, DE_EP_METHOD_PREFAB_REVERT_OVERRIDE, ca, call);
     EXPECT_FALSE(has_comp(f, ca, p.health));
     EXPECT_EQ(overrides_of(f, a, ca, "THealth").count, 0u);
     transaction(f, DE_EP_METHOD_EDIT_UNDO, rt);
@@ -2086,7 +2086,7 @@ TEST_F(editor_prefab_structural, an_added_component_is_listed_reverted_and_appli
      * component too, so they follow. The other instance gains it. */
     static const char *const names[] = {"crate.prefab.toml", "crate_heavy.prefab.toml",
                                         "stack.prefab.toml"};
-    const u32 tx = apply_files(f, a, call, names, 3);
+    const u32 tx = apply_files(f, ca, call, names, 3);
     const text crate1 = read_text(CRATE), heavy1 = read_text(HEAVY), stack1 = read_text(STACK);
     EXPECT_TRUE(strncmp(crate1.s + crate.n, ADDED_HEALTH, strlen(ADDED_HEALTH)) == 0);
     EXPECT_TRUE(memcmp(crate1.s, crate.s, crate.n) == 0);
@@ -2126,7 +2126,7 @@ TEST_F(editor_prefab_structural, a_variant_applies_to_its_base, safety_fx) {
     EXPECT_STREQ(o.chain[1], "props/crate");
     static const char *const names[] = {"crate.prefab.toml", "crate_heavy.prefab.toml"};
     const u32 tx = apply_files(
-        f, v, (pf_call){.path = "TTarget", .kind = "component_removed", .target = "props/crate"},
+        f, cv, (pf_call){.path = "TTarget", .kind = "component_removed", .target = "props/crate"},
         names, 2);
     EXPECT_TRUE(text_eq(read_text(CRATE), replaced(crate, CRATE_TARGET, "")));
     EXPECT_TRUE(text_eq(read_text(HEAVY), replaced(heavy, CRATE_TARGET, "")));
@@ -2159,7 +2159,7 @@ TEST_F(editor_prefab_structural, a_nested_instance_applies_to_the_nested_prefab,
     static const char *const names[] = {"crate.prefab.toml", "crate_heavy.prefab.toml",
                                         "stack.prefab.toml"};
     const u32 tx = apply_files(
-        f, s, (pf_call){.path = "THealth", .kind = "component_added", .target = "props/crate"},
+        f, leaf, (pf_call){.path = "THealth", .kind = "component_added", .target = "props/crate"},
         names, 3);
     const text crate1 = read_text(CRATE);
     EXPECT_TRUE(memcmp(crate1.s, crate.s, crate.n) == 0);
@@ -2172,6 +2172,21 @@ TEST_F(editor_prefab_structural, a_nested_instance_applies_to_the_nested_prefab,
     EXPECT_TRUE(text_eq(read_text(HEAVY), heavy));
     EXPECT_TRUE(text_eq(read_text(STACK), stack));
     EXPECT_TRUE(overrides_of(f, s, leaf, "THealth").found);
+}
+
+/* Entity ids change on a reload: the expected bases name entity `to` where they named `from`. */
+static void rebase(pf_ov *o, int n, u64 from, u64 to) {
+    char was[32], now[32];
+    snprintf(was, sizeof was, "u%llu,", (unsigned long long)from);
+    snprintf(now, sizeof now, "u%llu,", (unsigned long long)to);
+    for (int i = 0; i < n; ++i) {
+        char *at = strstr(o[i].base, was);
+        if (at == NULL)
+            continue;
+        char rest[128];
+        snprintf(rest, sizeof rest, "%s", at + strlen(was));
+        snprintf(at, sizeof o[i].base - (size_t)(at - o[i].base), "%s%s", now, rest);
+    }
 }
 
 TEST_F(editor_prefab_structural, save_and_reload_keep_the_structural_overrides, safety_fx) {
@@ -2192,12 +2207,15 @@ TEST_F(editor_prefab_structural, save_and_reload_keep_the_structural_overrides, 
     EXPECT_STREQ(os[0].path, "TTarget");
     EXPECT_STREQ(oa[0].path, "THealth");
     const u64 s_sid = sid_of(s), a_sid = sid_of(a), ca_sid = sid_of(ca);
+    const u64 inner = first_child(f, s).bits;
     static char saved[32768];
     snprintf(saved, sizeof saved, "%s", scene_text(f, 1));
 
     ASSERT_TRUE(scene_reload(f, 1, saved));
     const de_entity s2 = entity_of(f, 1, s_sid), a2 = entity_of(f, 1, a_sid);
     ASSERT_TRUE(s2.bits != 0 && a2.bits != 0);
+    /* The removed TTarget's base targets the nested crate root, which is a new entity now. */
+    rebase(os, ns, inner, first_child(f, s2).bits);
     expect_same_overrides(got, overrides_all(f, s2, got), os, ns);
     expect_same_overrides(got, overrides_all(f, a2, got), oa, na);
     EXPECT_STREQ(scene_text(f, 1), saved);
@@ -2210,12 +2228,13 @@ TEST_F(editor_prefab_structural, save_and_reload_keep_the_structural_overrides, 
     const de_entity s3 = entity_of(f, sc, s_sid), a3 = entity_of(f, sc, a_sid);
     const de_entity ca3 = entity_of(f, sc, ca_sid);
     ASSERT_TRUE(s3.bits != 0 && a3.bits != 0 && ca3.bits != 0);
+    rebase(os, ns, first_child(f, s2).bits, first_child(f, s3).bits);
     expect_same_overrides(got, overrides_all(f, s3, got), os, ns);
     expect_same_overrides(got, overrides_all(f, a3, got), oa, na);
     EXPECT_STREQ(scene_text(f, sc), saved);
 
     /* A loaded structural override reverts like a live one. */
-    const u32 tx = prefab_ok(f, DE_EP_METHOD_PREFAB_REVERT_OVERRIDE, a3,
+    const u32 tx = prefab_ok(f, DE_EP_METHOD_PREFAB_REVERT_OVERRIDE, ca3,
                              (pf_call){.path = "THealth", .kind = "component_added"});
     EXPECT_FALSE(has_comp(f, ca3, p.health));
     EXPECT_EQ(overrides_all(f, a3, got), 0);

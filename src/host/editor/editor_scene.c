@@ -45,7 +45,7 @@ typedef struct ed_member {
 /* One prefab field as instantiated: what an override differs from. */
 typedef struct ed_base {
     u64 entity;
-    char path[128]; /* "Component.field" */
+    char path[128]; /* "Component.field", or "Component" (value nil): the entity has it */
     u32 off, len;
 } ed_base;
 
@@ -307,6 +307,16 @@ static bool is_hierarchy_name(const char *name) {
     return strcmp(name, "DeChildOf") == 0 || strcmp(name, "DeChildren") == 0 ||
            strcmp(name, "DeGlobalTransform") == 0;
 }
+
+/* DENG-810: a component a structural override can name. The hierarchy is the engine's own, and
+ * the instance link is the editor's. */
+static bool comp_name_ok(const char *name) {
+    return name != NULL && name[0] != '\0' && strlen(name) < 120 && strchr(name, '.') == NULL &&
+           !is_hierarchy_name(name) && strcmp(name, "PrefabInstance") != 0;
+}
+
+/* The MessagePack nil: the value of a presence marker, and of an absent component. */
+static const char k_nil[1] = {(char)0xc0};
 
 static const char *datum_kind(toml_type_t t) {
     switch (t) {
@@ -1069,8 +1079,29 @@ u32 de__ed_scene_tree(de__editor *ed, de_entity root, u64 *out, u32 cap) {
     return tree_of(ed, root, out, cap);
 }
 
-/* "Component.field" values of every entity of the tree, as MessagePack, into `inst`. `scratch`
- * is the free part of the caller's arena: what the caller keeps there stays. */
+/* One more entry of a growing base list; NULL when out of memory. */
+static ed_base *base_vec_push(ed_base **base, u32 *cap, u32 *count) {
+    const de_allocator *al = de_heap_allocator();
+    if (*count == *cap) {
+        const u32 ncap = *cap ? *cap * 2 : 64;
+        ed_base *g = (ed_base *)DE_ALLOC(al, sizeof(ed_base) * ncap, 8, DE_MEM_GENERAL);
+        if (g == NULL)
+            return NULL;
+        if (*base != NULL) {
+            memcpy(g, *base, sizeof(ed_base) * *count);
+            DE_FREE(al, *base, sizeof(ed_base) * *cap);
+        }
+        *base = g;
+        *cap = ncap;
+    }
+    ed_base *b = &(*base)[(*count)++];
+    memset(b, 0, sizeof *b);
+    return b;
+}
+
+/* "Component.field" values of every entity of the tree, as MessagePack, into `inst`, and a
+ * "Component" marker (nil) for each component an override can name (DENG-810). `scratch` is the
+ * free part of the caller's arena: what the caller keeps there stays. */
 static void instance_base(de__editor *ed, ed_instance *inst, const de_ep_arena *scratch) {
     const de_allocator *al = de_heap_allocator();
     u64 ents[1024];
@@ -1084,7 +1115,24 @@ static void instance_base(de__editor *ed, ed_instance *inst, const de_ep_arena *
         de_ep_entity_row row;
         if (!de__ed_entity_row(ed, &a, (de_entity){ents[i]}, NULL, NULL, &row))
             continue;
-        for (u32 c = 0; c < row.components.count; ++c) {
+        for (u32 c = 0; c < row.components.count && base != NULL; ++c) {
+            char name[128];
+            snprintf(name, sizeof name, "%.*s", (int)row.components.items[c].key.len,
+                     row.components.items[c].key.ptr);
+            if (comp_name_ok(name)) {
+                ed_base *m = base_vec_push(&base, &cap, &count);
+                if (m == NULL)
+                    break;
+                m->entity = ents[i];
+                snprintf(m->path, sizeof m->path, "%s", name);
+                m->off = (u32)bytes.size;
+                m->len = 1;
+                de_writer mw = de_writer_from_mem(&bytes);
+                if (mw.write(mw.user, k_nil, 1) != DE_OK) {
+                    --count;
+                    break;
+                }
+            }
             mpack_reader_t reader;
             mpack_reader_init_data(&reader, row.components.items[c].value.ptr,
                                    row.components.items[c].value.len);
@@ -1094,19 +1142,11 @@ static void instance_base(de__editor *ed, ed_instance *inst, const de_ep_arena *
                     de_ep_kv_raw field;
                     if (!de__ed_raw_map_entry(&reader, &field))
                         break;
-                    if (count == cap) {
-                        ed_base *g =
-                            (ed_base *)DE_ALLOC(al, sizeof(ed_base) * cap * 2, 8, DE_MEM_GENERAL);
-                        if (g == NULL) {
-                            mpack_reader_flag_error(&reader, mpack_error_memory);
-                            break;
-                        }
-                        memcpy(g, base, sizeof(ed_base) * count);
-                        DE_FREE(al, base, sizeof(ed_base) * cap);
-                        base = g;
-                        cap *= 2;
+                    ed_base *b = base_vec_push(&base, &cap, &count);
+                    if (b == NULL) {
+                        mpack_reader_flag_error(&reader, mpack_error_memory);
+                        break;
                     }
-                    ed_base *b = &base[count++];
                     b->entity = ents[i];
                     snprintf(b->path, sizeof b->path, "%.*s.%.*s",
                              (int)row.components.items[c].key.len, row.components.items[c].key.ptr,
@@ -1336,10 +1376,20 @@ typedef struct def_visit {
     ed_def *d;
 } def_visit;
 
-/* Each field is written as the editor writes it, so the bytes compare exactly. */
+/* Each field is written as the editor writes it, so the bytes compare exactly. DENG-810: each
+ * entity also gets a "" marker and each component a "Component" marker (nil), so a definition
+ * knows its entities and components, tags included. */
 static void def_visit_fn(void *user, u64 sid, de_type_id type, const char *component,
                          const void *obj) {
     def_visit *v = (def_visit *)user;
+    if (component == NULL) {
+        (void)def_put(v->d, sid, "", k_nil, 1);
+        return;
+    }
+    if (comp_name_ok(component))
+        (void)def_put(v->d, sid, component, k_nil, 1);
+    if (obj == NULL)
+        return;
     u32 n = 0;
     const de_field_info *fields = de_type_fields(v->ed->e->types, type, &n);
     for (u32 i = 0; i < n && fields != NULL; ++i) {
@@ -1834,6 +1884,50 @@ static void write_links(de__editor *ed, const save_ent *list, u32 n, de_mem_writ
 
 /* The instance's fields as the prefab gives them, where the prefab has them: what a fresh spawn
  * would have recorded. A field the prefab does not have keeps its current value. */
+static bool is_nil(de_ep_raw r);
+static ed_base *base_find(ed_instance *inst, u64 entity, de_ep_str path);
+static bool def_comp_map(de_ep_arena *a, const ed_def *d, u64 sid, const char *comp,
+                         de_ep_raw *out);
+static bool comp_remap(de__editor *ed, de_ep_arena *a, const char *comp, de_ep_raw map,
+                       const u64 *from, const u64 *to, u32 n, de_ep_raw *out);
+static bool base_comp_set(ed_instance *inst, u64 entity, const char *comp, de_ep_raw map);
+
+/* The instance base takes the definition's components (DENG-810): one the instance lost
+ * (component_removed) comes back into the base from the definition, and one the instance
+ * added (component_added) leaves it. */
+static void link_components(de__editor *ed, ed_instance *inst, const ed_def *d,
+                            const de_ep_arena *scratch) {
+    for (u32 j = 0; j < inst->local_count; ++j) {
+        const u64 ent = inst->local_ent[j], lsid = inst->local_sid[j];
+        if (!def_has_sid(d, lsid))
+            continue;
+        for (bool again = true; again;) {
+            again = false;
+            for (u32 i = 0; i < inst->base_count && !again; ++i) {
+                const ed_base *b = &inst->base[i];
+                if (b->entity != ent || strchr(b->path, '.') != NULL || !comp_name_ok(b->path) ||
+                    def_get(d, lsid, b->path) != NULL)
+                    continue;
+                char comp[128];
+                snprintf(comp, sizeof comp, "%s", b->path);
+                again = base_comp_set(inst, ent, comp, (de_ep_raw){k_nil, 1});
+            }
+        }
+        for (u32 i = 0; i < d->val_count; ++i) {
+            const ed_dval *v = &d->vals[i];
+            if (v->sid != lsid || strchr(v->path, '.') != NULL || !comp_name_ok(v->path) ||
+                base_find(inst, ent, de_ep_cstr(v->path)) != NULL)
+                continue;
+            de_ep_arena a = *scratch;
+            de_ep_raw map, mine;
+            if (def_comp_map(&a, d, lsid, v->path, &map) &&
+                comp_remap(ed, &a, v->path, map, inst->local_sid, inst->local_ent,
+                           inst->local_count, &mine))
+                (void)base_comp_set(inst, ent, v->path, mine);
+        }
+    }
+}
+
 static void link_base(de__editor *ed, ed_instance *inst, const de_ep_arena *scratch) {
     instance_base(ed, inst, scratch);
     const ed_def *d = prefab_def_load(ed, inst->asset, 0);
@@ -1854,7 +1948,7 @@ static void link_base(de__editor *ed, ed_instance *inst, const de_ep_arena *scra
                   &nv) &&
             !raw_eq(nv, base_raw(inst, b)))
             (void)base_put(inst, b, nv.ptr, nv.len);
-    }
+    }    link_components(ed, inst, d, scratch);
 }
 
 static void link_instances(de__editor *ed, const toml_datum_t *top, const load_map *m,
@@ -2176,6 +2270,218 @@ static de_ep_raw base_raw(const ed_instance *inst, const ed_base *b) {
     return (de_ep_raw){(const char *)inst->bytes + b->off, b->len};
 }
 
+/* ---------- Whole components (DENG-810) ----------
+ *
+ * A definition and an instance base hold a component as a "Component" marker (nil) plus its
+ * "Component.field" entries. These helpers read such a component as one map (keys in entry
+ * order, which is the type's field order, so the bytes equal the editor's own encoding of the
+ * component), and replace or drop it. An absent component reads as nil. */
+
+static bool is_nil(de_ep_raw r) {
+    return r.len == 1 && (u8)r.ptr[0] == 0xc0u;
+}
+
+/* A whole-component path ("Component"), as opposed to a field path ("Component.field"). */
+static bool is_comp_path(const char *path) {
+    return path[0] != '\0' && strchr(path, '.') == NULL;
+}
+
+/* The field part of `path` when it is a field of `comp`, else NULL. */
+static const char *comp_field_of(const char *path, const char *comp) {
+    const size_t n = strlen(comp);
+    return strncmp(path, comp, n) == 0 && path[n] == '.' ? path + n + 1 : NULL;
+}
+
+/* A map of `n` keys and raw values, in the arena. */
+static bool map_build(de_ep_arena *a, const de_ep_str *keys, const de_ep_raw *vals, u32 n,
+                      de_ep_raw *out) {
+    mpack_writer_t mw;
+    de__ed_raw_begin(a, &mw);
+    mpack_start_map(&mw, n);
+    for (u32 i = 0; i < n; ++i) {
+        mpack_write_str(&mw, keys[i].ptr, keys[i].len);
+        mpack_write_object_bytes(&mw, vals[i].ptr, vals[i].len);
+    }
+    mpack_finish_map(&mw);
+    *out = de__ed_raw_end(a, &mw);
+    return out->len != 0;
+}
+
+/* `comp` of (d, sid) as a map; nil when the definition does not have it. */
+static bool def_comp_map(de_ep_arena *a, const ed_def *d, u64 sid, const char *comp,
+                         de_ep_raw *out) {
+    if (def_get(d, sid, comp) == NULL) {
+        *out = (de_ep_raw){k_nil, 1};
+        return true;
+    }
+    u32 n = 0;
+    for (u32 i = 0; i < d->val_count; ++i)
+        n += d->vals[i].sid == sid && comp_field_of(d->vals[i].path, comp) != NULL;
+    de_ep_str *keys = (de_ep_str *)de__ed_alloc(a, sizeof(de_ep_str) * (n + 1));
+    de_ep_raw *vals = (de_ep_raw *)de__ed_alloc(a, sizeof(de_ep_raw) * (n + 1));
+    if (keys == NULL || vals == NULL)
+        return false;
+    u32 k = 0;
+    for (u32 i = 0; i < d->val_count && k < n; ++i) {
+        const char *f = d->vals[i].sid == sid ? comp_field_of(d->vals[i].path, comp) : NULL;
+        if (f == NULL)
+            continue;
+        keys[k] = de_ep_cstr(f);
+        vals[k++] = dval_raw(d, &d->vals[i]);
+    }
+    return map_build(a, keys, vals, k, out);
+}
+
+/* `comp` of `entity` in the instance base as a map; nil when the base does not have it. */
+static bool base_comp_map(de_ep_arena *a, ed_instance *inst, u64 entity, const char *comp,
+                          de_ep_raw *out) {
+    if (base_find(inst, entity, de_ep_cstr(comp)) == NULL) {
+        *out = (de_ep_raw){k_nil, 1};
+        return true;
+    }
+    u32 n = 0;
+    for (u32 i = 0; i < inst->base_count; ++i)
+        n += inst->base[i].entity == entity && comp_field_of(inst->base[i].path, comp) != NULL;
+    de_ep_str *keys = (de_ep_str *)de__ed_alloc(a, sizeof(de_ep_str) * (n + 1));
+    de_ep_raw *vals = (de_ep_raw *)de__ed_alloc(a, sizeof(de_ep_raw) * (n + 1));
+    if (keys == NULL || vals == NULL)
+        return false;
+    u32 k = 0;
+    for (u32 i = 0; i < inst->base_count && k < n; ++i) {
+        const ed_base *b = &inst->base[i];
+        const char *f = b->entity == entity ? comp_field_of(b->path, comp) : NULL;
+        if (f == NULL)
+            continue;
+        keys[k] = de_ep_cstr(f);
+        vals[k++] = base_raw(inst, b);
+    }
+    return map_build(a, keys, vals, k, out);
+}
+
+/* The current value of `comp` on `entity` as a map; nil when the entity does not have it. */
+static bool current_comp(de__editor *ed, de_ep_arena *a, u64 entity, const char *comp,
+                         de_ep_raw *out) {
+    de_ep_str c = de_ep_cstr(comp);
+    de_ep_list_str only = {&c, 1};
+    de_ep_entity_row row;
+    if (!de__ed_entity_row(ed, a, (de_entity){entity}, &only, NULL, &row))
+        return false;
+    *out = row.components.count == 1 ? row.components.items[0].value : (de_ep_raw){k_nil, 1};
+    return true;
+}
+
+/* `map` (a value of `comp`, or nil) with the entity ids of its fields mapped `from` -> `to`. */
+static bool comp_remap(de__editor *ed, de_ep_arena *a, const char *comp, de_ep_raw map,
+                       const u64 *from, const u64 *to, u32 n, de_ep_raw *out) {
+    if (is_nil(map)) {
+        *out = map;
+        return true;
+    }
+    mpack_reader_t r;
+    mpack_reader_init_data(&r, map.ptr, map.len);
+    const u32 count = mpack_expect_map_max(&r, 1024);
+    de_ep_str *keys = (de_ep_str *)de__ed_alloc(a, sizeof(de_ep_str) * (count + 1));
+    de_ep_raw *vals = (de_ep_raw *)de__ed_alloc(a, sizeof(de_ep_raw) * (count + 1));
+    if (keys == NULL || vals == NULL)
+        mpack_reader_flag_error(&r, mpack_error_memory);
+    bool ok = true;
+    for (u32 i = 0; i < count && ok && mpack_reader_error(&r) == mpack_ok; ++i) {
+        de_ep_kv_raw kv;
+        if (!de__ed_raw_map_entry(&r, &kv))
+            break;
+        keys[i] = kv.key;
+        vals[i] = kv.value;
+        char path[128];
+        snprintf(path, sizeof path, "%s.%.*s", comp, (int)kv.key.len, kv.key.ptr);
+        ed_kind kind = {0};
+        if (path_field(ed, path, &kind) && kind.has)
+            ok = remap(a, kind, kv.value, from, to, n, &vals[i]);
+    }
+    mpack_done_map(&r);
+    if (mpack_reader_destroy(&r) != mpack_ok || !ok)
+        return false;
+    return map_build(a, keys, vals, count, out);
+}
+
+/* Level k's value of `comp`, in the ids of level k + 1. */
+static bool comp_down_one(de__editor *ed, de_ep_arena *a, const char *comp, const ed_level *lv,
+                          u32 k, de_ep_raw raw, de_ep_raw *out) {
+    const ed_nest *n = lv[k + 1].via;
+    return comp_remap(ed, a, comp, raw, n ? n->outer : NULL, n ? n->inner : NULL,
+                      n ? n->count : 0, out);
+}
+
+/* (d, sid) has `comp` as `map`, or not at all when `map` is nil. */
+static bool def_comp_set(ed_def *d, u64 sid, const char *comp, de_ep_raw map) {
+    u32 k = 0;
+    for (u32 i = 0; i < d->val_count; ++i) {
+        const ed_dval *v = &d->vals[i];
+        if (v->sid == sid && (strcmp(v->path, comp) == 0 || comp_field_of(v->path, comp) != NULL))
+            continue;
+        d->vals[k++] = *v;
+    }
+    d->val_count = k;
+    if (is_nil(map))
+        return true;
+    bool ok = def_put(d, sid, comp, k_nil, 1);
+    mpack_reader_t r;
+    mpack_reader_init_data(&r, map.ptr, map.len);
+    const u32 count = mpack_expect_map_max(&r, 1024);
+    for (u32 i = 0; i < count && ok && mpack_reader_error(&r) == mpack_ok; ++i) {
+        de_ep_kv_raw kv;
+        if (!de__ed_raw_map_entry(&r, &kv))
+            break;
+        char path[128];
+        snprintf(path, sizeof path, "%s.%.*s", comp, (int)kv.key.len, kv.key.ptr);
+        ok = def_put(d, sid, path, kv.value.ptr, kv.value.len);
+    }
+    mpack_done_map(&r);
+    return mpack_reader_destroy(&r) == mpack_ok && ok;
+}
+
+/* A new base entry (entity, path) with value `raw`. */
+static bool base_append(ed_instance *inst, u64 entity, const char *path, const void *raw,
+                        size_t len) {
+    ed_base *b = base_vec_push(&inst->base, &inst->base_cap, &inst->base_count);
+    if (b == NULL)
+        return false;
+    b->entity = entity;
+    snprintf(b->path, sizeof b->path, "%s", path);
+    if (!base_put(inst, b, raw, len)) {
+        --inst->base_count;
+        return false;
+    }
+    return true;
+}
+
+/* The base of `entity` has `comp` as `map`, or not at all when `map` is nil. */
+static bool base_comp_set(ed_instance *inst, u64 entity, const char *comp, de_ep_raw map) {
+    u32 k = 0;
+    for (u32 i = 0; i < inst->base_count; ++i) {
+        const ed_base *b = &inst->base[i];
+        if (b->entity == entity &&
+            (strcmp(b->path, comp) == 0 || comp_field_of(b->path, comp) != NULL))
+            continue;
+        inst->base[k++] = *b;
+    }
+    inst->base_count = k;
+    if (is_nil(map))
+        return true;
+    bool ok = base_append(inst, entity, comp, k_nil, 1);
+    mpack_reader_t r;
+    mpack_reader_init_data(&r, map.ptr, map.len);
+    const u32 count = mpack_expect_map_max(&r, 1024);
+    for (u32 i = 0; i < count && ok && mpack_reader_error(&r) == mpack_ok; ++i) {
+        de_ep_kv_raw kv;
+        if (!de__ed_raw_map_entry(&r, &kv))
+            break;
+        char path[128];
+        snprintf(path, sizeof path, "%s.%.*s", comp, (int)kv.key.len, kv.key.ptr);
+        ok = base_append(inst, entity, path, kv.value.ptr, kv.value.len);
+    }
+    mpack_done_map(&r);
+    return mpack_reader_destroy(&r) == mpack_ok && ok;
+}
 /* ---------- Prefab reload (DENG-803) ----------
  *
  * When a prefab asset is reloaded, its definition and the loaded definitions that link to it
@@ -2359,27 +2665,60 @@ static void on_overrides(de__editor *ed, const de_ep_request *req, de_ep_arena *
     u64 tree[1024];
     const u32 tn = tree_of(ed, (de_entity){q.entity}, tree, 1024);
     ed_def *def = def_find(inst->asset);
-    const u32 count = inst->base_count;
+    /* The component rows of the subtree's instance entities, for component_added (DENG-810). */
+    de_ep_entity_row *ents = tn ? (de_ep_entity_row *)de__ed_alloc(a, sizeof *ents * tn) : NULL;
+    u32 added = 0;
+    for (u32 k = 0; k < tn && ents != NULL; ++k) {
+        u64 sid = 0;
+        if (!local_sid_of(inst, tree[k], &sid) ||
+            !de__ed_entity_row(ed, a, (de_entity){tree[k]}, NULL, NULL, &ents[k]))
+            ents[k] = (de_ep_entity_row){0};
+        added += ents[k].components.count;
+    }
+    const u32 count = inst->base_count + added;
     typedef struct pf_row {
-        const ed_base *b;
-        de_ep_raw cur;
+        u64 entity;
+        const char *path;
+        de_ep_raw cur, base;
+        bool structural;
+        de_ep_override_kind kind;
         ed_level lv[ED_CHAIN_MAX];
         u32 levels, source;
     } pf_row;
     pf_row *rows = count ? (pf_row *)de__ed_alloc(a, sizeof(pf_row) * count) : NULL;
+    if (count && (rows == NULL || (tn && ents == NULL))) {
+        prefab_error(w, req->id, DE_EP_ERR_BUSY, "memory", "out of scratch memory");
+        return;
+    }
     u32 n = 0;
     for (u32 i = 0; i < inst->base_count && rows != NULL; ++i) {
         const ed_base *b = &inst->base[i];
         bool in_tree = false;
         for (u32 k = 0; k < tn && !in_tree; ++k)
             in_tree = tree[k] == b->entity;
+        if (!in_tree)
+            continue;
+        if (strchr(b->path, '.') == NULL) {
+            /* A component marker: component_removed when the entity no longer has it. */
+            de_ep_raw cur, base;
+            u64 sid = 0;
+            if (!comp_name_ok(b->path) || !current_comp(ed, a, b->entity, b->path, &cur) ||
+                !is_nil(cur) || !base_comp_map(a, inst, b->entity, b->path, &base))
+                continue;
+            pf_row *row = &rows[n++];
+            *row = (pf_row){.entity = b->entity, .path = b->path, .cur = cur, .base = base,
+                            .structural = true, .kind = DE_EP_OVERRIDE_KIND_COMPONENT_REMOVED};
+            row->levels = local_sid_of(inst, b->entity, &sid) ? chain_of(def, sid, "", row->lv) : 0;
+            while (row->source < row->levels &&
+                   def_get(row->lv[row->source].d, row->lv[row->source].sid, b->path) == NULL)
+                ++row->source;
+            continue;
+        }
         de_ep_raw cur;
-        if (!in_tree || !current_value(ed, a, b->entity, b->path, &cur) ||
-            raw_eq(cur, base_raw(inst, b)))
+        if (!current_value(ed, a, b->entity, b->path, &cur) || raw_eq(cur, base_raw(inst, b)))
             continue;
         pf_row *row = &rows[n++];
-        row->b = b;
-        row->cur = cur;
+        *row = (pf_row){.entity = b->entity, .path = b->path, .cur = cur, .base = base_raw(inst, b)};
         u64 sid = 0;
         ed_kind entity = {0};
         row->levels = local_sid_of(inst, b->entity, &sid) && path_field(ed, b->path, &entity)
@@ -2390,6 +2729,29 @@ static void on_overrides(de__editor *ed, const de_ep_request *req, de_ep_arena *
                !level_owns(a, entity, row->lv, row->levels, row->source, b->path))
             ++row->source;
     }
+    /* component_added: an instance entity has a component its base does not. */
+    for (u32 k = 0; k < tn && rows != NULL; ++k)
+        for (u32 c = 0; c < ents[k].components.count; ++c) {
+            const de_ep_kv_raw *kv = &ents[k].components.items[c];
+            char name[128];
+            if (kv->key.len >= sizeof name)
+                continue;
+            memcpy(name, kv->key.ptr, kv->key.len);
+            name[kv->key.len] = '\0';
+            u64 sid = 0;
+            if (!comp_name_ok(name) || base_find(inst, tree[k], kv->key) != NULL ||
+                !local_sid_of(inst, tree[k], &sid))
+                continue;
+            char *path = (char *)de__ed_alloc(a, kv->key.len + 1);
+            if (path == NULL)
+                continue;
+            memcpy(path, name, kv->key.len + 1);
+            pf_row *row = &rows[n++];
+            *row = (pf_row){.entity = tree[k], .path = path, .cur = kv->value,
+                            .base = (de_ep_raw){k_nil, 1}, .structural = true,
+                            .kind = DE_EP_OVERRIDE_KIND_COMPONENT_ADDED};
+            row->levels = chain_of(def, sid, "", row->lv);
+        }
     de_ep_override *out = n ? (de_ep_override *)de__ed_alloc(a, sizeof(de_ep_override) * n) : NULL;
     if (n && out == NULL) {
         prefab_error(w, req->id, DE_EP_ERR_BUSY, "memory", "out of scratch memory");
@@ -2409,14 +2771,16 @@ static void on_overrides(de__editor *ed, const de_ep_request *req, de_ep_arena *
             ids[k] = row->lv[k].sid;
         }
         out[i] = (de_ep_override){
-            .path = de_ep_cstr(row->b->path),
+            .path = de_ep_cstr(row->path),
             .value = row->cur,
-            .entity = row->b->entity,
-            .base = base_raw(inst, row->b),
+            .entity = row->entity,
+            .base = row->base,
             .source = de_ep_cstr(row->source < row->levels ? row->lv[row->source].d->asset
                                                            : inst->asset),
             .chain = {chain, row->levels},
             .ids = {ids, row->levels},
+            .has_kind = row->structural,
+            .kind = row->kind,
         };
     }
     const de_ep_override_list res = {
@@ -2627,7 +2991,8 @@ static bool load_dependents(de__editor *ed, const de_ep_request *req, mpack_writ
  * UNSUPPORTED error with reason `kind`. Returns true when the request was refused. */
 static bool reject_structural_kind(const de_ep_override_path_params *q, const de_ep_request *req,
                                    mpack_writer_t *w) {
-    if (!q->has_kind || q->kind == DE_EP_OVERRIDE_KIND_FIELD)
+    if (!q->has_kind || (q->kind != DE_EP_OVERRIDE_KIND_ENTITY_ADDED &&
+                         q->kind != DE_EP_OVERRIDE_KIND_ENTITY_REMOVED))
         return false;
     prefab_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "kind",
                  "override kind %s is not supported yet", de_ep_override_kind_name(q->kind));
@@ -2638,6 +3003,322 @@ static bool reject_structural_kind(const de_ep_override_path_params *q, const de
  * instance's prefab) and of every level between. The change flows on to the variants and
  * nesting prefabs that did not set the field themselves, and to every instance that had the old
  * value. All of it is one undoable transaction. */
+/* The rest of an apply: the prefab.state op that writes `dc` and `bc` (`path` is the field or
+ * the whole component) goes in ops[0], ahead of the instance edits in ops[1..no), and the
+ * result lists the prefabs, their files and the instance entities. */
+static void apply_finish(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                         mpack_writer_t *w, const de_ep_override_path_params *q, u64 root,
+                         const char *path, const pf_dchg *dc, u32 nd, const pf_bchg *bc, u32 nb,
+                         de_ep_edit_op *ops, u32 no) {
+    mpack_writer_t mw;
+    de__ed_raw_begin(a, &mw);
+    mpack_start_map(&mw, 2);
+    mpack_write_cstr(&mw, "defs");
+    mpack_start_array(&mw, nd);
+    for (u32 i = 0; i < nd; ++i) {
+        mpack_start_map(&mw, 5);
+        mpack_write_cstr(&mw, "asset");
+        mpack_write_cstr(&mw, dc[i].d->asset);
+        mpack_write_cstr(&mw, "sid");
+        mpack_write_u64(&mw, dc[i].sid);
+        mpack_write_cstr(&mw, "path");
+        mpack_write_cstr(&mw, path);
+        mpack_write_cstr(&mw, "value");
+        mpack_write_object_bytes(&mw, dc[i].val.ptr, dc[i].val.len);
+        mpack_write_cstr(&mw, "follow");
+        mpack_write_bool(&mw, dc[i].follow);
+        mpack_finish_map(&mw);
+    }
+    mpack_finish_array(&mw);
+    mpack_write_cstr(&mw, "bases");
+    mpack_start_array(&mw, nb);
+    for (u32 i = 0; i < nb; ++i) {
+        mpack_start_map(&mw, 4);
+        mpack_write_cstr(&mw, "root");
+        mpack_write_u64(&mw, bc[i].inst->root);
+        mpack_write_cstr(&mw, "entity");
+        mpack_write_u64(&mw, bc[i].entity);
+        mpack_write_cstr(&mw, "path");
+        mpack_write_cstr(&mw, path);
+        mpack_write_cstr(&mw, "value");
+        mpack_write_object_bytes(&mw, bc[i].val.ptr, bc[i].val.len);
+        mpack_finish_map(&mw);
+    }
+    mpack_finish_array(&mw);
+    mpack_finish_map(&mw);
+    ops[0].op = de_ep_cstr("prefab.state");
+    ops[0].has_value = true;
+    ops[0].value = de__ed_raw_end(a, &mw);
+    if (ops[0].value.len == 0) {
+        prefab_error(w, req->id, DE_EP_ERR_BUSY, "memory", "out of scratch memory");
+        return;
+    }
+    /* The edit reuses the scratch arena: keep what the result reports. */
+    const char *names[ED_PLAN_MAX];
+    u64 ents[ED_PLAN_MAX];
+    for (u32 i = 0; i < nd; ++i)
+        names[i] = dc[i].d->asset;
+    for (u32 i = 0; i < nb; ++i)
+        ents[i] = bc[i].entity;
+    de_ep_error code = DE_EP_OK;
+    char msg[256];
+    g_files.reason = NULL;
+    const u32 tx = de__ed_edit_run(ed, a, q->has_tx ? q->tx : 0, instance_scene(root), ops, no, &code, msg, sizeof msg);
+    if (tx == 0) {
+        prefab_error(w, req->id, code, g_files.reason ? g_files.reason : "edit", "%s", msg);
+        return;
+    }
+    /* `files` (protocol 1.19) is the source path of each entry of `prefabs`, in the same order:
+     * the manifest's, as listed in the manifest ("crate.prefab.toml"). */
+    de_ep_str pnames[ED_PLAN_MAX], fnames[ED_PLAN_MAX];
+    for (u32 i = 0; i < nd; ++i) {
+        const char *src = de__ed_asset_source_path(ed, names[i]);
+        pnames[i] = de_ep_cstr(names[i]);
+        fnames[i] = de_ep_cstr(src != NULL ? src : names[i]);
+    }
+    const de_ep_apply_result res = {
+        .tx = tx,
+        .revision = g_prefab.revision,
+        .prefabs = {pnames, nd},
+        .entities = {ents, nb},
+        .files = {fnames, nd},
+    };
+    de_ep_write_response_prefab_apply_override(w, req->id, &res);
+}
+
+/* ---------- Structural overrides: whole components (DENG-810) ---------- */
+
+/* What a component_added or component_removed request names, checked in the protocol's order. */
+typedef struct pf_sreq {
+    ed_instance *inst;
+    char comp[128];
+    de_ep_raw cur; /* the instance's map, or nil (removed) */
+    ed_level lv[ED_CHAIN_MAX];
+    u32 levels;
+} pf_sreq;
+
+static bool structural_check(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                             mpack_writer_t *w, const de_ep_override_path_params *q,
+                             pf_sreq *s) {
+    memset(s, 0, sizeof *s);
+    const bool added = q->kind == DE_EP_OVERRIDE_KIND_COMPONENT_ADDED;
+    if (q->path.len >= sizeof s->comp || memchr(q->path.ptr, '\0', q->path.len) != NULL) {
+        prefab_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "path", "bad path %.*s",
+                     (int)q->path.len, q->path.ptr);
+        return false;
+    }
+    if (q->path.len == 0 || memchr(q->path.ptr, '.', q->path.len) != NULL) {
+        prefab_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "kind",
+                     "%s takes a component name, not %.*s", de_ep_override_kind_name(q->kind),
+                     (int)q->path.len, q->path.ptr);
+        return false;
+    }
+    memcpy(s->comp, q->path.ptr, q->path.len);
+    s->comp[q->path.len] = '\0';
+    if (de__ed_component(ed, q->path).id == 0) {
+        prefab_error(w, req->id, DE_EP_ERR_NOT_FOUND, "no_component", "no component type %s",
+                     s->comp);
+        return false;
+    }
+    s->inst = instance_of(ed, q->entity);
+    if (s->inst == NULL || !current_comp(ed, a, q->entity, s->comp, &s->cur)) {
+        prefab_error(w, req->id, DE_EP_ERR_NOT_FOUND, "not_instance",
+                     "%llu is not a prefab instance", (unsigned long long)q->entity);
+        return false;
+    }
+    const bool has = !is_nil(s->cur);
+    const bool marked = base_find(s->inst, q->entity, q->path) != NULL;
+    if (!comp_name_ok(s->comp) || (added ? !has || marked : has || !marked)) {
+        prefab_error(w, req->id, DE_EP_ERR_CONFLICT, "not_override", "%s is not %s on %llu",
+                     s->comp, added ? "added" : "removed", (unsigned long long)q->entity);
+        return false;
+    }
+    u64 sid = 0;
+    s->levels = local_sid_of(s->inst, q->entity, &sid)
+                    ? chain_of(def_find(s->inst->asset), sid, "", s->lv)
+                    : 0;
+    if (s->levels == 0) {
+        prefab_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "no_definition",
+                     "no prefab definition of %llu", (unsigned long long)q->entity);
+        return false;
+    }
+    return true;
+}
+
+static void apply_structural(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                             mpack_writer_t *w, const de_ep_override_path_params *q) {
+    pf_sreq s;
+    if (!structural_check(ed, req, a, w, q, &s))
+        return;
+    ed_instance *inst = s.inst;
+    const char *comp = s.comp;
+    const ed_level *lv = s.lv;
+    u32 t = 0;
+    if (q->has_target && q->target.len > 0) {
+        while (t < s.levels && !de_ep_str_eq(q->target, lv[t].d->asset))
+            ++t;
+        if (t == s.levels) {
+            prefab_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "target",
+                         "%.*s is not in the prefab chain of %llu", (int)q->target.len,
+                         q->target.ptr, (unsigned long long)q->entity);
+            return;
+        }
+    }
+    if (!load_dependents(ed, req, w, lv[t].d->asset))
+        return;
+    pf_dchg *dc = (pf_dchg *)de__ed_alloc(a, sizeof(pf_dchg) * ED_PLAN_MAX);
+    pf_bchg *bc = (pf_bchg *)de__ed_alloc(a, sizeof(pf_bchg) * ED_PLAN_MAX);
+    bool *rm = (bool *)de__ed_alloc(a, sizeof(bool) * ED_PLAN_MAX);
+    if (dc == NULL || bc == NULL || rm == NULL) {
+        prefab_error(w, req->id, DE_EP_ERR_BUSY, "memory", "out of scratch memory");
+        return;
+    }
+    /* The levels down to the target take the instance's component, in each level's own ids;
+     * a level that already matches stays as it is. */
+    u32 nd = 0, nb = 0;
+    de_ep_raw v;
+    if (!comp_remap(ed, a, comp, s.cur, inst->local_ent, inst->local_sid, inst->local_count,
+                    &v)) {
+        prefab_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "outside_prefab",
+                     "%s refers to an entity outside the prefab", comp);
+        return;
+    }
+    for (u32 k = 0; k <= t; ++k) {
+        if (k > 0 && !comp_down_one(ed, a, comp, lv, k - 1, v, &v)) {
+            prefab_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "outside_prefab",
+                         "%s refers to an entity outside %s", comp, lv[k].d->asset);
+            return;
+        }
+        de_ep_raw old;
+        if (!def_comp_map(a, lv[k].d, lv[k].sid, comp, &old)) {
+            prefab_error(w, req->id, DE_EP_ERR_BUSY, "memory", "out of scratch memory");
+            return;
+        }
+        if (!raw_eq(old, v))
+            dc[nd++] = (pf_dchg){lv[k].d, lv[k].sid, old, v, false};
+    }
+    /* Dependents that inherit the component as it was follow, level by level. */
+    for (u32 i = 0; i < nd; ++i) {
+        const pf_dchg c = dc[i];
+        for (u32 di = 0; di < g_prefab.count; ++di) {
+            ed_def *e = g_prefab.defs[di];
+            for (u32 vi = 0; vi < e->val_count && e != c.d; ++vi) {
+                const ed_dval *ev = &e->vals[vi];
+                ed_level nx;
+                if (ev->path[0] != '\0' || !def_next(e, ev->sid, &nx) || nx.d != c.d ||
+                    nx.sid != c.sid || plan_has(dc, nd, e, ev->sid))
+                    continue;
+                const ed_nest *via = nx.via;
+                de_ep_raw own, mine, next;
+                if (!def_comp_map(a, e, ev->sid, comp, &own) ||
+                    !comp_remap(ed, a, comp, own, via ? via->outer : NULL,
+                                via ? via->inner : NULL, via ? via->count : 0, &mine) ||
+                    !raw_eq(mine, c.old) ||
+                    !comp_remap(ed, a, comp, c.val, via ? via->inner : NULL,
+                                via ? via->outer : NULL, via ? via->count : 0, &next) ||
+                    raw_eq(own, next))
+                    continue; /* it sets the component itself */
+                if (nd == ED_PLAN_MAX) {
+                    prefab_error(w, req->id, DE_EP_ERR_BUSY, "too_large",
+                                 "the change reaches too many prefabs");
+                    return;
+                }
+                dc[nd++] = (pf_dchg){e, ev->sid, own, next, true};
+            }
+        }
+    }
+    /* Every instance of a changed prefab: its base, and its component when it had the old one. */
+    for (u32 ii = 0; ii < g_scene.instance_count; ++ii) {
+        ed_instance *in = &g_scene.instances[ii];
+        for (u32 i = 0; i < nd; ++i) {
+            u64 e = 0;
+            if (strcmp(dc[i].d->asset, in->asset) != 0 || !local_ent_of(in, dc[i].sid, &e))
+                continue;
+            de_ep_raw val, oldb, cur;
+            if (!comp_remap(ed, a, comp, dc[i].val, in->local_sid, in->local_ent,
+                            in->local_count, &val) ||
+                !base_comp_map(a, in, e, comp, &oldb) || !current_comp(ed, a, e, comp, &cur))
+                continue;
+            if (nb == ED_PLAN_MAX) {
+                prefab_error(w, req->id, DE_EP_ERR_BUSY, "too_large",
+                             "the change reaches too many instances");
+                return;
+            }
+            rm[nb] = !is_nil(cur);
+            bc[nb++] = (pf_bchg){in, e, val, raw_eq(cur, oldb) && !raw_eq(cur, val)};
+        }
+    }
+    u32 sets = 0;
+    for (u32 i = 0; i < nb; ++i)
+        sets += bc[i].set;
+    de_ep_edit_op *ops = (de_ep_edit_op *)de__ed_alloc(a, sizeof(de_ep_edit_op) * (2 * sets + 1));
+    if (ops == NULL) {
+        prefab_error(w, req->id, DE_EP_ERR_BUSY, "memory", "out of scratch memory");
+        return;
+    }
+    memset(ops, 0, sizeof(de_ep_edit_op) * (2 * sets + 1));
+    u32 no = 1;
+    for (u32 i = 0; i < nb; ++i) {
+        if (!bc[i].set)
+            continue;
+        if (rm[i]) {
+            de_ep_edit_op *o = &ops[no++];
+            o->op = de_ep_cstr("remove");
+            o->has_entity = true;
+            o->entity = bc[i].entity;
+            o->has_component = true;
+            o->component = de_ep_cstr(comp);
+        }
+        if (!is_nil(bc[i].val)) {
+            de_ep_edit_op *o = &ops[no++];
+            o->op = de_ep_cstr("add");
+            o->has_entity = true;
+            o->entity = bc[i].entity;
+            o->has_component = true;
+            o->component = de_ep_cstr(comp);
+            o->has_value = true;
+            o->value = bc[i].val;
+        }
+    }
+    apply_finish(ed, req, a, w, q, inst->root, comp, dc, nd, bc, nb, ops, no);
+}
+
+/* Revert puts the prefab's component back (removed) or takes the instance's away (added). */
+static void revert_structural(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                              mpack_writer_t *w, const de_ep_override_path_params *q) {
+    pf_sreq s;
+    if (!structural_check(ed, req, a, w, q, &s))
+        return;
+    de_ep_edit_op op;
+    memset(&op, 0, sizeof op);
+    op.has_entity = true;
+    op.entity = q->entity;
+    op.has_component = true;
+    op.component = de_ep_cstr(s.comp);
+    if (q->kind == DE_EP_OVERRIDE_KIND_COMPONENT_REMOVED) {
+        de_ep_raw base;
+        if (!base_comp_map(a, s.inst, q->entity, s.comp, &base)) {
+            prefab_error(w, req->id, DE_EP_ERR_BUSY, "memory", "out of scratch memory");
+            return;
+        }
+        op.op = de_ep_cstr("add");
+        op.has_value = true;
+        op.value = base;
+    } else {
+        op.op = de_ep_cstr("remove");
+    }
+    de_ep_error code = DE_EP_OK;
+    char msg[256];
+    const u32 tx = de__ed_edit_run(ed, a, q->has_tx ? q->tx : 0, instance_scene(s.inst->root),
+                                   &op, 1, &code, msg, sizeof msg);
+    if (tx == 0) {
+        prefab_error(w, req->id, code, "edit", "%s", msg);
+        return;
+    }
+    const de_ep_revert_result res = {.tx = tx, .revision = g_prefab.revision};
+    de_ep_write_response_prefab_revert_override(w, req->id, &res);
+}
+
 static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
     de_ep_override_path_params q;
     memset(&q, 0, sizeof q);
@@ -2647,6 +3328,10 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
     }
     if (reject_request(ed, req, w, &q) || reject_structural_kind(&q, req, w))
         return;
+    if (q.has_kind && q.kind != DE_EP_OVERRIDE_KIND_FIELD) {
+        apply_structural(ed, req, a, w, &q);
+        return;
+    }
     char *path = de__ed_cstr(a, q.path);
     ed_kind entity = {0};
     if (!path_check(ed, req, w, path, q.path, &entity))
@@ -2783,81 +3468,7 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
         o->has_value = true;
         o->value = bc[i].val;
     }
-    const u64 root = inst->root;
-    mpack_writer_t mw;
-    de__ed_raw_begin(a, &mw);
-    mpack_start_map(&mw, 2);
-    mpack_write_cstr(&mw, "defs");
-    mpack_start_array(&mw, nd);
-    for (u32 i = 0; i < nd; ++i) {
-        mpack_start_map(&mw, 5);
-        mpack_write_cstr(&mw, "asset");
-        mpack_write_cstr(&mw, dc[i].d->asset);
-        mpack_write_cstr(&mw, "sid");
-        mpack_write_u64(&mw, dc[i].sid);
-        mpack_write_cstr(&mw, "path");
-        mpack_write_cstr(&mw, path);
-        mpack_write_cstr(&mw, "value");
-        mpack_write_object_bytes(&mw, dc[i].val.ptr, dc[i].val.len);
-        mpack_write_cstr(&mw, "follow");
-        mpack_write_bool(&mw, dc[i].follow);
-        mpack_finish_map(&mw);
-    }
-    mpack_finish_array(&mw);
-    mpack_write_cstr(&mw, "bases");
-    mpack_start_array(&mw, nb);
-    for (u32 i = 0; i < nb; ++i) {
-        mpack_start_map(&mw, 4);
-        mpack_write_cstr(&mw, "root");
-        mpack_write_u64(&mw, bc[i].inst->root);
-        mpack_write_cstr(&mw, "entity");
-        mpack_write_u64(&mw, bc[i].entity);
-        mpack_write_cstr(&mw, "path");
-        mpack_write_cstr(&mw, path);
-        mpack_write_cstr(&mw, "value");
-        mpack_write_object_bytes(&mw, bc[i].val.ptr, bc[i].val.len);
-        mpack_finish_map(&mw);
-    }
-    mpack_finish_array(&mw);
-    mpack_finish_map(&mw);
-    ops[0].op = de_ep_cstr("prefab.state");
-    ops[0].has_value = true;
-    ops[0].value = de__ed_raw_end(a, &mw);
-    if (ops[0].value.len == 0) {
-        prefab_error(w, req->id, DE_EP_ERR_BUSY, "memory", "out of scratch memory");
-        return;
-    }
-    /* The edit reuses the scratch arena: keep what the result reports. */
-    const char *names[ED_PLAN_MAX];
-    u64 ents[ED_PLAN_MAX];
-    for (u32 i = 0; i < nd; ++i)
-        names[i] = dc[i].d->asset;
-    for (u32 i = 0; i < nb; ++i)
-        ents[i] = bc[i].entity;
-    de_ep_error code = DE_EP_OK;
-    char msg[256];
-    g_files.reason = NULL;
-    const u32 tx = de__ed_edit_run(ed, a, q.has_tx ? q.tx : 0, instance_scene(root), ops, no, &code, msg, sizeof msg);
-    if (tx == 0) {
-        prefab_error(w, req->id, code, g_files.reason ? g_files.reason : "edit", "%s", msg);
-        return;
-    }
-    /* `files` (protocol 1.19) is the source path of each entry of `prefabs`, in the same order:
-     * the manifest's, as listed in the manifest ("crate.prefab.toml"). */
-    de_ep_str pnames[ED_PLAN_MAX], fnames[ED_PLAN_MAX];
-    for (u32 i = 0; i < nd; ++i) {
-        const char *src = de__ed_asset_source_path(ed, names[i]);
-        pnames[i] = de_ep_cstr(names[i]);
-        fnames[i] = de_ep_cstr(src != NULL ? src : names[i]);
-    }
-    const de_ep_apply_result res = {
-        .tx = tx,
-        .revision = g_prefab.revision,
-        .prefabs = {pnames, nd},
-        .entities = {ents, nb},
-        .files = {fnames, nd},
-    };
-    de_ep_write_response_prefab_apply_override(w, req->id, &res);
+    apply_finish(ed, req, a, w, &q, inst->root, path, dc, nd, bc, nb, ops, no);
 }
 
 /* prefab.revertOverride: an undoable `set` back to the instance's base value. */
@@ -2870,6 +3481,10 @@ static void on_revert(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
     }
     if (reject_request(ed, req, w, &q) || reject_structural_kind(&q, req, w))
         return;
+    if (q.has_kind && q.kind != DE_EP_OVERRIDE_KIND_FIELD) {
+        revert_structural(ed, req, a, w, &q);
+        return;
+    }
     char *path = de__ed_cstr(a, q.path);
     ed_kind entity = {0};
     if (!path_check(ed, req, w, path, q.path, &entity))
@@ -3152,7 +3767,8 @@ bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_
     /* Check everything first, so a failure changes nothing. */
     for (u32 i = 0; i < nd; ++i) {
         const ed_def *d = def_find(defs[i].asset);
-        if (d == NULL || def_get(d, defs[i].sid, defs[i].path) == NULL) {
+        if (d == NULL || (is_comp_path(defs[i].path) ? !def_has_sid(d, defs[i].sid)
+                                                     : def_get(d, defs[i].sid, defs[i].path) == NULL)) {
             *code = DE_EP_ERR_NOT_FOUND;
             snprintf(msg, msg_cap, "prefab %s has no %s", defs[i].asset, defs[i].path);
             return false;
@@ -3160,7 +3776,10 @@ bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_
     }
     for (u32 i = 0; i < nb; ++i) {
         ed_instance *in = instance_rooted(bases[i].root);
-        if (in == NULL || base_find(in, bases[i].entity, de_ep_cstr(bases[i].path)) == NULL) {
+        u64 lsid = 0;
+        if (in == NULL || (is_comp_path(bases[i].path)
+                               ? !local_sid_of(in, bases[i].entity, &lsid)
+                               : base_find(in, bases[i].entity, de_ep_cstr(bases[i].path)) == NULL)) {
             *code = DE_EP_ERR_NOT_FOUND;
             snprintf(msg, msg_cap, "instance %llu has no %s", (unsigned long long)bases[i].root,
                      bases[i].path);
@@ -3180,6 +3799,28 @@ bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_
     if (!files_prepare(ed, a, defs, nd, snaps, ns, replay, files, &nf, code, msg, msg_cap)) {
         files_release(files, nf);
         return false;
+    }
+    /* The old values of whole components (DENG-810), before the inverse's writer opens. */
+    de_ep_raw *dold = nd ? (de_ep_raw *)de__ed_alloc(a, sizeof(de_ep_raw) * nd) : NULL;
+    de_ep_raw *bold = nb ? (de_ep_raw *)de__ed_alloc(a, sizeof(de_ep_raw) * nb) : NULL;
+    bool olds = (nd == 0 || dold != NULL) && (nb == 0 || bold != NULL);
+    for (u32 i = 0; i < nd && olds; ++i) {
+        const ed_def *d = def_find(defs[i].asset);
+        if (is_comp_path(defs[i].path))
+            olds = def_comp_map(a, d, defs[i].sid, defs[i].path, &dold[i]);
+        else
+            dold[i] = dval_raw(d, def_get(d, defs[i].sid, defs[i].path));
+    }
+    for (u32 i = 0; i < nb && olds; ++i) {
+        ed_instance *in = instance_rooted(bases[i].root);
+        if (is_comp_path(bases[i].path))
+            olds = base_comp_map(a, in, bases[i].entity, bases[i].path, &bold[i]);
+        else
+            bold[i] = base_raw(in, base_find(in, bases[i].entity, de_ep_cstr(bases[i].path)));
+    }
+    if (!olds) {
+        files_release(files, nf);
+        return files_fail(code, msg, msg_cap, DE_EP_ERR_BUSY, "memory", "out of scratch memory");
     }
     /* The inverse: the same entries with the old values, and the old bytes of each file. */
     mpack_writer_t mw;
@@ -3206,8 +3847,7 @@ bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_
     mpack_write_cstr(&mw, "defs");
     mpack_start_array(&mw, nd);
     for (u32 i = 0; i < nd; ++i) {
-        const ed_def *d = def_find(defs[i].asset);
-        const de_ep_raw old = dval_raw(d, def_get(d, defs[i].sid, defs[i].path));
+        const de_ep_raw old = dold[i];
         mpack_start_map(&mw, 5);
         mpack_write_cstr(&mw, "asset");
         mpack_write_cstr(&mw, defs[i].asset);
@@ -3225,9 +3865,7 @@ bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_
     mpack_write_cstr(&mw, "bases");
     mpack_start_array(&mw, nb);
     for (u32 i = 0; i < nb; ++i) {
-        ed_instance *in = instance_rooted(bases[i].root);
-        const de_ep_raw old =
-            base_raw(in, base_find(in, bases[i].entity, de_ep_cstr(bases[i].path)));
+        const de_ep_raw old = bold[i];
         mpack_start_map(&mw, 4);
         mpack_write_cstr(&mw, "root");
         mpack_write_u64(&mw, bases[i].root);
@@ -3260,13 +3898,18 @@ bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_
     }
     files_release(files, nf);
     bool ok = true;
-    for (u32 i = 0; i < nd; ++i)
-        ok &= def_put(def_find(defs[i].asset), defs[i].sid, defs[i].path, defs[i].val.ptr,
-                      defs[i].val.len);
+    for (u32 i = 0; i < nd; ++i) {
+        ed_def *d = def_find(defs[i].asset);
+        ok &= is_comp_path(defs[i].path)
+                  ? def_comp_set(d, defs[i].sid, defs[i].path, defs[i].val)
+                  : def_put(d, defs[i].sid, defs[i].path, defs[i].val.ptr, defs[i].val.len);
+    }
     for (u32 i = 0; i < nb; ++i) {
         ed_instance *in = instance_rooted(bases[i].root);
-        ok &= base_put(in, base_find(in, bases[i].entity, de_ep_cstr(bases[i].path)),
-                       bases[i].val.ptr, bases[i].val.len);
+        ok &= is_comp_path(bases[i].path)
+                  ? base_comp_set(in, bases[i].entity, bases[i].path, bases[i].val)
+                  : base_put(in, base_find(in, bases[i].entity, de_ep_cstr(bases[i].path)),
+                             bases[i].val.ptr, bases[i].val.len);
     }
     ++g_prefab.revision;
     if (!ok) {

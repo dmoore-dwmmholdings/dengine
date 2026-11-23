@@ -268,6 +268,7 @@ de_result de__prefab_visit(de_asset_system *s, de_world *w, de_prefab p, de__pre
     de_result r = DE_OK;
     for (u32 i = 0; i < v->entity_count && r == DE_OK; ++i) {
         de__scene_entity_rec e = de__scene_entity_at(v, i);
+        fn(user, e.scene_id, (de_type_id){0}, NULL, NULL); /* the entity itself */
         for (u32 k = 0; k < e.component_count && r == DE_OK; ++k) {
             de__scene_comp_rec c = de__scene_comp_at(v, e.first_component + k);
             de__scene_type_rec tr = de__scene_type_at(v, c.type_index);
@@ -276,8 +277,12 @@ de_result de__prefab_visit(de_asset_system *s, de_world *w, de_prefab p, de__pre
             const de_component comp = de_component_find(w, tr.name);
             const ecs_component_info *ci =
                 DE_HANDLE_VALID(comp) ? ecs_component_get(w, comp.id) : NULL;
-            if (ci == NULL || ci->size == 0)
+            if (ci == NULL)
                 continue;
+            if (ci->size == 0) { /* a tag: present, no data */
+                fn(user, e.scene_id, ci->type, tr.name, NULL);
+                continue;
+            }
             void *obj = DE_ALLOC(al, ci->size, ci->align > 8 ? ci->align : 8, DE_MEM_GENERAL);
             if (obj == NULL)
                 return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de__prefab_visit: no memory");
