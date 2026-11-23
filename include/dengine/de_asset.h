@@ -890,6 +890,14 @@ typedef struct DeStreamingSource {
 typedef struct DeWorldCell {
     i32 cx, cy;
 } DeWorldCell;
+/**
+ * Component (DENG-831): on a scene root, puts the root and its children in cell (cx, cy) when
+ * `de-cook world` splits the scene, instead of the cell that holds the root's position. The
+ * partition registers it with DeStreamingSource and DeWorldCell.
+ */
+typedef struct DeWorldCellPin {
+    i32 cx, cy;
+} DeWorldCellPin;
 
 typedef struct de_world_partition_desc {
     const de_allocator *allocator; /**< NULL = de_heap_allocator() */
@@ -921,7 +929,7 @@ typedef struct de_world_partition_stats {
 
 /**
  * Opens world `name` of the active manifest of `assets` in ECS world `world`. Registers
- * DeStreamingSource and DeWorldCell in `world` (if missing). `desc` may be NULL.
+ * DeStreamingSource, DeWorldCell and DeWorldCellPin in `world` (if missing). `desc` may be NULL.
  * DE_ERR_NOT_FOUND when the manifest has no such world.
  */
 DE_API de_result de_world_partition_open(de_asset_system *assets, de_world *world,

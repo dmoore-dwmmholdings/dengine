@@ -7,6 +7,7 @@ de_add_module(
     LAYER gameplay
     SOURCES
         streaming_internal.h
+        partition_editor.h
         cell_grid.c
         far_proxy.c
         world_partition.c

@@ -5,6 +5,8 @@
  * `wcout:/`; both are unmounted before the command returns. Scene sources are parsed with the
  * core TOML parser; the cell files are written from the parsed values, keys sorted, floats in
  * their shortest round-trip form (de__ser_format_f64), so the bytes depend only on the input.
+ * A root with DeWorldCellPin { cx, cy } goes, with its children, to that cell instead of the one
+ * that holds its DeTransform position (DENG-831); it needs no transform then.
  *
  * Known gap: an entity reference (a component field that holds another entity's scene ID) that
  * crosses a cell boundary is written unchanged; the cell's scene import then reports it as a
@@ -246,6 +248,24 @@ static bool wc_position(const toml_datum_t *tf, f64 p[3]) {
     return false;
 }
 
+/* DeWorldCellPin { cx, cy } (DENG-831): 1 with the pinned cell, 0 without a pin, -1 when the
+ * pin is malformed (not integers, or outside the cell grid). */
+static int wc_pin(const toml_datum_t *pin, i32 *cx, i32 *cy) {
+    if (pin == NULL)
+        return 0;
+    f64 v[2];
+    if (pin->type != TOML_TABLE || !wc_num(wc_get(pin, "cx"), &v[0]) ||
+        !wc_num(wc_get(pin, "cy"), &v[1]))
+        return -1;
+    for (int i = 0; i < 2; ++i)
+        if (v[i] != floor(v[i]) || v[i] < -(f64)DE__CELL_COORD_MAX ||
+            v[i] > (f64)DE__CELL_COORD_MAX)
+            return -1;
+    *cx = (i32)v[0];
+    *cy = (i32)v[1];
+    return 1;
+}
+
 /* ---- Reading the scenes -------------------------------------------------------------------- */
 
 static bool wc_push_ent(wc_run *run, const wc_ent *e) {
@@ -424,6 +444,18 @@ static void wc_place(wc_run *run) {
         if (!ok)
             continue;
         if (cur == i) {
+            i32 pcx, pcy;
+            const int pin = wc_pin(wc_get(e->tab, "DeWorldCellPin"), &pcx, &pcy);
+            if (pin > 0) {
+                e->cx = pcx;
+                e->cy = pcy;
+                e->placed = true;
+                continue;
+            }
+            if (pin < 0)
+                wc_msg(run, "error", e->source, e->line,
+                       "root 0x%016llx: DeWorldCellPin needs integer cx and cy within +/-%d",
+                       (unsigned long long)e->id, (int)DE__CELL_COORD_MAX);
             f64 pos[3];
             const toml_datum_t *tf = wc_get(e->tab, "DeTransform");
             if (tf == NULL || tf->type != TOML_TABLE || !wc_position(tf, pos)) {

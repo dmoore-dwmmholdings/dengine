@@ -629,6 +629,7 @@ de_result de__editor_start(de__host *h) {
 #if DE_HAS_NAV
     de__ed_nav_register(ed); /* DENG-582: world.nav */
 #endif
+    de__ed_stream_register(ed); /* DENG-831: world.streaming */
 #if DE_ED_MATERIAL_GRAPH
     de__ed_material_graph_register(ed);
 #endif
@@ -676,6 +677,7 @@ void de__editor_stop(de__host *h) {
 #if DE_HAS_NAV
     de__ed_nav_shutdown(ed);
 #endif
+    de__ed_stream_shutdown(ed);
 #if DE_HAS_UI
     de__ed_ui_shutdown(ed);
 #endif

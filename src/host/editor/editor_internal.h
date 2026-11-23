@@ -388,6 +388,10 @@ void de__ed_input_register(de__editor *ed);
  * topic nav.bake; protocol 1.25), in nav builds only (editor_nav.c). */
 void de__ed_nav_register(de__editor *ed);
 void de__ed_nav_shutdown(de__editor *ed);
+/* DENG-831: world.streaming (the ten stream.* methods and the topics stream.cells and
+ * stream.proxy; protocol 1.26), on an editor-owned world partition (editor_stream.c). */
+void de__ed_stream_register(de__editor *ed);
+void de__ed_stream_shutdown(de__editor *ed);
 bool de__ed_input_unsubscribe(u32 id);
 /* The sample input monitor subscription `id` would send now (one-frame phases it holds are
  * consumed), and the samples it has sent; for the tests. */
