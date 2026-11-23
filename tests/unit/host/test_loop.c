@@ -742,6 +742,67 @@ TEST(loop, host_run_frames_arg) {
     de_fs_shutdown();
 }
 
+/* ---- [timing] timing_critical_thread (DENG-726) ------------------------------------------ */
+
+static u32 g_tc_frames, g_tc_critical;
+
+static de_result tc_begin_hook(de__host *h, void *user) {
+    (void)h;
+    (void)user;
+    ++g_tc_frames;
+    if (de_thread_is_timing_critical())
+        ++g_tc_critical;
+    return DE_OK;
+}
+
+static void tc_run(bool opt_in, u32 cap_hz) {
+    de__game_config c = small_config();
+    c.timing_critical_thread = opt_in;
+    c.timing.frame_cap_hz = cap_hz;
+    de__host h;
+    host_start(&h, &c, NULL);
+    g_tc_frames = g_tc_critical = 0;
+    ASSERT_EQ(de__loop_add_frame_begin_hook(&h, tc_begin_hook, NULL), DE_OK);
+    h.loop_max_frames = 5;
+    ASSERT_EQ(de__loop_run(&h), DE_OK);
+    host_stop(&h);
+    EXPECT_EQ(g_tc_frames, 5u);
+}
+
+TEST(loop, timing_critical_thread_default_off) {
+    /* The default is unchanged: the loop thread keeps normal scheduling. */
+    ASSERT_FALSE(de_thread_is_timing_critical());
+    tc_run(false, 240);
+    EXPECT_EQ(g_tc_critical, 0u);
+    EXPECT_FALSE(de_thread_is_timing_critical());
+}
+
+TEST(loop, timing_critical_thread_opt_in) {
+    ASSERT_FALSE(de_thread_is_timing_critical());
+#if !defined(__APPLE__) && !defined(_WIN32)
+    if (de_thread_set_timing_critical(&(de_thread_timing_desc){0}) != DE_OK) {
+        de_error_clear();
+        SKIP("SCHED_FIFO not allowed for this user; the loop falls back to normal scheduling");
+    }
+    de_thread_clear_timing_critical();
+#endif
+    /* Every frame runs on a timing-critical thread, capped or not, and the loop undoes it. */
+    tc_run(true, 240);
+    EXPECT_EQ(g_tc_critical, 5u);
+    EXPECT_FALSE(de_thread_is_timing_critical());
+    tc_run(true, 0);
+    EXPECT_EQ(g_tc_critical, 5u);
+    EXPECT_FALSE(de_thread_is_timing_critical());
+
+    /* A thread that was timing-critical before the loop stays so: the loop undoes only its own
+     * change. */
+    ASSERT_EQ(de_thread_set_timing_critical(&(de_thread_timing_desc){0}), DE_OK);
+    tc_run(true, 240);
+    EXPECT_EQ(g_tc_critical, 5u);
+    EXPECT_TRUE(de_thread_is_timing_critical());
+    de_thread_clear_timing_critical();
+}
+
 #else /* DE_LOOP_TIMING_TESTS */
 
 /* ---- Frame cap (wall clock) ------------------------------------------------------------- */

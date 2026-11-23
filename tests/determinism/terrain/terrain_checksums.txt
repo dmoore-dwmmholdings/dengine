@@ -1,0 +1,17 @@
+# de_det v1 scenario=terrain seed=0x580 ticks=16: de_world_checksum after each tick, one per line
+e74edec10ca98f64
+a5b94e8635b127d1
+3bced9fde3c3e4d0
+81550f9e147bfa1a
+04eba01736bcf02e
+1b6666877a5abc95
+0638f3f27bd5f917
+1e5c8a72adedc7fd
+059ed12970fcc896
+6fa2f79f6d7ae658
+07f5074fb7f412b8
+9384d5f6fc2b8460
+6fde70fa95d462a2
+c861ccaeb79177a2
+d68eee613cc030ba
+2c8373a446c78a08

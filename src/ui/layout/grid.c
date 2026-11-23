@@ -103,8 +103,8 @@ static bool plan(de_ui_layout *layout, u32 index, de_vec2 available, grid_plan *
         out->rows = 8;
     for (u32 c = parent->first_child; c != DE_UI_NONE_INDEX; c = ui->records[c].next_sibling) {
         de_ui_record *r = &ui->records[c];
-        if (r->node.display == DE_UI_NONE || de_entity_has(ui->world, r->entity, ui->ids.anchor) ||
-            de_entity_has(ui->world, r->entity, ui->ids.popup))
+        if (r->node.display == DE_UI_NONE ||
+            (r->component_mask & (DE_UI_HAS_ANCHOR | DE_UI_HAS_POPUP)))
             continue;
         grid_item item = {.index = c, .columns = 1, .rows = 1};
         const DeUiGridItem *explicit = de_entity_get_const(ui->world, r->entity, ui->ids.grid_item);
@@ -178,7 +178,7 @@ void de_ui__grid(de_ui_layout *layout, u32 index, de_vec4 content) {
         de_ui_record *r = &ui->records[c];
         if (r->node.display == DE_UI_NONE)
             de_ui__arrange(layout, c, (de_vec4){0}, false);
-        else if (!de_entity_has(ui->world, r->entity, ui->ids.popup)) {
+        else if (!(r->component_mask & DE_UI_HAS_POPUP)) {
             de_vec4 absolute;
             if (de_ui__absolute(layout, c, content, &absolute))
                 de_ui__arrange(layout, c, absolute, false);

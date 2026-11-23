@@ -52,3 +52,17 @@ if(NOT DE_MULTI_CONFIG AND CMAKE_BUILD_TYPE MATCHES "^(Debug|Dev)$" AND TARGET d
   VERBATIM)
  add_custom_target(flappy_pack DEPENDS "${_pack_dir}/flappy.dpak")
 endif()
+
+# DENG-783: the DIDE editor-IPC conformance suite against Flappy. Opt in with the path of a built
+# dide-conformance runner (cargo build -p dide-conformance in the dide repo):
+#   -DDE_DIDE_CONFORMANCE_BIN=<dide>/target/debug/dide-conformance
+# then `ctest -R editor_dide_conformance`. Known suite-side gaps are listed in the script.
+set(DE_DIDE_CONFORMANCE_BIN "" CACHE FILEPATH "dide-conformance runner for the editor IPC suite")
+if(DE_DIDE_CONFORMANCE_BIN AND DE_BUILD_TESTS AND NOT DE_IS_SHIPPING)
+ add_test(NAME editor_dide_conformance
+  COMMAND ${CMAKE_COMMAND} -DRUNNER=${DE_DIDE_CONFORMANCE_BIN} -DGAME=$<TARGET_FILE:flappy>
+          -DLOG=${CMAKE_CURRENT_BINARY_DIR}/dide_conformance.log
+          -P ${DE_ROOT_DIR}/tests/conformance/run_dide_conformance.cmake)
+ set_tests_properties(editor_dide_conformance PROPERTIES LABELS "conformance;editor" TIMEOUT 660
+  RUN_SERIAL TRUE)
+endif()

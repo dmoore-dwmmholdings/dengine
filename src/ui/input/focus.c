@@ -111,8 +111,9 @@ void de_ui__focus_collect(de_ui *ui) {
             continue;
         de_entity e = root;
         for (;;) {
-            if (de_entity_has(ui->world, e, ui->ids.node) &&
-                de_entity_has(ui->world, e, f->focusable) && f->count < ui->capacity)
+            /* Most nodes are not focusable, so test the rarer component first. */
+            if (de_entity_has(ui->world, e, f->focusable) &&
+                de_entity_has(ui->world, e, ui->ids.node) && f->count < ui->capacity)
                 f->order[f->count++] = e;
             de_entity child = de_entity_children_first(ui->world, e);
             if (child.bits) {
@@ -134,9 +135,9 @@ static de_entity top_popup(de_ui *ui, bool modal_only) {
     for (u32 i = 0; i < f->node_count; ++i) {
         de_entity e = f->nodes[i];
         const DeUiPopup *p = de_entity_get_const(ui->world, e, ui->ids.popup);
-        const DeUiNode *n = de_entity_get_const(ui->world, e, ui->ids.node);
         if (!p || (modal_only && !p->modal) || !de_ui__widget_enabled(ui, e))
             continue;
+        const DeUiNode *n = de_entity_get_const(ui->world, e, ui->ids.node);
         if (!result.bits || de_ui__focus_descendant(ui, e, result) ||
             (!de_ui__focus_descendant(ui, result, e) && n->z_order >= z)) {
             result = e;

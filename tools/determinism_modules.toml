@@ -31,6 +31,10 @@ name = "physics"
 dir = "src/physics"
 
 [[module]]
+name = "terrain"
+dir = "src/world/terrain"
+
+[[module]]
 name = "input"
 dir = "src/input"
 

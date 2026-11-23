@@ -50,6 +50,7 @@ void de__game_config_defaults(de__game_config *out) {
     out->timing.max_catchup_steps = DE_TIMING_DEFAULT_MAX_CATCHUP_STEPS;
     out->timing.time_scale = DE_TIMING_DEFAULT_TIME_SCALE;
     out->timing.frame_cap_hz = DE_TIMING_DEFAULT_FRAME_CAP_HZ;
+    out->timing_critical_thread = false; /* DENG-726: opt-in */
     out->task_workers = 0;
     out->frame_arena_mib = DE__GAME_DEFAULT_FRAME_ARENA_MIB;
     out->asset_io_threads = DE__GAME_DEFAULT_IO_THREADS; /* DENG-143 */
@@ -271,6 +272,8 @@ static de_result gt_timing(gt_parser *p, const toml_datum_t *t) {
             r = gt_f32(p, v, path, 0.0, 1000.0, &tm->time_scale);
         } else if (gt_key_is(t, i, "frame_cap_hz")) {
             r = gt_u32(p, v, path, 0, DE__GAME_MAX_FRAME_CAP_HZ, &tm->frame_cap_hz);
+        } else if (gt_key_is(t, i, "timing_critical_thread")) {
+            r = gt_bool(p, v, path, &p->cfg->timing_critical_thread);
         } else {
             gt_unknown(p, v, path);
         }

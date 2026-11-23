@@ -787,6 +787,13 @@ typedef struct DeSprite {
     f32 thickness;    /* meters, for RT shadows */
     i16 layer, order; /* translucent sorting */
     bool flip_x, flip_y, translucent, cast_shadows;
+    /** Draw the texel colour x `color` as the final colour, with no lighting (the Unlit model,
+     * DENG-763). The colour skips the 8-bit G-buffer, so with tonemapper NONE, exposure 1
+     * (exposure_ev100 = -log2(1.2)), no bloom or grading and an sRGB output, each texel reaches
+     * the output unchanged (pixel art). The lighting maps (normal, rough/metal, emissive,
+     * height) are ignored. The sprite still casts shadows when `cast_shadows` is set.
+     * false: lit, the Sprite model. */
+    bool unlit;
 } DeSprite;
 
 typedef struct de_pixel_art_settings {
@@ -900,18 +907,75 @@ typedef struct DeParticleSystem {
     f32 time_scale;
     u32 seed;
 } DeParticleSystem;
-typedef struct DeTerrain {
-    de_blob heightmap;
-    de_material layers[8];
-    u32 layer_count;
-    f32 cell_size;
-    f32 height_scale;
-} DeTerrain;
-typedef struct DeWater {
+/** DeTerrain's grid (DENG-580, DIDE protocol 1.11 world.terrain): DE_TERRAIN_RES x
+ * DE_TERRAIN_RES height samples in DE_TERRAIN_TILE-sample tiles (undo keeps changed tiles only),
+ * DE_TERRAIN_LAYERS splat slots and DE_TERRAIN_RULES procedural rules. */
+#define DE_TERRAIN_RES    33u
+#define DE_TERRAIN_TILE   16u
+#define DE_TERRAIN_LAYERS 4u
+#define DE_TERRAIN_RULES  4u
+/** A splat layer slot (reflected as "de_terrain_layer"). */
+typedef struct de_terrain_layer {
+    char name[32];
     de_material material;
-    bool ocean;
-    de_vec2 wind;
-    f32 choppiness;
+    f32 tiling;    /**< metres per texture repeat, 0.1..100 */
+    f32 sharpness; /**< height-blend sharpness, 0..1 */
+} de_terrain_layer;
+/** A procedural splat rule (reflected as "de_terrain_rule"). Where every range holds, the rule's
+ * layer replaces the painted weights; a range with max <= min is unbounded; later rules win. */
+typedef struct de_terrain_rule {
+    bool enabled;
+    u8 layer;                         /**< slot, below DE_TERRAIN_LAYERS */
+    f32 min_slope, max_slope;         /**< degrees */
+    f32 min_height, max_height;       /**< metres above the entity */
+    f32 min_curvature, max_curvature; /**< 1/m, the Laplacian of the height */
+} de_terrain_rule;
+/** A heightmap terrain, its origin the entity's position, its grid along +x and +z (version 2;
+ * version 1 had an external heightmap blob that nothing read). */
+typedef struct DeTerrain {
+    u32 resolution;                                       /**< samples per side (read-only) */
+    f32 size;                                             /**< metres per side (read-only) */
+    f32 height;                                           /**< metres at the largest sample */
+    u16 heights[DE_TERRAIN_RES * DE_TERRAIN_RES];         /**< row-major, z rows of x */
+    u8 splat[DE_TERRAIN_RES * DE_TERRAIN_RES * DE_TERRAIN_LAYERS]; /**< weights, sum 255 */
+    u8 holes[DE_TERRAIN_RES * DE_TERRAIN_RES];            /**< 1: no surface */
+    de_terrain_layer layers[DE_TERRAIN_LAYERS];
+    u8 order[DE_TERRAIN_LAYERS]; /**< layer slots in blend order, bottom first */
+    de_terrain_rule rules[DE_TERRAIN_RULES];
+} DeTerrain;
+/** The kind of a water body (DeWater.kind; reflected as "de_water_kind": ocean, river, lake). */
+typedef enum de_water_kind {
+    DE_WATER_OCEAN = 0,
+    DE_WATER_RIVER = 1,
+    DE_WATER_LAKE = 2
+} de_water_kind;
+/** An ocean's wave spectrum (DeWater.spectrum; reflected as "de_wave_spectrum": phillips,
+ * jonswap, pierson_moskowitz). */
+typedef enum de_wave_spectrum {
+    DE_WAVE_PHILLIPS = 0,
+    DE_WAVE_JONSWAP = 1,
+    DE_WAVE_PIERSON_MOSKOWITZ = 2
+} de_wave_spectrum;
+/**
+ * A water body (version 2, DENG-776; the DIDE editor IPC world.water, protocol 1.13). An ocean
+ * uses spectrum, wind and choppiness; a lake fills `extent` (centred on the entity, axis-aligned)
+ * at `surface_height`; a river follows the curve of the DeSpline entity `spline`, `width` wide,
+ * flowing at `flow_speed` at its centre. Version 1 had a bool `ocean` in place of `kind`; scenes
+ * saved with it load as an ocean (true) or a lake (false).
+ */
+typedef struct DeWater {
+    de_water_kind kind;
+    de_material material;
+    de_wave_spectrum spectrum;
+    de_vec2 wind;       /* m/s over the ground (x, z); its length is the wind speed */
+    f32 choppiness;     /* 0 to 2 */
+    f32 surface_height; /* m above the entity's origin */
+    de_vec3 extent;     /* m, a lake's volume */
+    de_entity spline;   /* a river's centre line */
+    f32 width;          /* m, a river's width */
+    f32 flow_speed;     /* m/s at a river's centre */
+    de_vec4 fog_color;  /* linear RGBA, underwater */
+    f32 fog_density;    /* 1/m, underwater */
 } DeWater;
 
 /* ---------- Component registration (DENG-178; SPEC §9.1, §20.1) ---------- */
@@ -944,7 +1008,10 @@ typedef struct DeWater {
  * - DeSky: 12 h, latitude 45 degrees, turbidity 2, cloud_coverage 0.5.
  * - DeFogVolume: extent 10 x 10 x 10 m, density 0.02 /m, white albedo.
  * - DeDecal: extent 1 x 1 x 1 m, angle_fade 1. DeParticleSystem: playing, time_scale 1.
- * - DeTerrain: cell_size 1 m, height_scale 100 m. DeWater: wind (5, 0) m/s, choppiness 1.
+ * - DeTerrain: 33 x 33 samples over 32 x 32 m, height 32 m, flat at 0, all splat weight in slot
+ *   0 ("Ground"), every layer tiling 4 m and sharpness 0.5, order 0..3, no rules enabled.
+ * - DeWater: ocean, Pierson-Moskowitz, wind (5, 0) m/s, choppiness 1, extent 64 x 8 x 64 m, width 4 m, flow_speed 1 m/s,
+ *   fog_color (0.05, 0.2, 0.25, 1), fog_density 0.1 /m.
  *
  * Idempotent per world: a second call on the same world (de_renderer_attach after a world
  * reload) changes nothing. Worlds that share a registry share the types. Main thread, not while

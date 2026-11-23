@@ -367,6 +367,7 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
     s->views[d->view_slot] = d->view;
     s->excluded_light_masks[d->view_slot] = d->excluded_light_mask;
     vc->frame_index = d->frame_index;
+    vc->time = d->time;
     vc->frames_completed = d->frames_completed;
     vc->width = d->width;
     vc->height = d->height;
@@ -484,7 +485,7 @@ static void vis_frame_stage(de__view_frame *vf, void *user) {
                             .view = vf->view,
                             .view_slot = (vf->view.id & 0xFFu) - 1u, /* views.c: slot + 1 */
                             .frame_index = vf->frame_index,
-                            .frames_completed = de_gpu_fence_value(r->dev, r->frame_fence),
+                            .time = (f32)((f64)(de_time_now_ns() - r->start_ns) * 1e-9),                            .frames_completed = de_gpu_fence_value(r->dev, r->frame_fence),
                             .width = vf->width,
                             .height = vf->height,
                             .view_matrix = vf->view_matrix,

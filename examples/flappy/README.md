@@ -36,6 +36,12 @@ component on the "Game state" entity, so the inspector shows and edits it live (
 velocity, score, the pipes), and Stop puts it back. In Edit mode the scene stays as authored (the
 system that moves it runs in `Update`, which the editor holds); Play runs the game in it.
 
+Prefab fixture (DENG-813): `prefabs/` holds three small prefabs, `flappy/prefab/marker` (a base),
+`marker_variant` (a variant of it) and `marker_pair` (it nests the base). The game does not use
+them. They are in `assets.toml` so the editor lists prefab assets and the prefab checks of
+`editor_dide_conformance` run. Those checks write the source files and undo again, so a Debug or
+Dev build mounts the checkout writable.
+
 ## Shipping it
 
 Debug and Dev load the checkout's sources (`assets.toml`, which names only files under this

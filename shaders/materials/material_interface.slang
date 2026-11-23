@@ -59,6 +59,12 @@ public struct VertexAttribs
     // ---- DENG-301 ----
     public float object_scale;      // the instance's uniform-scale estimate (|det|^(1/3)):
                                     // object-space lengths (KHR volume thickness) to world
+    // ---- DENG-771 ----
+    public float3 object_position;  // the instance's origin (its transform's translation), world
+    public float3 position_dx;      // world position change one pixel to the right (x mip scale)
+    public float3 position_dy;      // ... and one pixel down (a model that projects by position
+                                    // takes its texture footprint from them)
+    public float time;              // seconds since the renderer started (scene constants)
 };
 
 /// How textures are sampled at the point: UV derivatives per UV set (analytic one-pixel

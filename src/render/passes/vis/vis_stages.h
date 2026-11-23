@@ -416,6 +416,7 @@ typedef struct de__vis_context {
     u32 view_slot; /**< 0 .. DE__VIEW_MAX - 1: per-view state and the GPU scene's view slot */
     bool view_new; /**< first frame of this view in its slot: reset per-view history */
     u64 frame_index;
+    f32 time; /**< DENG-771: seconds since the renderer started (the graph time input) */
     u64 frames_completed; /**< frames [0, frames_completed) are done on the GPU */
     u32 width, height;    /**< internal resolution */
     de_mat4 view_matrix, proj, view_proj, prev_view_proj;
@@ -562,6 +563,7 @@ typedef struct de__vis_frame_desc {
     de_view view;
     u32 view_slot;
     u64 frame_index;
+    f32 time; /**< DENG-771: seconds since the renderer started (the graph time input) */
     u64 frames_completed;
     u32 width, height;
     de_mat4 view_matrix, proj, prev_view_proj; /**< prev zero: the current view_proj */

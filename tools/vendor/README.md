@@ -184,3 +184,33 @@ symlinks) and checks the config errors with both TOML readers, `fetch`, `verify`
 that imports the fake entry for the machine's own host through `cmake/DePrebuilt.cmake`. CI runs
 it on macOS, Linux and Windows. The real `verify` needs the pinned archives, so it is a separate
 CI step and not a ctest.
+
+## Tracy client/server lockstep (DENG-587)
+
+DEngine's client and DIDE's embedded `TracyWorker` server use the exact same Tracy
+release, not merely the same major/minor version. The current pin is `0.14.1`.
+`third_party/vendor.toml` pins the engine's source archive and SHA-256. DIDE's
+`resources/profiler/tracy.toml` pins the server to the same version, URL and SHA-256;
+`crates/dide-profiler/src/lib.rs` exposes that version as `TRACY_PIN`.
+
+An upgrade is a coordinated change to both repositories:
+
+1. Verify the new upstream release and archive checksum, then update both manifests
+   together. Preserve or requalify engine-local patches through `vendor.py` rather
+   than editing upstream files directly.
+2. Update DIDE's `TRACY_PIN` and rebuild its embedded server and instrumented client
+   with `cargo xtask build-tracy`. Recheck its C interface and native dependencies.
+3. From DIDE, run `cargo xtask check-tracy-pin --dengine /path/to/engine`. This
+   existing check rejects different versions; also compare the two manifests' URL
+   and SHA-256, since the version check alone does not compare archive identity.
+4. Verify the engine's Tracy tree with `python3 tools/vendor/vendor.py verify tracy`.
+   Rebuild and run the engine's profiler, Tracy smoke and dynamic-library tests,
+   including Linux hot reload with the local `dlclose` patch.
+5. Test DIDE's actual live connection to the updated engine, then save and reload a
+   capture with the new embedded server. Existing capture compatibility must be
+   evaluated explicitly, not inferred from matching version strings.
+
+Do not independently bump one side or remove the mismatch check to make an upgrade
+pass. Engine Shipping/Debug builds without profiling remain unaffected by the
+client/server integration. See DIDE's `spikes/q9/README.md` for the original
+embedding experiment and DIDE-31 / DIDE-89 for its implementation evidence.

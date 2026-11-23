@@ -155,6 +155,18 @@ size = [448, 256]
 threshold_mean = 0.006  # Metal vs lavapipe: mean 0.0037, p99 0.027
 threshold_p99 = 0.04
 
+[scene.materials_graph]
+description = "a material graph asset cooked into a registered material model (value noise between two roughness parameters on a copper tint) beside the Standard material of its mean parameters, lit by a sky environment (DENG-770)"
+size = [256, 192]
+threshold_mean = 0.008  # as materials_gallery_ibl until a Vulkan reference measures the spread
+threshold_p99 = 0.04
+
+[scene.materials_triplanar]
+description = "a triplanar checker (material graph) on a sphere with no UV stream: the texture footprint comes from world-position derivatives, so the projections blend without mip seams (DENG-771)"
+size = [256, 192]
+threshold_mean = 0.008  # as materials_graph
+threshold_p99 = 0.04
+
 [scene.materials_layers_furnace]
 description = "coat1, sheen1 and combined white spheres: actual renderer energy within unchanged 2 % furnace limit (DENG-431)"
 size = [256, 192]
