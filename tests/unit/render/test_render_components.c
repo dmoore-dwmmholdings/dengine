@@ -53,7 +53,7 @@ static const struct {
     {"DeFogVolume", 4, offsetof(DeRenderComponents, fog_volume)},
     {"DeDecal", 4, offsetof(DeRenderComponents, decal)},
     {"DeParticleSystem", 4, offsetof(DeRenderComponents, particle_system)},
-    {"DeTerrain", 5, offsetof(DeRenderComponents, terrain)},
+    {"DeTerrain", 9, offsetof(DeRenderComponents, terrain)},
     {"DeWater", 12, offsetof(DeRenderComponents, water)},
 };
 #define COMP_COUNT ((u32)(sizeof k_comps / sizeof k_comps[0]))
@@ -263,6 +263,12 @@ static u32 fill_fields(cfx *f, de_type_id t, u8 *obj, u32 k) {
             memcpy(p, &v, sizeof v);
             break;
         }
+        case DE_FK_U8:
+            p[0] = (u8)(1u + (i + k) % 3u);
+            break;
+        case DE_FK_STRING:
+            snprintf((char *)p, fi->size, "layer%u", (unsigned)(i + k));
+            break;
         case DE_FK_U32: {
             const u32 v = 1000u + i + k;
             memcpy(p, &v, sizeof v);
@@ -300,7 +306,16 @@ static u32 fill_fields(cfx *f, de_type_id t, u8 *obj, u32 k) {
         case DE_FK_FIXED_ARRAY: {
             const de_field_info *el = de_type_array_element(f->types, t, i);
             for (u32 e = 0; e < fi->attrs.array_count; ++e) {
-                if (el->kind == DE_FK_ASSET) {
+                if (el->kind == DE_FK_STRUCT) { /* DeTerrain.layers and .rules */
+                    assets += fill_fields(f, type_of(f, el->attrs.nested_type), p + el->size * e,
+                                          k + e);
+                } else if (el->kind == DE_FK_U8 || el->kind == DE_FK_U16) {
+                    const u16 v = (u16)(1u + (i + k + e) % 200u);
+                    if (el->kind == DE_FK_U8)
+                        p[e] = (u8)v;
+                    else
+                        memcpy(p + 2u * e, &v, sizeof v);
+                } else if (el->kind == DE_FK_ASSET) {
                     const u32 h = e == 2 ? 0u : 100u + 8u * i + e; /* one empty slot */
                     memcpy(p + 4u * e, &h, sizeof h);
                     assets += h != 0;
@@ -325,7 +340,7 @@ TEST_F(render_components, text_roundtrip, cfx) {
         const de_type_id t = type_of(f, k_comps[c].name);
         const de_type_desc *d = de_type_get(f->types, t);
         ASSERT_TRUE(d != NULL);
-        u8 src[512], dst[512];
+        static u8 src[16384], dst[16384]; /* DeTerrain v2 is about 8 KB */
         ASSERT_LE(d->size, (u32)sizeof src);
         ASSERT_EQ(de_type_construct(f->types, t, src), DE_OK);
         const u32 assets = fill_fields(f, t, src, c);
@@ -375,7 +390,7 @@ TEST_F(render_components, text_roundtrip, cfx) {
         EXPECT_GE(m.to_handle, assets);
 
         /* Every serialized field is back bit for bit; the others keep the default. */
-        u8 def[512];
+        static u8 def[16384];
         ASSERT_EQ(de_type_construct(f->types, t, def), DE_OK);
         for (u32 i = 0; i < nf; ++i) {
             const u8 *want =
@@ -532,10 +547,17 @@ TEST_F(render_components, defaults, cfx) {
 
         DeTerrain tr;
         construct_from(f, "DeTerrain", &tr, sizeof tr, fill);
-        EXPECT_EQ(tr.heightmap.id, 0u);
-        EXPECT_EQ(tr.layer_count, 0u);
-        EXPECT_FLOAT_EQ(tr.cell_size, 1.0, 0);
-        EXPECT_FLOAT_EQ(tr.height_scale, 100.0, 0);
+        EXPECT_EQ(tr.resolution, DE_TERRAIN_RES);
+        EXPECT_FLOAT_EQ(tr.size, 32.0, 0);
+        EXPECT_FLOAT_EQ(tr.height, 32.0, 0);
+        EXPECT_EQ(tr.heights[DE_TERRAIN_RES * DE_TERRAIN_RES - 1], 0u);
+        EXPECT_EQ(tr.splat[0], 255u);
+        EXPECT_EQ(tr.splat[1], 0u);
+        EXPECT_STREQ(tr.layers[0].name, "Ground");
+        EXPECT_FLOAT_EQ(tr.layers[3].tiling, 4.0, 0);
+        EXPECT_FLOAT_EQ(tr.layers[3].sharpness, 0.5, 0);
+        EXPECT_EQ(tr.order[3], 3u);
+        EXPECT_FALSE(tr.rules[0].enabled);
 
         DeWater wt;
         construct_from(f, "DeWater", &wt, sizeof wt, fill);
@@ -584,7 +606,6 @@ TEST_F(render_components, asset_ref_flags, cfx) {
         {"DeSprite", "normal_tex", "texture"},   {"DeSprite", "rough_metal_tex", "texture"},
         {"DeSprite", "emissive_tex", "texture"}, {"DeSprite", "height_tex", "texture"},
         {"DeDecal", "material", "material"},     {"DeParticleSystem", "effect", "blob"},
-        {"DeTerrain", "heightmap", "blob"},      {"DeTerrain", "layers", NULL},
         {"DeWater", "material", "material"},
     };
     const u32 asset_count = (u32)(sizeof k_assets / sizeof k_assets[0]);
@@ -617,7 +638,13 @@ TEST_F(render_components, asset_ref_flags, cfx) {
             const bool runtime =
                 strcmp(k_comps[c].name, "DeCamera") == 0 &&
                 (strcmp(fs[i].name, "view") == 0 || strcmp(fs[i].name, "tonemapper") == 0);
-            if (runtime) {
+            /* DeTerrain's grids are authored through terrain.* edits, not the inspector. */
+            const bool grid = strcmp(k_comps[c].name, "DeTerrain") == 0 &&
+                              (strcmp(fs[i].name, "heights") == 0 ||
+                               strcmp(fs[i].name, "splat") == 0 || strcmp(fs[i].name, "holes") == 0);
+            if (grid) {
+                EXPECT_TRUE((fs[i].flags & DE_FIELD_EDITOR_HIDDEN) != 0);
+            } else if (runtime) {
                 EXPECT_EQ(fs[i].flags, (u32)(DE_FIELD_SNAPSHOT | DE_FIELD_EDITOR_HIDDEN));
             } else {
                 EXPECT_TRUE((fs[i].flags & DE_FIELD_DEFAULT) == DE_FIELD_DEFAULT);
@@ -831,4 +858,32 @@ TEST_F(render_components, water_v1_ocean_migrates_to_kind, cfx) {
     wt.kind = DE_WATER_RIVER;
     EXPECT_TRUE(d->hooks.migrate(&wt, 2, no, old_fields, 1));
     EXPECT_EQ((int)wt.kind, (int)DE_WATER_RIVER);
+}
+
+/* DENG-580: DeTerrain version 1 had cell_size and height_scale; version 2 has size and height. */
+TEST_F(render_components, terrain_v1_cell_size_migrates_to_size, cfx) {
+    ASSERT_EQ(de_render_register_components(f->w), DE_OK);
+    const de_type_id t = type_of(f, "DeTerrain");
+    const de_type_desc *d = de_type_get(f->types, t);
+    ASSERT_TRUE(d != NULL && d->hooks.migrate != NULL);
+    EXPECT_EQ(d->version, 2u);
+    const de_field_info old_fields[] = {
+        {.name = "cell_size", .kind = DE_FK_F32, .offset = 0},
+        {.name = "height_scale", .kind = DE_FK_F32, .offset = 4},
+    };
+    const f32 old[2] = {2.0f, 50.0f};
+    static DeTerrain tr;
+    ASSERT_EQ(de_type_construct(f->types, t, &tr), DE_OK);
+    EXPECT_TRUE(d->hooks.migrate(&tr, 1, old, old_fields, 2));
+    EXPECT_FLOAT_EQ(tr.size, 2.0 * (DE_TERRAIN_RES - 1), 0);
+    EXPECT_FLOAT_EQ(tr.height, 50.0, 0);
+    EXPECT_EQ(tr.splat[0], 255u); /* the rest keeps the defaults */
+    /* A bad value keeps the default; version 2 data needs nothing. */
+    const f32 bad[2] = {-1.0f, 0.0f};
+    ASSERT_EQ(de_type_construct(f->types, t, &tr), DE_OK);
+    EXPECT_TRUE(d->hooks.migrate(&tr, 1, bad, old_fields, 2));
+    EXPECT_FLOAT_EQ(tr.size, 32.0, 0);
+    EXPECT_FLOAT_EQ(tr.height, 32.0, 0);
+    EXPECT_TRUE(d->hooks.migrate(&tr, 2, old, old_fields, 2));
+    EXPECT_FLOAT_EQ(tr.size, 32.0, 0);
 }

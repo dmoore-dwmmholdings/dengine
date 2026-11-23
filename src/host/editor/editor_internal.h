@@ -31,9 +31,13 @@ typedef void (*de__ed_handler)(de__editor *ed, const de_ep_request *req, de_ep_a
 typedef void (*de__ed_tick_fn)(de__editor *ed);
 /** Runs when a connection ends (state tied to the connection is dropped). */
 typedef void (*de__ed_reset_fn)(de__editor *ed);
+/** Applies an edit op an area owns (editor_edit.c asks it for its prefix); fills `inv` with the
+ * inverse, or `code` and `msg` and returns false. Must change nothing when it fails. */
+typedef bool (*de__ed_op_fn)(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o,
+                             de_ep_edit_op *inv, de_ep_error *code, char *msg, size_t cap);
 
 #define DE__ED_MAX_TICKS 16u
-#define DE__ED_MAX_CAPS  16u
+#define DE__ED_MAX_CAPS  32u
 
 struct de__editor {
     struct de__host *h;
@@ -81,6 +85,7 @@ struct de__editor {
     struct de__ed_debugdraw *debugdraw;
     struct de__ed_extra *extra;
     struct de__ed_water *water;
+    de__ed_op_fn terrain_op; /* DENG-580: the terrain.* ops (editor_terrain.c), NULL without */
 };
 
 /* ---------- Lifecycle (editor.c) ---------- */
@@ -265,6 +270,9 @@ de_transform de__ed_world_xf(de_world *w, de_entity e);
 /* DENG-776: water.info, water.surface, water.flowMap, water.probes, water.showProbes
  * (editor_water.c, render builds only); capability world.water (protocol 1.13). */
 void de__ed_water_register(de__editor *ed);
+/* DENG-580: terrain.info, terrain.sample, terrain.exportHeightmap and the terrain.* edit ops
+ * (editor_terrain.c, render builds only); capability world.terrain (protocol 1.11). */
+void de__ed_terrain_register(de__editor *ed);
 /* DENG-778: ui.layout (editor_ui.c, UI builds only); capability ui.editor (protocol 1.14). DENG-785
  * adds the 1.15 methods: ui.nodeCorners, ui.themes, ui.themeVars, ui.previewTheme, loc.locales,
  * loc.strings and loc.previewLocale (`unsupported` below 1.15). The

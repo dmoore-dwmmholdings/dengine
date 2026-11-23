@@ -613,7 +613,8 @@ de_result de__editor_start(de__host *h) {
     de__ed_extra_register(ed);
     de__ed_spline_register(ed);
 #if DE_HAS_RENDER
-    de__ed_water_register(ed); /* DeWater is a render component */
+    de__ed_water_register(ed);   /* DeWater is a render component */
+    de__ed_terrain_register(ed); /* so is DeTerrain */
 #endif
 #if DE_ED_MATERIAL_GRAPH
     de__ed_material_graph_register(ed);

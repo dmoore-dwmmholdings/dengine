@@ -18,7 +18,10 @@
  * Sibling order (DENG-778, protocol 1.14, ui.editor): `spawn`, `instantiate` and `reparent` take
  * an optional `index`, the place among the parent's other children (de_entity_set_parent_at: at
  * or past the end appends; ignored without a parent). The inverses of `despawn`, `uninstantiate`
- * and `reparent` carry the old index, so undo puts an entity back where it was. */
+ * and `reparent` carry the old index, so undo puts an entity back where it was.
+ *
+ * Terrain (DENG-580, protocol 1.11, world.terrain): an op whose name starts with `terrain.` goes to
+ * the terrain area (editor_terrain.c, render builds); its inverse is a `terrain.restore`. */
 #include "host/editor/editor_internal.h"
 
 #include <dengine/de_memory.h>
@@ -808,6 +811,10 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
         inv->keep_world = keep;
         return true;
     }
+
+    /* DENG-580: the world.terrain ops, in render builds. */
+    if (ed->terrain_op != NULL && o->op.len > 8 && memcmp(o->op.ptr, "terrain.", 8) == 0)
+        return ed->terrain_op(ed, a, o, inv, &f->code, f->msg, sizeof f->msg);
 
     return fail(f, DE_EP_ERR_INVALID_PARAMS, "unknown op %.*s", (int)o->op.len, o->op.ptr);
 }

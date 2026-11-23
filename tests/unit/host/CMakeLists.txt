@@ -537,6 +537,13 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
         CONFIGURATIONS Debug Dev Release)
     target_include_directories(test_editor_water PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
+    # DENG-580: terrain.info, terrain.sample, terrain.exportHeightmap and the terrain.* ops.
+    de_add_test(NAME editor_terrain SOURCES test_editor_terrain.c
+        LIBS de_host de_terrain de_render de_tp_dide_protocol LABELS unit host
+        CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_terrain PRIVATE "${DE_ROOT_DIR}/src")
+endif()
 
 # DENG-769: the material graph over the editor IPC (materialGraph.catalog/generate/compile),
 # round-tripped through the generated protocol readers and writers. Debug and Dev with the cooker
