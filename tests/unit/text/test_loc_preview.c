@@ -150,3 +150,36 @@ TEST(loc_preview, preview_keeps_the_selected_locale_and_restores_it) {
     EXPECT_EQ(de_loc_preview_locale(NULL, "en"), DE_ERR_INVALID_ARGUMENT);
     loc_destroy(&f);
 }
+/* DENG-585: the locale state reports pseudo-localization, requested and published, so the
+ * editor can show the toggle (DIDE-R193). */
+TEST(loc_preview, state_reports_pseudo_requested_and_published) {
+    loc_fixture f;
+    loc_setup(&f, "preview_pseudo");
+    de_text_system wrapper = {0};
+    wrapper.loc = f.loc;
+    ASSERT_TRUE(loc_ready(&f, 1));
+    u64 generation = de_loc_generation(&wrapper);
+    de_loc_locale_state state;
+    ASSERT_EQ(de_loc_get_locale_state(&wrapper, &state), DE_OK);
+    EXPECT_FALSE(state.pseudo);
+    EXPECT_FALSE(state.pseudo_published);
+#if DE_NAME_LOOKUP
+    de_loc_pseudo(&wrapper, true);
+    ASSERT_EQ(de_loc_get_locale_state(&wrapper, &state), DE_OK);
+    EXPECT_TRUE(state.pseudo); /* requested at once, published after the switch */
+    EXPECT_FALSE(state.pseudo_published);
+    ASSERT_TRUE(loc_ready(&f, ++generation));
+    ASSERT_EQ(de_loc_get_locale_state(&wrapper, &state), DE_OK);
+    EXPECT_TRUE(state.pseudo);
+    EXPECT_TRUE(state.pseudo_published);
+    de_str play = de_loc(&wrapper, de_name_from("menu.play"));
+    EXPECT_TRUE(play.len > 4 && strcmp(play.ptr, "Play") != 0);
+    de_loc_pseudo(&wrapper, false);
+    ASSERT_TRUE(loc_ready(&f, ++generation));
+    ASSERT_EQ(de_loc_get_locale_state(&wrapper, &state), DE_OK);
+    EXPECT_FALSE(state.pseudo);
+    EXPECT_FALSE(state.pseudo_published);
+    EXPECT_STREQ(de_loc(&wrapper, de_name_from("menu.play")).ptr, "Play");
+#endif
+    loc_destroy(&f);
+}

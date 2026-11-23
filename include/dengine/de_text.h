@@ -241,6 +241,9 @@ typedef struct de_loc_locale_state {
     char fallback[DE_LOC_LOCALE_MAX]; /* de_loc_set_default_locale */
     u64 generation;
     bool previewing;
+    bool pseudo;           /* de_loc_pseudo was last turned on (DENG-585) */
+    bool pseudo_published; /* the published set is pseudo-localized; follows `pseudo` after
+                              the asynchronous switch (wait for a new generation) */
 } de_loc_locale_state;
 DE_API de_result de_loc_get_locale_state(const de_text_system *t, de_loc_locale_state *out);
 

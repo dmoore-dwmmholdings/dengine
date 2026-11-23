@@ -550,6 +550,94 @@ static u32 preorder_next(const de_ui *ui, u32 index, u32 root) {
     }
     return DE_UI_NONE_INDEX;
 }
+/* DENG-585: hidden when the node or an ancestor has display none (layout skips the subtree). */
+static bool hidden(const de_ui *ui, u32 index) {
+    for (u32 steps = 0; index != DE_UI_NONE_INDEX && steps <= ui->capacity; ++steps) {
+        if (ui->records[index].node.display == DE_UI_NONE)
+            return true;
+        index = de_ui__find(ui, ui->records[index].parent);
+    }
+    return false;
+}
+static de_result text_overflow(de_ui *ui, u32 index, de_ui_text_overflow *out, bool *overflows) {
+    *overflows = false;
+    const de_ui_record *record = &ui->records[index];
+    const DeUiText *text = de_entity_get_const(ui->world, record->entity, ui->ids.text);
+    if (!text || !text->style.font.id || hidden(ui, index))
+        return DE_OK;
+    const de_str content = de_ui__text_content(ui, text);
+    if (!content.len)
+        return DE_OK;
+    /* The content box exactly as layout computes it for the node's children. */
+    const DeUiNode *node = &record->node;
+    const de_vec4 rect = node->computed_rect;
+    const f32 scale = ui->scale > 0 ? ui->scale : 1, border = record->border_width * scale;
+    const f32 top = de_ui__length(node->padding[0], rect.w, scale, 0) + border,
+              right = de_ui__length(node->padding[1], rect.z, scale, 0) + border,
+              bottom = de_ui__length(node->padding[2], rect.w, scale, 0) + border,
+              left = de_ui__length(node->padding[3], rect.z, scale, 0) + border;
+    const de_vec2 box = {fmaxf(0, rect.z - left - right), fmaxf(0, rect.w - top - bottom)};
+    de_ui_text_metrics m = {0};
+    DE_TRY(de_ui_measure_text(ui,
+                              &(de_ui_text_measure_desc){.utf8 = content,
+                                                         .style = &text->style,
+                                                         .align = text->align,
+                                                         .wrap_width = box.x,
+                                                         .scale = scale},
+                              NULL, 0, &m));
+    /* Node rects are rounded to whole pixels: half a pixel is not an overflow. */
+    const bool x = m.size.x > box.x + .5f, y = m.size.y > box.y + .5f;
+    if (!x && !y)
+        return DE_OK;
+    *out = (de_ui_text_overflow){record->entity, m.size, box, x, y};
+    *overflows = true;
+    return DE_OK;
+}
+de_result de_ui_find_text_overflow(de_ui *ui, de_entity root, de_ui_text_overflow *out,
+                                   u32 capacity, u32 *count) {
+    if (!ui || !count || (capacity && !out))
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_ui_find_text_overflow: NULL argument");
+    *count = 0;
+    if (!ui->desc.text)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                       "de_ui_find_text_overflow: the UI has no text system");
+    if (!ui->world || !ui->records)
+        return root.bits ? DE_FAIL(DE_ERR_NOT_FOUND, "de_ui_find_text_overflow: no layout yet")
+                         : DE_OK;
+    u32 first = DE_UI_NONE_INDEX;
+    if (root.bits) {
+        first = de_ui__find(ui, root);
+        if (first == DE_UI_NONE_INDEX || !ui->records[first].alive)
+            return DE_FAIL(DE_ERR_NOT_FOUND,
+                           "de_ui_find_text_overflow: 0x%016llx is not a laid-out UI node",
+                           (unsigned long long)root.bits);
+    }
+    u32 n = 0;
+    for (u32 r = 0; r < ui->record_count; ++r) {
+        u32 start = first;
+        if (first == DE_UI_NONE_INDEX) {
+            /* Every tree: start at each live record without a UI parent. */
+            if (!ui->records[r].alive || de_ui__find(ui, ui->records[r].parent) != DE_UI_NONE_INDEX)
+                continue;
+            start = r;
+        }
+        for (u32 i = start, steps = 0; i != DE_UI_NONE_INDEX && steps < ui->capacity;
+             i = preorder_next(ui, i, start), ++steps) {
+            de_ui_text_overflow item;
+            bool overflows = false;
+            DE_TRY(text_overflow(ui, i, &item, &overflows));
+            if (overflows) {
+                if (n < capacity)
+                    out[n] = item;
+                ++n;
+            }
+        }
+        if (first != DE_UI_NONE_INDEX)
+            break;
+    }
+    *count = n;
+    return DE_OK;
+}
 de_result de_ui_layout_preview(de_ui *ui, de_entity root, const de_ui_preview_viewport *viewport,
                                de_ui_preview_rect *out, u32 capacity, u32 *count, f32 *scale) {
     if (!ui || !viewport || !count || (capacity && !out))

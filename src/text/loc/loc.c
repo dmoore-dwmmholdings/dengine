@@ -371,6 +371,9 @@ de_result de__loc_state(const de__loc *loc, de_loc_locale_state *out) {
     memcpy(out->fallback, loc->default_locale, 36);
     out->generation = de__loc_generation(loc);
     out->previewing = loc->previewing;
+    out->pseudo = loc->pseudo;
+    const loc_set *set = de_atomic_load_ptr(&((de__loc *)loc)->active, DE_ATOMIC_ACQUIRE);
+    out->pseudo_published = set && set->pseudo;
     return DE_OK;
 }
 /* DENG-781: the locales of the published set, from each parent table (keyed by locale). */
