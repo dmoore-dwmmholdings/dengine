@@ -766,3 +766,17 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_PHYSICS)
         CONFIGURATIONS Debug Dev Release)
     target_include_directories(test_editor_physics PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-709: the production asset.animationPreview handler with a held asset backend: Busy loads,
+# the bounded source set, idle/disconnect/reload cleanup and the DIDE mock's error cases.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_animation_service SOURCES test_editor_animation_service.c
+        LIBS de_host de_anim de_test_support de_tp_dide_protocol LABELS unit host
+        CONFIGURATIONS Debug Dev Release)
+    if(TARGET test_editor_animation_service)
+        target_include_directories(test_editor_animation_service PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_definitions(test_editor_animation_service PRIVATE
+            DE_ANIM_HAS_COOKER=0
+            DE_ANIM_PREVIEW_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/animation_preview")
+    endif()
+endif()
