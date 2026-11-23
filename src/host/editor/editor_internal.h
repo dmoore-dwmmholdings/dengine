@@ -336,6 +336,7 @@ void de__ed_terrain_register(de__editor *ed);
  * loc.strings and loc.previewLocale (`unsupported` below 1.15). The
  * ui.editor EditOp.index is in editor_edit.c and works in every build. */
 void de__ed_ui_register(de__editor *ed);
+void de__ed_ui_shutdown(de__editor *ed);
 /** True when the agreed protocol is at least major.minor. */
 static inline bool de__ed_protocol_at_least(const de__editor *ed, u16 major, u16 minor) {
     return ed->proto_major > major || (ed->proto_major == major && ed->proto_minor >= minor);

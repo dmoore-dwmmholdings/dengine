@@ -20,6 +20,7 @@
 #if defined(DE_UI_TEST_FONTS)
 #include "../text/runtime_test_util.h"
 #endif
+#include <dengine/de_debug.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,6 +77,7 @@ static void ui_ed_fx_teardown(ui_ed_fx *f) {
     for (u32 i = 0; i < f->ed.reset_count; ++i)
         f->ed.resets[i](&f->ed);
     de__ed_session_shutdown();
+    de__ed_ui_shutdown(&f->ed);
     if (f->engine.text)
         de_text_destroy(f->engine.text);
     if (f->engine.ui)
@@ -1066,6 +1068,87 @@ TEST_F(editor_ui, text_metrics_retries_with_a_larger_buffer, ui_ed_fx) {
     mpack_node_t lines = mpack_node_map_cstr(r, "lines");
     ASSERT_EQ(mpack_node_array_length(lines), 301u); /* a final empty line after the last break */
     EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(mpack_node_array_at(lines, 300), "end")), (u32)n);
+    text_env_down(f, &t);
+}
+
+/* ---- DENG-585: editor.locPseudo and editor.uiOverflow, reached through console.exec ---- */
+typedef struct log_capture {
+    char text[8192];
+    size_t used;
+} log_capture;
+static void capture_sink(const de_log_record *rec, void *user) {
+    log_capture *c = (log_capture *)user;
+    const int k = snprintf(c->text + c->used, sizeof c->text - c->used, "%.*s\n",
+                           (int)rec->message.len, rec->message.ptr);
+    if (k > 0 && c->used + (size_t)k < sizeof c->text)
+        c->used += (size_t)k;
+}
+static de_result exec_captured(log_capture *c, const char *line) {
+    de_log_flush();
+    c->used = 0;
+    c->text[0] = '\0';
+    const de_result r = de_command_exec(line);
+    de_log_flush();
+    return r;
+}
+TEST_F(editor_ui, console_commands_toggle_pseudo_and_list_overflow, ui_ed_fx) {
+    text_env t;
+    text_env_up(f, &t);
+    static log_capture cap;
+    de_log_add_sink(capture_sink, &cap);
+
+    /* Pseudo-localization: requested at once, and turned off again by a disconnect. */
+    ASSERT_EQ(exec_captured(&cap, "editor.locPseudo"), DE_OK);
+    EXPECT_TRUE(strstr(cap.text, "pseudo=0") != NULL);
+#if DE_NAME_LOOKUP
+    de_loc_locale_state st;
+    ASSERT_EQ(exec_captured(&cap, "editor.locPseudo on"), DE_OK);
+    EXPECT_TRUE(strstr(cap.text, "pseudo=1") != NULL);
+    ASSERT_EQ(de_loc_get_locale_state(f->engine.text, &st), DE_OK);
+    EXPECT_TRUE(st.pseudo);
+    for (u32 i = 0; i < f->ed.reset_count; ++i)
+        f->ed.resets[i](&f->ed);
+    ASSERT_EQ(de_loc_get_locale_state(f->engine.text, &st), DE_OK);
+    EXPECT_FALSE(st.pseudo);
+    ASSERT_EQ(exec_captured(&cap, "editor.locPseudo off"), DE_OK);
+    EXPECT_TRUE(strstr(cap.text, "pseudo=0") != NULL);
+#endif
+    EXPECT_EQ(exec_captured(&cap, "editor.locPseudo maybe"), DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(exec_captured(&cap, "editor.locPseudo on off"), DE_ERR_INVALID_ARGUMENT);
+    de_error_clear();
+
+    /* Overflow: a 40 px label whose long word breaks into lines too tall for its box, and one that fits. */
+    const de_entity root = node(f, (de_entity){0});
+    node_edit(f, root)->direction = DE_UI_COLUMN;
+    const de_entity tight = sized(f, root, 40, 30);
+    const de_entity roomy = sized(f, root, 390, 30);
+    node_edit(f, tight)->shrink = 0;
+    node_edit(f, roomy)->shrink = 0;
+    const de_entity labels[2] = {tight, roomy};
+    for (u32 i = 0; i < 2; ++i) {
+        DeUiText *label = de_entity_add(f->engine.world, labels[i], f->engine.ui->ids.text);
+        label->style.font = t.fonts.latin;
+        label->style.size_px = 20;
+        memcpy(label->text, "Overflowing", 12);
+    }
+    frame(f);
+    ASSERT_EQ(exec_captured(&cap, "editor.uiOverflow"), DE_OK);
+    EXPECT_TRUE(strstr(cap.text, "count=1\n") != NULL);
+    char want[64];
+    snprintf(want, sizeof want, "entity=%016llx x=0 y=1", (unsigned long long)tight.bits);
+    EXPECT_TRUE(strstr(cap.text, want) != NULL);
+    char line[64];
+    snprintf(line, sizeof line, "editor.uiOverflow %016llx", (unsigned long long)roomy.bits);
+    ASSERT_EQ(exec_captured(&cap, line), DE_OK);
+    EXPECT_TRUE(strstr(cap.text, "count=0\n") != NULL);
+    EXPECT_EQ(exec_captured(&cap, "editor.uiOverflow zz"), DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(exec_captured(&cap, "editor.uiOverflow 00000000000000ff"), DE_ERR_NOT_FOUND);
+    de_error_clear();
+
+    /* Unregistered on shutdown. */
+    de__ed_ui_shutdown(&f->ed);
+    EXPECT_EQ(de_command_exec("editor.uiOverflow"), DE_ERR_NOT_FOUND);
+    de_error_clear();
     text_env_down(f, &t);
 }
 #endif

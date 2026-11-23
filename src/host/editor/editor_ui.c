@@ -41,6 +41,7 @@
 
 #include "host/host_internal.h"
 #include <dengine/de_asset.h>
+#include <dengine/de_debug.h>
 #include <dengine/de_text.h>
 #include <dengine/de_ui.h>
 #include <math.h>
@@ -824,6 +825,78 @@ static void h_ui_measure_text(de__editor *ed, const de_ep_request *req, de_ep_ar
     de_ep_write_response_ui_measure_text(w, req->id, &res);
 }
 
+/* ---- DENG-585: pseudo-localization and text overflow through console.exec ----
+ * Protocol 1.20 has no structured method for either (an IDL gap, reported on DENG-585), so the
+ * IDE reaches them through console.exec, which returns what the command logs:
+ * - `editor.locPseudo [on|off]` turns pseudo-localization on or off (de_loc_pseudo) and logs
+ *   `pseudo=<0|1> published=<0|1> generation=<n>`. Without an argument it only logs the state.
+ *   The switch is asynchronous: published follows after the next locale generation.
+ * - `editor.uiOverflow [entity]` logs `count=<n>`, then one line per DeUiText node whose text
+ *   overflows its box (de_ui_find_text_overflow, the subtree of `entity`, 16 hex digits, or every
+ *   tree): `entity=<16 hex> x=<0|1> y=<0|1> text=<w>x<h> box=<w>x<h>` in layout pixels. At most
+ *   UI_OVERFLOW_LINES lines; count is the full number.
+ * A disconnect turns pseudo-localization off when the IDE turned it on. */
+#define UI_OVERFLOW_LINES 256u
+static bool g_pseudo_by_ide;
+
+static de_log_category ui_log(void) {
+    return de_log_register_category("editor.ui", DE_LOG_INFO);
+}
+
+static de_result cmd_loc_pseudo(int argc, const char *const *argv, void *user) {
+    de__editor *ed = (de__editor *)user;
+    de_text_system *text = ed != NULL && ed->e != NULL ? ed->e->text : NULL;
+    if (argc > 2)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "editor.locPseudo [on|off]");
+    if (text == NULL)
+        return DE_FAIL(DE_ERR_NOT_FOUND, "editor.locPseudo: no text system");
+    if (argc == 2) {
+        bool on;
+        if (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "1") == 0)
+            on = true;
+        else if (strcmp(argv[1], "off") == 0 || strcmp(argv[1], "0") == 0)
+            on = false;
+        else
+            return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "editor.locPseudo [on|off]");
+        de_loc_pseudo(text, on);
+        g_pseudo_by_ide = on;
+    }
+    de_loc_locale_state st;
+    DE_TRY(de_loc_get_locale_state(text, &st));
+    DE_INFO(ui_log(), "pseudo=%d published=%d generation=%llu", st.pseudo ? 1 : 0,
+            st.pseudo_published ? 1 : 0, (unsigned long long)st.generation);
+    return DE_OK;
+}
+
+static de_result cmd_ui_overflow(int argc, const char *const *argv, void *user) {
+    de__editor *ed = (de__editor *)user;
+    de_ui *ui = ed != NULL && ed->e != NULL ? ed->e->ui : NULL;
+    if (argc > 2)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "editor.uiOverflow [entity]");
+    de_entity root = {0};
+    if (argc == 2) {
+        char *end = NULL;
+        const unsigned long long bits = strtoull(argv[1], &end, 16);
+        if (end == argv[1] || *end != '\0' || bits == 0)
+            return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "editor.uiOverflow: entity is 16 hex digits");
+        root.bits = (u64)bits;
+    }
+    if (ui == NULL)
+        return DE_FAIL(DE_ERR_NOT_FOUND, "editor.uiOverflow: the game has no UI");
+    de_ui_text_overflow found[UI_OVERFLOW_LINES];
+    u32 count = 0;
+    DE_TRY(de_ui_find_text_overflow(ui, root, found, UI_OVERFLOW_LINES, &count));
+    const de_log_category log = ui_log();
+    DE_INFO(log, "count=%u", count);
+    for (u32 i = 0; i < count && i < UI_OVERFLOW_LINES; ++i)
+        DE_INFO(log, "entity=%016llx x=%d y=%d text=%.1fx%.1f box=%.1fx%.1f",
+                (unsigned long long)found[i].entity.bits, found[i].overflow_x ? 1 : 0,
+                found[i].overflow_y ? 1 : 0, (double)found[i].text_size.x,
+                (double)found[i].text_size.y, (double)found[i].box_size.x,
+                (double)found[i].box_size.y);
+    return DE_OK;
+}
+
 /* A disconnect ends the previews the IDE started; with none active both calls do nothing. */
 static void ui_reset(de__editor *ed) {
     if (ed->e == NULL)
@@ -832,6 +905,17 @@ static void ui_reset(de__editor *ed) {
         de_error_clear();
     if (ed->e->text != NULL && de_loc_preview_locale(ed->e->text, NULL) != DE_OK)
         de_error_clear();
+    if (g_pseudo_by_ide && ed->e->text != NULL)
+        de_loc_pseudo(ed->e->text, false);
+    g_pseudo_by_ide = false;
+}
+
+void de__ed_ui_shutdown(de__editor *ed) {
+    (void)ed;
+    (void)de_command_unregister("editor.locPseudo");
+    (void)de_command_unregister("editor.uiOverflow");
+    de_error_clear();
+    g_pseudo_by_ide = false;
 }
 
 void de__ed_ui_register(de__editor *ed) {
@@ -851,4 +935,15 @@ void de__ed_ui_register(de__editor *ed) {
     de__ed_on(ed, DE_EP_METHOD_LOC_STRINGS, h_loc_strings);
     de__ed_on(ed, DE_EP_METHOD_LOC_PREVIEW_LOCALE, h_loc_preview_locale);
     de__ed_on_reset(ed, ui_reset);
+    g_pseudo_by_ide = false;
+    /* Registered again by a second registration (the command keeps one editor pointer). */
+    (void)de_command_unregister("editor.locPseudo");
+    (void)de_command_unregister("editor.uiOverflow");
+    (void)de_command_register("editor.locPseudo",
+                              "editor.locPseudo [on|off]: pseudo-localization state (DIDE-R193)",
+                              cmd_loc_pseudo, ed);
+    (void)de_command_register("editor.uiOverflow",
+                              "editor.uiOverflow [entity]: UI text that overflows its box",
+                              cmd_ui_overflow, ed);
+    de_error_clear();
 }

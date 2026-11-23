@@ -295,6 +295,30 @@ typedef struct de_ui_text_metrics {
  */
 DE_API de_result de_ui_measure_text(de_ui *ui, const de_ui_text_measure_desc *desc,
                                     de_text_line *lines, u32 capacity, de_ui_text_metrics *out);
+/** A DeUiText node whose text does not fit its content box (DENG-585). Lengths are in layout
+ * pixels, as DeUiNode.computed_rect. */
+typedef struct de_ui_text_overflow {
+    de_entity entity;
+    de_vec2 text_size; /**< The text laid out at the box's content width. */
+    de_vec2 box_size;  /**< The content box: computed_rect less padding and border. */
+    bool overflow_x;   /**< A line cannot break narrow enough for the content width. */
+    bool overflow_y;   /**< The text is taller than the content height. */
+} de_ui_text_overflow;
+/**
+ * Lists the DeUiText nodes whose text overflows its box after the last layout, in pre-order
+ * from `root` (the null entity: every UI tree). The text is measured as layout measures it
+ * (de_ui_measure_text at the layout scale, wrapped at the content width), and the content box
+ * is the one layout gives the node's children. Rects are whole pixels, so an axis overflows only
+ * by more than half a pixel. Nodes with display
+ * none, inside such a node, with no font or with empty text are skipped. `*count` gets the
+ * number of overflowing nodes; the first `capacity` go to `out`. For the editor's localization
+ * preview (pseudo-localization makes strings longer). Main thread, outside a running schedule.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (NULL `ui` or `count`, `out` NULL with a capacity, or
+ *         no text system in de_ui_desc.text) or DE_ERR_NOT_FOUND (`root` is not a UI node of
+ *         the last layout).
+ */
+DE_API de_result de_ui_find_text_overflow(de_ui *ui, de_entity root, de_ui_text_overflow *out,
+                                          u32 capacity, u32 *count);
 
 typedef struct DeUiImage {
     de_texture texture;

@@ -665,6 +665,9 @@ void de__editor_stop(de__host *h) {
     de__ed_views_shutdown(ed);
     de__ed_assets_shutdown(ed);
     de__ed_animation_shutdown(ed);
+#if DE_HAS_UI
+    de__ed_ui_shutdown(ed);
+#endif
 #if DE_HAS_RENDER
     de__ed_preview_shutdown(ed);
     de__ed_settings_shutdown(ed);
