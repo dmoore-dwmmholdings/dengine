@@ -319,6 +319,10 @@ static void construct_sky(void *obj) {
     s->latitude_deg = 45.0f;
     s->turbidity = 2.0f;
     s->cloud_coverage = 0.5f;
+    s->day_of_year = 80.0f;
+    s->moon_phase = -1.0f;
+    s->ground_albedo = 0.3f;
+    s->drive_sun = true;
 }
 
 static de_result reg_sky(de_world *w, de_component *out) {
@@ -330,6 +334,12 @@ static de_result reg_sky(de_world *w, de_component *out) {
                     {1, 10, 0, "Haze in the air: 1 = clear, 10 = hazy", 0, 0}),
         DE_FIELD(DeSky, clouds, DE_FK_BOOL, AUTHORED),
         DE_FIELD_EX(DeSky, cloud_coverage, DE_FK_F32, AUTHORED, {0, 1, 0, 0, 0, 0}),
+        DE_FIELD_EX(DeSky, day_of_year, DE_FK_F32, AUTHORED, {1, 365, "d", "Day of the year", 0, 0}),
+        DE_FIELD_EX(DeSky, moon_phase, DE_FK_F32, AUTHORED,
+                    {-1, 1, 0, "Below 0: the real moon; 0..1: forced phase (0.5 full)", 0, 0}),
+        DE_FIELD_EX(DeSky, ground_albedo, DE_FK_F32, AUTHORED, {0, 1, 0, 0, 0, 0}),
+        DE_FIELD_EX(DeSky, drive_sun, DE_FK_BOOL, AUTHORED,
+                    {0, 0, 0, "Drive the first directional light", 0, 0}),
     };
     return register_component(w, DE_TYPE_DESC(DeSky, 1, k_fields), construct_sky, out);
 }
