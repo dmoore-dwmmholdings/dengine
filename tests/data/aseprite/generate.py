@@ -131,6 +131,17 @@ def main():
         layer("Background", flags=9), layer("Foreground"),
         palette([(255, 0, 0, 255), (0, 255, 0, 255)]),
         cel(bytes([0, 0]), depth=8), cel(bytes([0, 1]), depth=8, index=1)])], depth=8)
+    # DENG-683: an indexed Background layer pre-fills the canvas from palette[transparent].
+    fill_palette = palette([(10, 20, 30, 255), (0, 255, 0, 255)])
+    files["indexed-background-partial.aseprite"] = document([frame([
+        layer("Background", flags=9), layer("Foreground"), fill_palette,
+        cel(bytes([1]), depth=8, x=1)])], depth=8)
+    files["indexed-background-absent.aseprite"] = document([frame([
+        layer("Background", flags=9), layer("Foreground"), fill_palette,
+        cel(bytes([1]), depth=8, index=1, x=1)])], depth=8)
+    files["indexed-background-hidden.aseprite"] = document([frame([
+        layer("Background", flags=8), layer("Foreground"), fill_palette,
+        cel(bytes([1]), depth=8, index=1, x=1)])], depth=8)
     files["warnings.aseprite"] = document([frame([
         layer("Multiply", blend=1), layer("Hidden blend", flags=0, blend=2),
         layer("Tiles", kind=2), cel(red)])], width=1)

@@ -35,7 +35,7 @@ void de_ui__flex(de_ui_layout *layout, u32 index, de_vec4 content) {
             de_ui__arrange(layout, c, (de_vec4){0}, false);
             continue;
         }
-        if (de_entity_has(ui->world, record->entity, ui->ids.popup))
+        if (record->component_mask & DE_UI_HAS_POPUP)
             continue;
         de_vec4 absolute;
         if (de_ui__absolute(layout, c, content, &absolute)) {

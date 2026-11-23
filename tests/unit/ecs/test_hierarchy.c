@@ -770,3 +770,83 @@ TEST_F(hier, random_ops_invariants, ecs_fx) {
     EXPECT_EQ(h, HIER_RANDOM_TRACE);
     free(m);
 }
+
+/* ---- hier.set_parent_at (DENG-768) ----------------------------------------------------------- */
+
+/* Expects the children of `p` to be exactly `want[0..n)`, each at its index. */
+static void expect_children(ecs_fx *f, de_entity p, const de_entity *want, u32 n) {
+    de_entity got[16];
+    ASSERT_EQ(children_of(f, p, got, 16), n);
+    for (u32 i = 0; i < n; ++i) {
+        EXPECT_EQ(got[i].bits, want[i].bits);
+        EXPECT_EQ(de_entity_child_index(f->w, want[i]), i);
+    }
+}
+
+TEST_F(hier, set_parent_at_inserts_at_index, ecs_fx) {
+    const de_builtin_component_ids ids = builtins(f);
+    const de_entity p = spawn(f), a = spawn(f), b = spawn(f), c = spawn(f), d = spawn(f),
+                    e = spawn(f), g = spawn(f);
+    /* Into an empty parent at any index: the only child. */
+    ASSERT_EQ(de_entity_set_parent_at(f->w, a, p, 5), DE_OK);
+    expect_children(f, p, (de_entity[]){a}, 1);
+    ASSERT_EQ(de_entity_set_parent_at(f->w, b, p, 0), DE_OK); /* first */
+    expect_children(f, p, (de_entity[]){b, a}, 2);
+    ASSERT_EQ(de_entity_set_parent_at(f->w, c, p, 1), DE_OK); /* middle */
+    expect_children(f, p, (de_entity[]){b, c, a}, 3);
+    ASSERT_EQ(de_entity_set_parent_at(f->w, d, p, 3), DE_OK); /* index == count: last */
+    expect_children(f, p, (de_entity[]){b, c, a, d}, 4);
+    ASSERT_EQ(de_entity_set_parent_at(f->w, e, p, UINT32_MAX), DE_OK); /* past the end: last */
+    expect_children(f, p, (de_entity[]){b, c, a, d, e}, 5);
+    /* From another parent at an index. */
+    ASSERT_EQ(de_entity_set_parent(f->w, g, d), DE_OK);
+    ASSERT_EQ(de_entity_set_parent_at(f->w, g, p, 2), DE_OK);
+    expect_children(f, p, (de_entity[]){b, c, g, a, d, e}, 6);
+    EXPECT_EQ(de_entity_children_count(f->w, d), 0u);
+    EXPECT_FALSE(de_entity_has(f->w, d, ids.children));
+    /* A null parent detaches; the index is ignored. */
+    ASSERT_EQ(de_entity_set_parent_at(f->w, g, DE_ENTITY_NULL, 0), DE_OK);
+    EXPECT_EQ(de_entity_parent(f->w, g).bits, 0u);
+    EXPECT_EQ(de_entity_child_index(f->w, g), UINT32_MAX);
+    expect_children(f, p, (de_entity[]){b, c, a, d, e}, 5);
+    const de_entity all[] = {p, a, b, c, d, e, g};
+    EXPECT_TRUE(check_structure(f, &ids, all, 7));
+}
+
+TEST_F(hier, set_parent_at_reorders_within_parent, ecs_fx) {
+    const de_builtin_component_ids ids = builtins(f);
+    const de_entity p = spawn(f), a = spawn(f), b = spawn(f), c = spawn(f), d = spawn(f);
+    const de_entity k[] = {a, b, c, d};
+    for (u32 i = 0; i < 4; ++i)
+        ASSERT_EQ(de_entity_set_parent(f->w, k[i], p), DE_OK);
+    /* The index is the place in the list without the child: moving d to 0 gives d a b c. */
+    ASSERT_EQ(de_entity_set_parent_at(f->w, d, p, 0), DE_OK);
+    expect_children(f, p, (de_entity[]){d, a, b, c}, 4);
+    ASSERT_EQ(de_entity_set_parent_at(f->w, d, p, 2), DE_OK);
+    expect_children(f, p, (de_entity[]){a, b, d, c}, 4);
+    ASSERT_EQ(de_entity_set_parent_at(f->w, a, p, 9), DE_OK); /* to the end */
+    expect_children(f, p, (de_entity[]){b, d, c, a}, 4);
+    ASSERT_EQ(de_entity_set_parent_at(f->w, c, p, 2), DE_OK); /* already there */
+    expect_children(f, p, (de_entity[]){b, d, c, a}, 4);
+    /* de_entity_set_parent keeps the place, as before. */
+    ASSERT_EQ(de_entity_set_parent(f->w, b, p), DE_OK);
+    expect_children(f, p, (de_entity[]){b, d, c, a}, 4);
+    const de_entity all[] = {p, a, b, c, d};
+    EXPECT_TRUE(check_structure(f, &ids, all, 5));
+}
+
+TEST_F(hier, set_parent_at_rejects_bad_arguments, ecs_fx) {
+    const de_builtin_component_ids ids = builtins(f);
+    const de_entity p = spawn(f), a = spawn(f), dead = spawn(f);
+    ASSERT_EQ(de_entity_set_parent(f->w, a, p), DE_OK);
+    de_entity_despawn(f->w, dead);
+    EXPECT_EQ(de_entity_set_parent_at(NULL, a, p, 0), DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de_entity_set_parent_at(f->w, dead, p, 0), DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de_entity_set_parent_at(f->w, a, dead, 0), DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de_entity_child_index(NULL, a), UINT32_MAX);
+    EXPECT_EQ(de_entity_child_index(f->w, dead), UINT32_MAX);
+    EXPECT_EQ(de_entity_child_index(f->w, p), UINT32_MAX); /* a root */
+    EXPECT_EQ(de_entity_child_index(f->w, a), 0u);
+    const de_entity all[] = {p, a};
+    EXPECT_TRUE(check_structure(f, &ids, all, 2));
+}

@@ -281,6 +281,33 @@ static bool source_vpath(de__editor *ed, const de__manifest_asset *ma, char *out
     return n > 0 && (size_t)n < cap;
 }
 
+bool de__ed_asset_source(de__editor *ed, const char *id, void **data, u64 *size) {
+    *data = NULL;
+    *size = 0;
+    const de__manifest_asset *ma = id != NULL ? find_asset(ed, de_ep_cstr(id)) : NULL;
+    char vpath[1024];
+    return ma != NULL && source_vpath(ed, ma, vpath, sizeof vpath) && read_vfile(vpath, data, size);
+}
+
+bool de__ed_asset_source_vpath(de__editor *ed, const char *id, char *out, size_t cap) {
+    const de__manifest_asset *ma = id != NULL ? find_asset(ed, de_ep_cstr(id)) : NULL;
+    return ma != NULL && source_vpath(ed, ma, out, cap);
+}
+
+const char *de__ed_asset_source_path(de__editor *ed, const char *id) {
+    const de__manifest_asset *ma = id != NULL ? find_asset(ed, de_ep_cstr(id)) : NULL;
+    return ma != NULL ? ma->source : NULL;
+}
+
+/* The id of the manifest's `i`th asset of type `type` (DENG-807), or NULL past the last. */
+const char *de__ed_asset_nth(de__editor *ed, const char *type, u32 i) {
+    const de__manifest *m = manifest(ed);
+    for (u32 k = 0; m != NULL && k < m->asset_count; ++k)
+        if (m->assets[k].type != NULL && strcmp(m->assets[k].type, type) == 0 && i-- == 0)
+            return m->assets[k].id;
+    return NULL;
+}
+
 static void on_thumbnail(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
                          mpack_writer_t *w) {
     DE__ED_PARAMS(asset_thumbnail, de_ep_asset_thumbnail_params, q);
@@ -873,6 +900,7 @@ static void tick(de__editor *ed) {
             break;
         case DE_ASSET_EV_RELOADED:
             de__ed_animation_invalidate(ed);
+            de__ed_prefab_reloaded(ed, ev->id);
 #if DE_HAS_RENDER
             de__ed_preview_invalidate();
 #endif

@@ -359,6 +359,13 @@ TEST_F(scene, cook_deterministic, scn_fx) {
     EXPECT_EQ(a.dependency_count, c.dependency_count);
     EXPECT_TRUE(warned("unknown component type `__dummy_never_read`"));
 
+    /* DENG-570: the keyed layout (one table per entity keyed by scene ID): the same bytes. */
+    de_cook_result k;
+    ASSERT_EQ(cook_direct(f->s, "levels/keyed", &k), DE_OK);
+    ASSERT_EQ(a.size, k.size);
+    EXPECT_MEMEQ(a.data, k.data, (size_t)a.size);
+    EXPECT_EQ(a.dependency_count, k.dependency_count);
+
     /* The bytes are a valid scene of the documented layout. */
     de__scene_view v;
     char err[192] = "";
@@ -373,6 +380,7 @@ TEST_F(scene, cook_deterministic, scn_fx) {
     de_cook_result_free(&a);
     de_cook_result_free(&b);
     de_cook_result_free(&c);
+    de_cook_result_free(&k);
 #endif
 }
 

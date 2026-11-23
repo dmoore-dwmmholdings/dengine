@@ -14,6 +14,8 @@
 
 #include <dengine/de_platform.h>
 
+#include "platform/de_atomic.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #if !defined(_WIN32)
@@ -86,10 +88,36 @@ static void print_os_sleep_lateness(void) {
 #endif
 }
 
-TEST(pacing, sleep_accuracy) {
-    /* Acceptance: de_sleep_ns(2 ms) lands within +0.3 ms / -0 of the target in >= 95 % of 200
-     * samples. The histogram goes to stdout for the record. */
-    print_os_sleep_lateness();
+/* Host load when the samples ran, a record for failure logs, not a check (DENG-726). A full
+ * audit missed the host gate (188/200) while a run on an idle host made 200/200. Under CPU
+ * contention a timeshare thread can wake from its OS sleep past the deadline, or, once the
+ * learned spin window covers the whole 2 ms, spin without sleeping and lose the CPU for a
+ * scheduler quantum. The load average tells such runs apart from a regression in
+ * de_sleep_ns(). (getrusage() is no help here: Darwin counts blocking sleeps as involuntary
+ * context switches.) */
+static void print_host_load(void) {
+#if !defined(_WIN32)
+    double load[3] = {0, 0, 0};
+    if (getloadavg(load, 3) == 3)
+        printf("host load average: %.2f %.2f %.2f\n", load[0], load[1], load[2]);
+#endif
+}
+
+/* The thread that measures opts in as timing-critical (DENG-726 decision: opt-in API), with a
+ * period of one 2 ms sample. Where the OS refuses (Linux without CAP_SYS_NICE/RLIMIT_RTPRIO) the
+ * test measures a normal thread, against the same gate, and says so. */
+static bool opt_in_timing_critical(void) {
+    de_thread_timing_desc td = {.period_ns = 2 * MS + 500 * US, .computation_ns = 2 * MS};
+    de_result r = de_thread_set_timing_critical(&td);
+    if (r != DE_OK)
+        de_error_clear();
+    printf("timing-critical thread: %s\n", r == DE_OK ? "yes" : "no (OS refused; normal thread)");
+    return r == DE_OK;
+}
+
+/* 200 de_sleep_ns(2 ms) samples, histogram to stdout, then the never-early check and the
+ * +0.3 ms gate: >= 95 % on a host, 80 % on CI (see sleep_accuracy). */
+static void measure_sleep_accuracy(const char *what) {
     enum { SAMPLES = 200, BUCKETS = 8 };
     static const u64 edges[BUCKETS] = {10 * US,  25 * US,  50 * US,   100 * US,
                                        200 * US, 300 * US, 1000 * US, UINT64_MAX};
@@ -122,11 +150,12 @@ TEST(pacing, sleep_accuracy) {
         }
     }
 
-    printf("de_sleep_ns(2 ms) overshoot over %d samples (mean %.1f us, worst %.1f us):\n", SAMPLES,
-           (double)sum / SAMPLES / 1000.0, (double)worst / 1000.0);
+    printf("%s: de_sleep_ns(2 ms) overshoot over %d samples (mean %.1f us, worst %.1f us):\n",
+           what, SAMPLES, (double)sum / SAMPLES / 1000.0, (double)worst / 1000.0);
     for (int b = 0; b < BUCKETS; b++)
         printf("  %-7s %3u\n", labels[b], hist[b]);
     printf("  within +0.3 ms: %u / %d\n", within, SAMPLES);
+    print_host_load();
 
     EXPECT_EQ(early, 0u);
     if (on_ci()) {
@@ -138,6 +167,128 @@ TEST(pacing, sleep_accuracy) {
     } else {
         EXPECT_GE(within * 100, (u32)SAMPLES * 95u);
     }
+}
+
+TEST(pacing, sleep_accuracy) {
+    /* Acceptance: de_sleep_ns(2 ms) lands within +0.3 ms / -0 of the target in >= 95 % of 200
+     * samples, on a timing-critical thread (DENG-726). The histogram goes to stdout. */
+    print_os_sleep_lateness();
+    bool rt = opt_in_timing_critical();
+    measure_sleep_accuracy("idle host");
+    if (rt) {
+        de_thread_clear_timing_critical();
+        EXPECT_FALSE(de_thread_is_timing_critical());
+    }
+}
+
+/* ---------- Under CPU contention (DENG-726) ---------- */
+
+typedef struct busy_arg {
+    de_atomic_u32 *stop;
+} busy_arg;
+
+static i32 busy_main(void *user) {
+    busy_arg *a = (busy_arg *)user;
+    volatile u64 n = 0;
+    while (de_atomic_load_u32(a->stop, DE_ATOMIC_RELAXED) == 0)
+        n++;
+    return 0;
+}
+
+TEST(pacing, sleep_accuracy_contended) {
+    /* The full native audit missed the gate (188/200) while a compile kept every core busy; a
+     * normal thread then wakes late from its OS sleep or is preempted in its spin. Two busy
+     * threads per core reproduce that inside the test (main: 168-191/200 with 30 busy
+     * processes on 15 cores). The opted-in thread must still meet the unchanged gate. */
+    if (!opt_in_timing_critical())
+        SKIP("the OS refused a timing-critical thread; nothing to check under contention");
+    enum { MAX_BUSY = 128 };
+    u32 n = 2 * de_cpu_logical_cores();
+    if (n > MAX_BUSY)
+        n = MAX_BUSY;
+    de_atomic_u32 stop = DE_ATOMIC_INIT(0);
+    busy_arg arg = {&stop};
+    de_thread *busy[MAX_BUSY];
+    u32 started = 0;
+    for (; started < n; started++) {
+        if (de_thread_create(busy_main, &arg, "busy", DE_THREAD_NORMAL, 0, &busy[started]) != DE_OK)
+            break;
+    }
+    if (started == n) {
+        de_sleep_ns(50 * MS); /* let the busy threads take the cores */
+        printf("busy threads: %u on %u cores\n", n, de_cpu_logical_cores());
+        measure_sleep_accuracy("contended");
+    }
+    de_atomic_store_u32(&stop, 1, DE_ATOMIC_RELAXED);
+    for (u32 i = 0; i < started; i++)
+        (void)de_thread_join(busy[i]);
+    de_thread_clear_timing_critical();
+    EXPECT_EQ(started, n);
+}
+
+/* ---------- The timing-critical API (DENG-726) ---------- */
+
+typedef struct tc_probe {
+    bool before;
+} tc_probe;
+
+static i32 tc_other_thread(void *user) {
+    tc_probe *p = (tc_probe *)user;
+    p->before = de_thread_is_timing_critical();
+    return 0;
+}
+
+TEST(pacing, timing_critical_api) {
+    EXPECT_FALSE(de_thread_is_timing_critical()); /* default: normal scheduling */
+    de_thread_clear_timing_critical();            /* no-op on a normal thread */
+    EXPECT_FALSE(de_thread_is_timing_critical());
+
+    EXPECT_EQ(de_thread_set_timing_critical(NULL), DE_ERR_INVALID_ARGUMENT);
+    de_thread_timing_desc bad = {.period_ns = 2000000000ull};
+    EXPECT_EQ(de_thread_set_timing_critical(&bad), DE_ERR_INVALID_ARGUMENT);
+    bad = (de_thread_timing_desc){.period_ns = 10 * MS, .computation_ns = 11 * MS};
+    EXPECT_EQ(de_thread_set_timing_critical(&bad), DE_ERR_INVALID_ARGUMENT);
+    de_error_clear();
+    EXPECT_FALSE(de_thread_is_timing_critical());
+
+    de_result r = de_thread_set_timing_critical(&(de_thread_timing_desc){0});
+#if defined(__APPLE__) || defined(_WIN32)
+    ASSERT_EQ(r, DE_OK); /* no privileges needed on these OSes */
+#else
+    if (r == DE_ERR_UNSUPPORTED) {
+        de_error_clear();
+        EXPECT_FALSE(de_thread_is_timing_critical());
+        SKIP("SCHED_FIFO not allowed for this user (no CAP_SYS_NICE / RLIMIT_RTPRIO)");
+    }
+    ASSERT_EQ(r, DE_OK);
+#endif
+    EXPECT_TRUE(de_thread_is_timing_critical());
+
+    /* Per thread: a thread this one creates is not timing-critical. */
+    tc_probe probe = {true};
+    de_thread *t = NULL;
+    ASSERT_EQ(de_thread_create(tc_other_thread, &probe, "tc-probe", DE_THREAD_NORMAL, 0, &t), DE_OK);
+    (void)de_thread_join(t);
+    EXPECT_FALSE(probe.before);
+
+    /* Setting again replaces the settings; a 1 s period with all of it as computation is the
+     * largest valid desc. */
+    EXPECT_EQ(de_thread_set_timing_critical(
+                  &(de_thread_timing_desc){.period_ns = 1000000000ull,
+                                           .computation_ns = 1000000000ull}),
+              DE_OK);
+    EXPECT_TRUE(de_thread_is_timing_critical());
+    /* Sleeping stays exact and never early while timing-critical. */
+    for (int i = 0; i < 20; i++) {
+        u64 s = de_time_now_ns();
+        de_sleep_ns(3 * MS);
+        EXPECT_GE(de_time_now_ns() - s, 3 * MS);
+    }
+
+    de_thread_clear_timing_critical();
+    EXPECT_FALSE(de_thread_is_timing_critical());
+    de_thread_clear_timing_critical(); /* twice is fine */
+    EXPECT_FALSE(de_thread_is_timing_critical());
 }
 
 TEST(pacing, pacer_60hz) {

@@ -92,8 +92,94 @@ typedef enum de_ui_easing {
 /** Handle for a registered ui_style asset. It can be passed to de_ui_load_stylesheet.
  * Loading/refcounting remains the caller's responsibility, as with ordinary blob assets. */
 DE_API de_blob de_ui_stylesheet(de_ui *ui, de_asset_id id);
-/** Switch variable overlays; NULL or empty selects the base variables. */
+/** Switch variable overlays; NULL or empty selects the base variables. Names are at most
+ * DE_UI_THEME_NAME_MAX - 1 bytes (DE_ERR_INVALID_ARGUMENT otherwise). While an editor preview
+ * is active (de_ui_preview_theme), the name is stored and applied when the preview ends. */
 DE_API de_result de_ui_set_theme(de_ui *ui, const char *name);
+
+/* ---- Theme inspection and editor preview (DENG-781) ----
+ * Main thread. A theme is a [theme.<name>.vars] overlay in a loaded stylesheet. */
+#define DE_UI_THEME_NAME_MAX  64u
+#define DE_UI_THEME_VALUE_MAX 128u
+typedef struct de_ui_theme_info {
+    char name[DE_UI_THEME_NAME_MAX];
+    u32 sheets; /* loaded stylesheets that declare this theme */
+} de_ui_theme_info;
+/** Writes the themes of every loaded stylesheet, without duplicates, sorted by name (byte
+ * order), up to `capacity`. `count` gets the full count. Names that are too long for
+ * de_ui_theme_info are left out. NULL `out` is allowed with a capacity of 0. */
+DE_API de_result de_ui_list_themes(const de_ui *ui, de_ui_theme_info *out, u32 capacity,
+                                   u32 *count);
+typedef struct de_ui_theme_var {
+    char name[DE_UI_THEME_NAME_MAX];
+    /* The value as a TOML literal: "#ff8800" (quoted), 12, 0.5, true or [1, 2, 3, 4]. */
+    char value[DE_UI_THEME_VALUE_MAX];
+    u32 sheet;      /* index of the stylesheet, in load order (built-in sheets first) */
+    bool themed;    /* the value comes from the theme overlay, not from [vars] */
+    bool truncated; /* `value` (or `name`) was cut to fit */
+} de_ui_theme_var;
+/** DENG-786: where a loaded stylesheet came from. */
+typedef struct de_ui_sheet_info {
+    de_asset_id asset; /* the ui_style or blob asset; {0} when loaded from source text */
+    const char *path;  /* the asset's manifest path; "" when there is none. Valid until the next
+                        * manifest load or destroy */
+    bool builtin;      /* an embedded engine sheet */
+} de_ui_sheet_info;
+/** Describes the stylesheet at `sheet`, an index from de_ui_theme_var.sheet (load order,
+ * built-in sheets first). DE_ERR_NOT_FOUND: no sheet has that index. */
+DE_API de_result de_ui_get_sheet_info(const de_ui *ui, u32 sheet, de_ui_sheet_info *out);
+
+/* ---- Stylesheet files, sheet list and parse errors (DENG-780) ---- */
+/** The file name suffix of stylesheet sources, for example "ui/hud.uistyle.toml". */
+#define DE_UI_STYLESHEET_SUFFIX DE_ASSET_STYLESHEET_SUFFIX
+/** True when `path` (either separator) names a file that ends with DE_UI_STYLESHEET_SUFFIX and
+ * has a name before it. The match is exact bytes (case-sensitive). */
+DE_API bool de_ui_is_stylesheet_path(const char *path);
+#define DE_UI_SHEET_ERROR_MAX 160u
+/** A stylesheet error. `line` and `column` are 1-based, 0 when not known. `message` is the
+ * reason without the position, cut to fit. */
+typedef struct de_ui_sheet_error {
+    u32 line, column;
+    char message[DE_UI_SHEET_ERROR_MAX];
+} de_ui_sheet_error;
+/** Parses and validates stylesheet text without loading it. DE_OK clears `out`; DE_ERR_PARSE
+ * fills it, and the error context message has the same position ("UI stylesheet line L,
+ * column C: reason"). Asset references are not resolved. Any thread. */
+DE_API de_result de_ui_check_stylesheet(const char *bytes, u64 length, de_ui_sheet_error *out);
+/** One stylesheet of de_ui_list_sheets. */
+typedef struct de_ui_sheet_status {
+    de_ui_sheet_info info;
+    u32 index;          /* list position; for a loaded sheet, the de_ui_theme_var.sheet index */
+    const char *source; /* the asset's manifest `source` relative to the asset root; "" when
+                         * none. Valid like info.path */
+    bool loaded;        /* false: the first load failed and no rules are in use */
+    bool has_error;     /* `error` is set: a failed load, or a rejected reload (old rules kept) */
+    de_ui_sheet_error error;
+} de_ui_sheet_status;
+/** Lists the stylesheets: the loaded sheets in load order (built-in sheets first), then the
+ * sheets whose first de_ui_load_stylesheet failed. Writes up to `capacity` entries; `count`
+ * gets the full count. `out` may be NULL with `capacity` 0. A good reload clears an error; a
+ * failed sheet leaves the list when a later de_ui_load_stylesheet of it succeeds. Main thread. */
+DE_API de_result de_ui_list_sheets(const de_ui *ui, de_ui_sheet_status *out, u32 capacity,
+                                   u32 *count);
+/** Writes the variables in effect for `theme` (NULL: the active theme; "": the base
+ * variables): for each sheet in load order, its [vars] in file order with the overlay values
+ * applied, then the variables that only the overlay declares. `count` gets the full count.
+ * DE_ERR_NOT_FOUND: a non-empty theme that no loaded sheet declares. */
+DE_API de_result de_ui_theme_vars(const de_ui *ui, const char *theme, de_ui_theme_var *out,
+                                  u32 capacity, u32 *count);
+/** Editor preview: shows `name` ("" is the base variables) without changing the theme the
+ * game selected with de_ui_set_theme. NULL ends the preview and applies the selected theme.
+ * DE_ERR_NOT_FOUND: a non-empty name that no loaded sheet declares. A stylesheet error under
+ * the theme returns that error and keeps the current state. Ending a preview when none is
+ * active is DE_OK. */
+DE_API de_result de_ui_preview_theme(de_ui *ui, const char *name);
+typedef struct de_ui_theme_state {
+    char active[DE_UI_THEME_NAME_MAX];   /* the theme the stylesheets are compiled with */
+    char selected[DE_UI_THEME_NAME_MAX]; /* the game's de_ui_set_theme choice */
+    bool previewing;
+} de_ui_theme_state;
+DE_API de_result de_ui_get_theme_state(const de_ui *ui, de_ui_theme_state *out);
 typedef struct de_ui_style_stats {
     u32 entities_restyled, active_tweens;
 } de_ui_style_stats;
@@ -156,6 +242,59 @@ typedef struct de_ui_layout_stats {
     f32 scale;
 } de_ui_layout_stats;
 DE_API de_ui_layout_stats de_ui_get_layout_stats(const de_ui *ui);
+/** A viewport for de_ui_layout_preview: what an editor previews the UI at. */
+typedef struct de_ui_preview_viewport {
+    u32 width, height; /**< Output pixels; with pixel_art, the internal (low-resolution) pixels. */
+    f32 ui_scale;      /**< The ui.scale value to apply; zero or less: the current ui.scale. */
+    de_window_insets safe; /**< Safe-area insets in output pixels. */
+    bool pixel_art;        /**< Integer scale round(ui_scale), as de_ui_desc.pixel_art. */
+} de_ui_preview_viewport;
+typedef struct de_ui_preview_rect {
+    de_entity entity;
+    de_vec4 rect; /**< x, y, w, h in the preview viewport's pixels, as DeUiNode.computed_rect */
+} de_ui_preview_rect;
+/**
+ * Lays the UI out at `viewport` and reports the rects of `root` (a DeUiNode entity) and its UI
+ * descendants in pre-order: the root, then each child's subtree in child order (DENG-768). Every
+ * root is laid out, as a frame would, then the live viewport is laid out again, so the world's
+ * DeUiNode.computed_rect values are unchanged afterwards. World panels keep their own extent.
+ * `*count` gets the number of nodes in the subtree; the first `capacity` go to `out`. `scale`
+ * (optional) gets the layout scale used. Main thread, outside a running schedule.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (NULL `ui`, `viewport` or `count`, `out` NULL with a
+ *         capacity, a zero width or height, a non-finite ui_scale, or `ui` not attached) or
+ *         DE_ERR_NOT_FOUND (`root` is not a live UI node).
+ */
+DE_API de_result de_ui_layout_preview(de_ui *ui, de_entity root,
+                                      const de_ui_preview_viewport *viewport,
+                                      de_ui_preview_rect *out, u32 capacity, u32 *count,
+                                      f32 *scale);
+/** Text to measure with de_ui_measure_text (DENG-782). Lengths are in layout pixels, the units
+ * of DeUiNode.computed_rect and de_ui_layout_preview. */
+typedef struct de_ui_text_measure_desc {
+    de_str utf8;
+    const de_text_style *style; /**< As DeUiText.style: size_px <= 0 is 16. */
+    de_text_align align;
+    f32 wrap_width; /**< Zero: no wrap. */
+    f32 box_height; /**< Zero: no height limit, overflow_y stays false. */
+    f32 scale;      /**< Layout scale, from de_ui_layout_preview; <= 0: current (1 before layout). */
+} de_ui_text_measure_desc;
+typedef struct de_ui_text_metrics {
+    de_vec2 size; /**< Width and height of the laid-out text. */
+    f32 line_height, scale;
+    u32 line_count;
+    bool overflow_x; /**< wrap_width is set and a line cannot break narrow enough. */
+    bool overflow_y; /**< box_height is set and the text is taller. */
+} de_ui_text_metrics;
+/**
+ * Measures text with the UI's text system as a DeUiText node is measured: the style's size and
+ * letter spacing are multiplied by the layout scale. `lines` (optional) gets up to `capacity`
+ * line breaks (de_text_layout_lines). For the editor's overflow preview. Main thread.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (NULL `ui`, `desc`, `desc->style` or `out`, `lines` NULL
+ *         with a capacity, a negative or non-finite wrap_width or box_height, a non-finite scale,
+ *         or no text system in de_ui_desc.text), or the de_text_layout_build error.
+ */
+DE_API de_result de_ui_measure_text(de_ui *ui, const de_ui_text_measure_desc *desc,
+                                    de_text_line *lines, u32 capacity, de_ui_text_metrics *out);
 
 typedef struct DeUiImage {
     de_texture texture;
@@ -266,6 +405,63 @@ typedef struct DeUiWorldPanel {
     f32 pixels_per_meter;
     bool lit, depth_test;
 } DeUiWorldPanel;
+
+/** One UI node under an editor pick point (DENG-779). */
+typedef struct de_ui_pick_hit {
+    de_entity entity; /**< the UI node */
+    de_entity root;   /**< its UI root: a screen root or a DeUiWorldPanel root */
+    de_vec4 rect;     /**< its DeUiNode.computed_rect, in the root's pixels */
+    u32 depth;        /**< levels below `root`; 0 is the root itself */
+} de_ui_pick_hit;
+/**
+ * Editor hit test (DENG-779): every UI node under `point`, topmost first, so that a click in an
+ * editor viewport can select one and Alt-click can step down the stack.
+ * - `root` null: the screen UI, every UI root that is not a DeUiWorldPanel. `point` is in
+ *   viewport pixels, the space of DeUiNode.computed_rect.
+ * - `root` a UI root (a UI node with no UI parent): only its subtree. For a world panel, `point`
+ *   is in the panel's pixels, (0, 0) at its top-left, as de_ui_pick_ray reports it.
+ * The order is the draw order reversed: later roots, then popups, then higher z_order, then later
+ * in tree order come first. A node is hit when its display is not DE_UI_NONE, its rect has an area
+ * and holds the point, and the clip rects of its clipping ancestors (and, for a screen root, the
+ * viewport) hold it. Unlike pointer routing, every UI node can be hit, also one that is disabled,
+ * is not a widget or draws nothing, and no renderer is needed. The rects are those of the last
+ * layout. `*count` gets the number of hits; the first `capacity` go to `out`. Main thread,
+ * outside a running schedule.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (NULL `ui` or `count`, `out` NULL with a capacity, a
+ *         non-finite point, or `ui` not attached) or DE_ERR_NOT_FOUND (`root` is not a live UI
+ *         root).
+ */
+DE_API de_result de_ui_pick(de_ui *ui, de_entity root, de_vec2 point, de_ui_pick_hit *out,
+                            u32 capacity, u32 *count);
+/** The world panel an editor ray hit (DENG-779). */
+typedef struct de_ui_panel_pick {
+    de_entity panel; /**< the DeUiWorldPanel root; null: no panel was hit */
+    de_vec2 pixel;   /**< the hit in the panel's pixels, (0, 0) at its top-left */
+    f32 distance;    /**< along the ray, in units of `direction` */
+} de_ui_panel_pick;
+/**
+ * Editor world-panel pick (DENG-779): the nearest DeUiWorldPanel root that the ray from `origin`
+ * along `direction` (world space; for example the editor camera's ray through a viewport pixel)
+ * hits inside its extent, from either side, then de_ui_pick on that panel at the hit pixel.
+ * Panels with no DeGlobalTransform are skipped. When no panel is hit, `*count` is 0 and
+ * `panel->panel` is null. `panel` is optional. Main thread, outside a running schedule.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (NULL `ui` or `count`, `out` NULL with a capacity, a
+ *         non-finite origin or direction, a zero direction, or `ui` not attached).
+ */
+DE_API de_result de_ui_pick_ray(de_ui *ui, de_dvec3 origin, de_vec3 direction,
+                                de_ui_panel_pick *panel, de_ui_pick_hit *out, u32 capacity,
+                                u32 *count);
+/**
+ * The world-space corners of a UI node on a world panel, for the editor's selection outline and
+ * handles (DENG-779): its computed_rect's top-left, top-right, bottom-right and bottom-left,
+ * placed through its panel's DeGlobalTransform as the panel is drawn. `panel` (optional) gets
+ * the panel root. Main thread, outside a running schedule.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (NULL `ui` or `corners`, or `ui` not attached) or
+ *         DE_ERR_NOT_FOUND (`node` is not a live UI node, or its root is not a world panel with a
+ *         valid size and a DeGlobalTransform).
+ */
+DE_API de_result de_ui_node_world_corners(de_ui *ui, de_entity node, de_dvec3 corners[4],
+                                          de_entity *panel);
 
 typedef enum de_ui_event_kind {
     DE_UI_EV_CLICK,

@@ -20,6 +20,9 @@
  * Threads: registration (de__material_models_add) on the main thread; the lookups for the resolve
  * pass from the render thread at any time. An entry is filled before the count that publishes it
  * is stored (release), and entries are never removed until destroy, so the readers need no lock.
+ * A material graph's model (DENG-770, de__material_models_add_ex) can have its pipeline and
+ * features replaced on hot reload: both are atomics, and the old pipeline is retired after the
+ * frames that may use it.
  */
 #ifndef DE_RENDER_MATERIAL_MODELS_H
 #define DE_RENDER_MATERIAL_MODELS_H
@@ -90,6 +93,35 @@ void de__material_models_destroy(de__material_models *m);
 de_result de__material_models_add(de__material_models *m, const char *name,
                                   const de_gpu_shader_blob *code, const de_shader_reflection *refl,
                                   u32 *out_id);
+
+/**
+ * DENG-770: de__material_models_add for a material graph's model (`graph` true): the entry keeps
+ * `features` (DE__MATERIAL_FEATURE_* of the graph's layers; the GPU material header takes them
+ * instead of the value-derived ones) and its pipeline can be replaced on hot reload. `graph` false
+ * is de__material_models_add. Main thread. Same results as de__material_models_add.
+ */
+de_result de__material_models_add_ex(de__material_models *m, const char *name,
+                                     const de_gpu_shader_blob *code,
+                                     const de_shader_reflection *refl, bool graph, u32 features,
+                                     u32 *out_id);
+
+/**
+ * DENG-770: a material graph's hot reload. Makes the new resolve pipeline of graph model `id`
+ * (the contract as for add), publishes it and its `features` and returns the old pipeline in
+ * `*old`: the resolve pass may still use it in the frames in flight, so the caller destroys it
+ * after the frame fence (de__uploader_retire). The id, and so every material's model, stays.
+ * Main thread.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL argument, not a graph model, the contract);
+ *         DE_ERR_INTERNAL (the pipeline failed: the old one stays).
+ */
+de_result de__material_models_replace(de__material_models *m, u32 id,
+                                      const de_gpu_shader_blob *code,
+                                      const de_shader_reflection *refl, u32 features,
+                                      de_gpu_pipeline *old);
+
+/** DENG-770: true when model `id` is a material graph's; its features in `*features` (nullable).
+ * Any thread. */
+bool de__material_models_graph_features(const de__material_models *m, u32 id, u32 *features);
 
 /** Models registered, built-ins included (ids 0 .. count-1). Any thread. */
 u32 de__material_models_count(const de__material_models *m);

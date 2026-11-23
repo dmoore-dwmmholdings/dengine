@@ -2,9 +2,10 @@
  * host_packs.h: where a packed game finds its packs (SPEC §11.5, §11.7; DENG-213). Internal to
  * the host; include as "host/host_packs.h".
  *
- * In PACKED mode (Shipping) engine create mounts every `*.dpak` file directly in `game:/` (the
- * executable's directory, or de_host_desc.game_dir), so `de-cook cook --out <game dir>` output
- * runs as is. See the Trama page "Decision: Packed builds mount every .dpak in game:/ at engine
+ * In PACKED mode (Shipping), and in Release (no cooker, DENG-789), engine create mounts every
+ * `*.dpak` file directly in `game:/` (the executable's directory, or de_host_desc.game_dir), so
+ * `de-cook cook --out <game dir>` output (de_add_game(ASSETS)) runs as is. In Release a mounted
+ * pack overrides the manifests' sources, and no pack is not an error. See the Trama page "Decision: Packed builds mount every .dpak in game:/ at engine
  * create; later file names override earlier ones".
  */
 #ifndef DE_HOST_PACKS_H

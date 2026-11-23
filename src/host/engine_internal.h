@@ -25,6 +25,7 @@ DE_EXTERN_C_BEGIN
  *               surface = "auto" | "none" | "metal" | "vulkan"
  *     [timing]  mode = "fixed" | "variable"  fixed_hz = 60  max_catchup_steps = 4
  *               time_scale = 1.0  frame_cap_hz = 0
+ *               timing_critical_thread = false   (DENG-726: the loop thread opts in)
  *     [tasks]   workers = 0                  (frame workers besides the main thread; 0 = auto)
  *     [memory]  frame_arena_mib = 64
  *     [assets]  io_threads = 2  hot_reload = true  locale = ""   (DENG-143)
@@ -72,6 +73,9 @@ typedef struct de__game_config {
     de_window_surface window_surface;      /**< [window] surface when explicitly selected */
     bool window_surface_auto;              /**< Default: match the platform GPU backend */
     de_timing timing;                      /**< [timing]; the DE_TIMING_DEFAULT_* values, fixed */
+    /** [timing] timing_critical_thread; false. When true, de__loop_run() makes its thread
+     *  timing-critical (de_thread_set_timing_critical, DENG-726) for the run. */
+    bool timing_critical_thread;
     u32 task_workers;                      /**< [tasks] workers; 0 = de_task_system_desc default */
     u32 frame_arena_mib;                   /**< [memory] frame_arena_mib; 64 (read by DENG-91) */
     u32 unknown_keys;                      /**< keys that were warned about as unknown */

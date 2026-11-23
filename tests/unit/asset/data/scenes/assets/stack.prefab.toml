@@ -1,0 +1,28 @@
+# DENG-571: a root (0x10) with props/crate nested under it, flattened as 0x11 and 0x12.
+# It sets TTarget.speed of the nested child itself.
+[prefab]
+[[prefab.nested]]
+asset = "props/crate"
+root = "0x11"
+ids = [["0x1", "0x11"], ["0x2", "0x12"]]
+
+[[entity]]
+id = "0x10"
+[entity.THealth]
+current = 5.0
+max = 5.0
+
+[[entity]]
+id = "0x11"
+parent = "0x10"
+[entity.THealth]
+current = 50.0
+max = 50.0
+
+[[entity]]
+id = "0x12"
+parent = "0x11"
+[entity.TTarget]
+target = "0x11"
+texture = "ui/heart"
+speed = 2.0

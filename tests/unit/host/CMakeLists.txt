@@ -127,6 +127,32 @@ if(DE_BUILD_TESTS)
         list(APPEND _de_hg_tests host_game_run)
     endif()
 
+    # DENG-789: a game's own .slang shader loads in every build type: cooked in-process in Debug
+    # and Dev, from the game.dpak that de_add_game(ASSETS) cooked at build time in Release and
+    # Shipping (fixtures/shader_game/).
+    if(TARGET shader_game)
+        set(_de_sg_expect "shader_game: shader ready \\(spirv vs [1-9][0-9]* ps [1-9][0-9]*")
+        if(APPLE)
+            string(APPEND _de_sg_expect ", metallib vs [1-9][0-9]* ps [1-9][0-9]*")
+        endif()
+        get_target_property(_de_sg_form shader_game DE_GAME_FORM)
+        if(_de_sg_form STREQUAL "library")
+            set(_de_sg_cmd "$<TARGET_FILE:dengine_exe>|--headless|--game|$<TARGET_FILE:shader_game>")
+        else()
+            set(_de_sg_cmd "$<TARGET_FILE:shader_game>|--headless")
+        endif()
+        if(_de_sg_form STREQUAL "static" OR TARGET dengine_exe)
+            add_test(NAME host_game_shader COMMAND "${CMAKE_COMMAND}"
+                "-DCMD=${_de_sg_cmd}"
+                -DEXPECT_EXIT=0
+                "-DEXPECT=${_de_sg_expect}|Shader Game exited normally"
+                "-DREJECT=shader_game: FAILED"
+                -P "${_de_hg_script}")
+            set_tests_properties(host_game_shader PROPERTIES
+                LABELS "unit;host;shader" TIMEOUT 150 ENVIRONMENT "${_de_hg_env}")
+        endif()
+    endif()
+
     # Every way a library can be refused: exit code 1 and the error in the log.
     if(TARGET dengine_exe)
         set(_de_hg_cases
@@ -334,6 +360,22 @@ if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
     target_include_directories(test_editor_model_inspection PRIVATE "${DE_ROOT_DIR}/src")
 endif()
 
+# DENG-805: DE_MPACK_DEBUG turns mpack read/write tracking on in Debug on every compiler (MSVC
+# got it from _DEBUG only). This test fails when a config that should track does not.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_mpack_config SOURCES test_editor_mpack_config.c
+        LIBS de_tp_dide_protocol LABELS unit host)
+    if(TARGET test_editor_mpack_config)
+        if(DE_MPACK_DEBUG STREQUAL "ON")
+            target_compile_definitions(test_editor_mpack_config PRIVATE
+                DE_TEST_MPACK_TRACKING_EXPECTED=1)
+        elseif(DE_MPACK_DEBUG STREQUAL "Debug")
+            target_compile_definitions(test_editor_mpack_config PRIVATE
+                DE_TEST_MPACK_TRACKING_EXPECTED=$<IF:$<CONFIG:Debug>,1,0>)
+        endif()
+    endif()
+endif()
+
 # DENG-695: validate bounded preview PNGs with an independent image decoder.
 if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
     de_add_test(NAME editor_preview_image SOURCES test_preview_image.c
@@ -437,8 +479,27 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     de_add_test(NAME editor_prefab SOURCES test_editor_prefab.c
         LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
     target_include_directories(test_editor_prefab PRIVATE "${DE_ROOT_DIR}/src")
+    # DENG-798: apply writes the sources, so each test copies the fixtures under here first.
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/editor_prefab_tmp")
     target_compile_definitions(test_editor_prefab PRIVATE
-        DE_EDITOR_SAFETY_DATA_DIR="${DE_ROOT_DIR}/tests/unit/asset/data/scenes")
+        DE_EDITOR_SAFETY_DATA_DIR="${DE_ROOT_DIR}/tests/unit/asset/data/scenes"
+        DE_EDITOR_PREFAB_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/editor_prefab_tmp")
+    # DENG-814: the tests above run one per process; these run them all in one process, in the
+    # declared order and in two shuffled ones, so state one test leaves behind (a mount, a static)
+    # fails here. Each failing order is reproducible: the seed is in the command.
+    foreach(_seed 0 1 7)
+        if(_seed EQUAL 0)
+            set(_order "")
+            set(_suffix "")
+        else()
+            set(_order "--shuffle" "--seed=${_seed}")
+            set(_suffix "_shuffled_${_seed}")
+        endif()
+        add_test(NAME editor_prefab_one_process${_suffix}
+            COMMAND test_editor_prefab ${_order})
+        set_tests_properties(editor_prefab_one_process${_suffix} PROPERTIES
+            LABELS "unit;host;editor" TIMEOUT 120)
+    endforeach()
 endif()
 
 # DENG-676: production CPU gizmo paths, with no native graphics.
@@ -446,6 +507,32 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     de_add_test(NAME editor_safety SOURCES test_editor_safety.c
         LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
     target_include_directories(test_editor_safety PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
+# DENG-642: session modes, step, snapshots, diff and transactional edits through the handlers.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_service SOURCES test_editor_service.c
+        LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_service PRIVATE "${DE_ROOT_DIR}/src")
+    # DENG-764: the crate prefab for transactional instantiate.
+    target_compile_definitions(test_editor_service PRIVATE
+        DE_EDITOR_PREFAB_DATA_DIR="${DE_ROOT_DIR}/tests/unit/asset/data/scenes")
+endif()
+# DENG-570 (DIDE-R147, DIDE-R148): deterministic TOML scene text (scene.serialize, keyed by scene
+# ID) and scene.reloadFromText, with a byte golden.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_scene_text SOURCES test_editor_scene_text.c
+        LIBS de_host de_tp_dide_protocol LABELS unit host determinism
+        CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_scene_text PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_editor_scene_text PRIVATE
+        DE_SCENE_TEXT_GOLDEN="${DE_ROOT_DIR}/tests/unit/host/data/scene_text/golden.scene.toml")
+endif()
+# DENG-784: the editor IPC on its own service thread (latency, frame queueing, races).
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_ipc SOURCES test_editor_ipc.c
+        LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_ipc PRIVATE "${DE_ROOT_DIR}/src")
 endif()
 # DENG-730: always exercise protocol raw slices with MPack compound tracking,
 # including Dev/Release hosts where the ordinary protocol library omits it.
@@ -464,4 +551,154 @@ if(TARGET de_gpu_d3d12)
             de_d3d12_warp_deploy(${_de_host_gpu_test})
         endif()
     endforeach()
+endif()
+
+# DENG-743: shared service mode mapping; pure CPU, independent of host/GPU startup.
+if(NOT DE_IS_SHIPPING)
+    de_add_test(NAME editor_view_modes SOURCES test_editor_view_modes.c
+        LIBS de_core LABELS unit host CONFIGURATIONS Debug Dev Release)
+    if(TARGET test_editor_view_modes)
+        target_include_directories(test_editor_view_modes PRIVATE "${DE_ROOT_DIR}/src")
+    endif()
+endif()
+
+# The owned-game probe must resolve in both source and cooker-free packed mode,
+# independently of native GPU availability or host-loop startup.
+de_add_test(NAME owned_probe SOURCES test_owned_probe.c
+    LIBS de_host de_asset de_platform de_task LABELS unit host)
+if(TARGET test_owned_probe)
+    target_include_directories(test_owned_probe PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_owned_probe PRIVATE
+        DE_HOST_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+        DE_HOST_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_owned_probe_tmp")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_owned_probe_tmp")
+endif()
+
+# world.entity must distinguish missing entities from a response-arena failure.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_entity SOURCES test_editor_entity.c
+        LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_entity PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
+# DENG-775: spline.info/sample/instances (DIDE protocol 1.12, world.splines) through the real
+# handlers and the generated protocol readers and writers.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_spline SOURCES test_editor_spline.c
+        LIBS de_host de_spline de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_spline PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
+# DENG-778: ui.layout and the ui.editor capability (DIDE protocol 1.14) through the real
+# handlers and the generated protocol readers and writers. The service needs the UI module.
+# DENG-785 (protocol 1.15): the pick stack, nodeCorners, themes (stylesheets through
+# tests/unit/ui/style_test_util.h, hence tomlc17) and locales.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_UI)
+    de_add_test(NAME editor_ui SOURCES test_editor_ui.c
+        LIBS de_host de_ui de_tp_dide_protocol de_tp_tomlc17 LABELS unit host ui CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_ui PRIVATE "${DE_ROOT_DIR}/src")
+    # DENG-788: ui.measureText runs against the real fonts, as tests/unit/ui does.
+    if(DE_BUILD_TOOLS)
+        target_link_libraries(test_editor_ui PRIVATE de_cooker de_pack_lib de_tp_stb de_tp_harfbuzz)
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/text-packed-tmp")
+        target_compile_definitions(test_editor_ui PRIVATE
+            "DE_TEXT_PACK_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/text-packed-tmp\""
+            DE_UI_TEST_FONTS=1 "DE_FONT_DATA=\"${DE_ROOT_DIR}/tests/data/fonts/latin\"")
+        target_include_directories(test_editor_ui PRIVATE "${DE_ROOT_DIR}/tools")
+    endif()
+endif()
+
+# DENG-776: water.info/surface/flowMap/probes/showProbes (DIDE protocol 1.13, world.water)
+# through the real handlers and the generated protocol readers and writers. DeWater is a render
+# component, so the service needs render.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
+    de_add_test(NAME editor_water SOURCES test_editor_water.c
+        LIBS de_host de_spline de_water de_render de_tp_dide_protocol LABELS unit host
+        CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_water PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
+    # DENG-580: terrain.info, terrain.sample, terrain.exportHeightmap and the terrain.* ops.
+    de_add_test(NAME editor_terrain SOURCES test_editor_terrain.c
+        LIBS de_host de_terrain de_render de_tp_dide_protocol LABELS unit host
+        CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_terrain PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
+    # DENG-777: the spline.carve edit op (world.splines on a world.terrain entity), its tile-exact
+    # terrain.restore inverse and undo through the edit transactions.
+    de_add_test(NAME editor_spline_carve SOURCES test_editor_spline_carve.c
+        LIBS de_host de_spline de_terrain de_render de_tp_dide_protocol LABELS unit host
+        CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_spline_carve PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
+# DENG-769: the material graph over the editor IPC (materialGraph.catalog/generate/compile),
+# round-tripped through the generated protocol readers and writers. Debug and Dev with the cooker
+# and Slang only, the same condition as the handlers in de_host.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND TARGET de_tp_slang)
+    de_add_test(NAME editor_material_graph SOURCES test_editor_material_graph.c
+        LIBS de_host de_tp_dide_protocol LABELS unit host cook TIMEOUT 300
+        CONFIGURATIONS Debug Dev)
+    if(TARGET test_editor_material_graph)
+        target_include_directories(test_editor_material_graph PRIVATE
+            "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_editor_material_graph PRIVATE
+            "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:DE_ED_MATERIAL_GRAPH=1>")
+        target_link_libraries(test_editor_material_graph PRIVATE
+            "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:de_cooker>")
+    endif()
+endif()
+
+# DENG-555 (DIDE-R135 AC1): editor_service_absent_in_shipping (label `check`): no editor-service
+# or editor-IPC symbol in a Shipping `dengine`. It shares the Shipping build of
+# prof_no_tracy_in_shipping (build/<preset>/prof_shipping/, the `prof_shipping` lock). See the
+# script header.
+if(CMAKE_NM)
+    set(_de_ed_nm "${CMAKE_NM}")
+else()
+    find_program(_de_ed_nm NAMES llvm-nm nm)
+endif()
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    set(_de_ed_expect 1)
+else()
+    set(_de_ed_expect 0)
+endif()
+if(DE_IS_SHIPPING)
+    set(_de_ed_is_shipping 1)
+else()
+    set(_de_ed_is_shipping 0)
+endif()
+add_test(NAME editor_service_absent_in_shipping
+    COMMAND "${CMAKE_COMMAND}"
+        "-DDE_SOURCE_DIR=${DE_ROOT_DIR}"
+        "-DDE_BUILD_DIR=${CMAKE_BINARY_DIR}"
+        "-DDE_IS_SHIPPING=${_de_ed_is_shipping}"
+        "-DDE_NM=${_de_ed_nm}"
+        "-DDE_GENERATOR=${CMAKE_GENERATOR}"
+        "-DDE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+        "-DDE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+        "-DDE_C_COMPILER=${CMAKE_C_COMPILER}"
+        "-DDE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DDE_HEADLESS=${DE_HEADLESS}"
+        "-DDE_PARENT_LIB=$<TARGET_FILE:dengine>"
+        "-DDE_EXPECT_EDITOR=${_de_ed_expect}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/editor_service_absent_in_shipping.cmake")
+set_tests_properties(editor_service_absent_in_shipping PROPERTIES
+    LABELS "check;host"
+    SKIP_REGULAR_EXPRESSION "editor_service_absent_in_shipping: SKIPPED"
+    RESOURCE_LOCK prof_shipping
+    TIMEOUT 900)
+if(DE_IS_SHIPPING)
+    set_tests_properties(editor_service_absent_in_shipping PROPERTIES RUN_SERIAL TRUE)
+endif()
+
+# DENG-665: Game-view picks ignore the Scene-only hidden list. Real editor service over IPC on
+# Metal, so macOS only. Needs the flappy example built and a Python with msgpack; it skips
+# (exit 77) otherwise.
+if(APPLE AND Python3_EXECUTABLE)
+    add_test(NAME editor_game_view_picks COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/check_game_view_picks.py" "$<TARGET_FILE:flappy>")
+    set_tests_properties(editor_game_view_picks PROPERTIES
+        LABELS "unit;host" TIMEOUT 120 SKIP_RETURN_CODE 77)
 endif()

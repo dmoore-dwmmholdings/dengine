@@ -1,0 +1,10 @@
+# DENG-802: entity ids inside a struct field (ref.a) and an array field (list).
+[[entity]]
+id = "0x1"
+
+[[entity]]
+id = "0x2"
+parent = "0x1"
+[entity.TLinks]
+ref = { a = "0x1", n = 3 }
+list = ["0x1", "0x2", "0x1"]

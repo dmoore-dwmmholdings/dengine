@@ -17,7 +17,11 @@ import sys
 import tempfile
 import time
 
-import msgpack
+try:
+    import msgpack
+except ImportError:
+    print("check_game_view_picks: SKIPPED (msgpack not installed)")
+    sys.exit(77)
 
 
 def main():
@@ -27,6 +31,9 @@ def main():
     parser.add_argument("game", type=Path)
     args = parser.parse_args()
     game = args.game.resolve()
+    if not game.exists():
+        print("check_game_view_picks: SKIPPED (flappy is not built)")
+        sys.exit(77)
     with tempfile.TemporaryDirectory(prefix="deng665-", dir="/tmp") as tmp:
         endpoint = str(Path(tmp) / "editor.sock")
         token = secrets.token_hex(32)

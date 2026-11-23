@@ -167,6 +167,13 @@ typedef struct de__render_retire {
 /** The renderer's frame fence (frame n signals n + 1): unloads wait for it from now on. Main
  * thread, before the first frame. An invalid fence turns the deferral off. */
 void de__render_uploader_set_frame_fence(de_render_uploader *u, de_gpu_fence fence);
+struct de__material_models;
+
+/** DENG-770: the material models `material_graph` assets register in (NULL: none, they load
+ * without registering). Main thread; the renderer sets it after registering the types and clears
+ * it before destroying the models. */
+void de__render_uploader_set_material_models(de_render_uploader *u,
+                                             struct de__material_models *models);
 /** The renderer prepares frame `frame_index` (the kick, main thread): an object unloaded from now
  * on may be named by that frame, so it waits for fence value frame_index + 1. */
 void de__render_uploader_frame_prepared(de_render_uploader *u, u64 frame_index);

@@ -239,45 +239,87 @@ static const cook_sub *sub_find_locked(const de__cook_stage *cs, de_asset_id id)
     return i != NULL ? &cs->subs[*i] : NULL;
 }
 
-/* Records the sub-assets of one cook result (any thread). An entry declared again takes the
- * newest parent, name and type. Out of memory drops the entry: the sub-asset is then unknown. */
+/* Records one sub-asset (under the lock; any thread). An entry declared again takes the newest
+ * parent, name and type. Out of memory drops the entry: the sub-asset is then unknown. */
+static void sub_put_locked(de__pipeline *pl, de__cook_stage *cs, de_asset_id id, de_asset_id parent,
+                           u64 type_hash, const char *sub_name) {
+    size_t name_size = strlen(sub_name) + 1u;
+    char *name = (char *)DE_ALLOC(pl->alloc, name_size, 1, DE_MEM_ASSET);
+    if (name == NULL)
+        return;
+    memcpy(name, sub_name, name_size);
+    cook_sub e = {id, parent, type_hash, name, name_size};
+    u32 *idx = (u32 *)de_hashmap_get(&cs->sub_index, id.hash, &id.hash);
+    if (idx != NULL) {
+        DE_FREE(pl->alloc, cs->subs[*idx].name, cs->subs[*idx].name_size);
+        cs->subs[*idx] = e;
+        return;
+    }
+    if (cs->sub_count == cs->sub_cap) {
+        u32 ncap = cs->sub_cap != 0 ? cs->sub_cap * 2u : 16u;
+        cook_sub *n = (cook_sub *)DE_REALLOC(pl->alloc, cs->subs, sizeof(cook_sub) * cs->sub_cap,
+                                             sizeof(cook_sub) * ncap, DE_ALIGNOF(cook_sub),
+                                             DE_MEM_ASSET);
+        if (n == NULL) {
+            DE_FREE(pl->alloc, name, name_size);
+            return;
+        }
+        cs->subs = n;
+        cs->sub_cap = ncap;
+    }
+    u32 at = cs->sub_count;
+    if (de_hashmap_put(&cs->sub_index, id.hash, &id.hash, &at) != DE_OK) {
+        DE_FREE(pl->alloc, name, name_size);
+        return;
+    }
+    cs->subs[cs->sub_count++] = e;
+}
+
+/* Records the sub-assets of one cook result (any thread). */
 static void subs_record(de__pipeline *pl, de__cook_stage *cs, de_asset_id parent,
                         const de_cook_result *r) {
     de_mutex_lock(&cs->lock);
     for (u32 k = 0; k < r->subasset_count; ++k) {
         const de_cook_subasset *s = &r->subassets[k];
-        size_t name_size = strlen(s->name) + 1u;
-        char *name = (char *)DE_ALLOC(pl->alloc, name_size, 1, DE_MEM_ASSET);
-        if (name == NULL)
-            continue;
-        memcpy(name, s->name, name_size);
-        cook_sub e = {s->id, parent, de_hash64_str(s->type), name, name_size};
-        u32 *idx = (u32 *)de_hashmap_get(&cs->sub_index, s->id.hash, &s->id.hash);
-        if (idx != NULL) {
-            DE_FREE(pl->alloc, cs->subs[*idx].name, cs->subs[*idx].name_size);
-            cs->subs[*idx] = e;
-            continue;
-        }
-        if (cs->sub_count == cs->sub_cap) {
-            u32 ncap = cs->sub_cap != 0 ? cs->sub_cap * 2u : 16u;
-            cook_sub *n =
-                (cook_sub *)DE_REALLOC(pl->alloc, cs->subs, sizeof(cook_sub) * cs->sub_cap,
-                                       sizeof(cook_sub) * ncap, DE_ALIGNOF(cook_sub), DE_MEM_ASSET);
-            if (n == NULL) {
-                DE_FREE(pl->alloc, name, name_size);
-                continue;
-            }
-            cs->subs = n;
-            cs->sub_cap = ncap;
-        }
-        u32 at = cs->sub_count;
-        if (de_hashmap_put(&cs->sub_index, s->id.hash, &s->id.hash, &at) != DE_OK) {
-            DE_FREE(pl->alloc, name, name_size);
-            continue;
-        }
-        cs->subs[cs->sub_count++] = e;
+        sub_put_locked(pl, cs, s->id, parent, de_hash64_str(s->type), s->name);
     }
     de_mutex_unlock(&cs->lock);
+}
+
+/* DENG-774: a `material_graph` asset always declares the sub-asset `<id>#material`, so a scene
+ * can depend on it before anything cooked the graph. If `id` is that sub-asset of a manifest
+ * asset, records it as the cook would (a miss costs one scan of the manifest; main thread). */
+static void implicit_sub_ensure(de_asset_system *s, de_asset_id id) {
+    static const char k_type[] = "material_graph";
+    static const char k_name[] = "material";
+    const de__manifest *m = s->manifest;
+    if (m == NULL || s->resolved == NULL || s->pipeline == NULL || id.hash == 0)
+        return;
+    de__cook_stage *have = s->pipeline->cook;
+    if (have != NULL) {
+        de_mutex_lock(&have->lock);
+        const bool known = sub_find_locked(have, id) != NULL;
+        de_mutex_unlock(&have->lock);
+        if (known)
+            return;
+    }
+    for (u32 i = 0; i < m->asset_count; ++i) {
+        const de__manifest_asset *a = &m->assets[i];
+        if (a->type == NULL || strcmp(a->type, k_type) != 0 || s->resolved->asset_ids[i].hash == 0)
+            continue;
+        char path[DE_FS_PATH_MAX];
+        int n = snprintf(path, sizeof path, "%s#%s", a->id, k_name);
+        if (n < 0 || (size_t)n >= sizeof path || de_asset_id_from(path).hash != id.hash)
+            continue;
+        de__cook_stage *cs = stage_get(s->pipeline); /* the first cook may be this one */
+        if (cs == NULL)
+            return;
+        de_mutex_lock(&cs->lock);
+        sub_put_locked(s->pipeline, cs, id, s->resolved->asset_ids[i], de_hash64_str("material"),
+                       k_name);
+        de_mutex_unlock(&cs->lock);
+        return;
+    }
 }
 
 de_result de__cook_stage_subasset_path(de_asset_system *s, de_asset_id id, char *out,
@@ -329,7 +371,12 @@ void de__cook_stage_get_stats(const de_asset_system *s, de__cook_stage_stats *ou
 
 bool de__cook_stage_subasset_type(de_asset_system *s, de_asset_id id, u64 *type_hash) {
     de__cook_stage *cs = s != NULL && s->pipeline != NULL ? s->pipeline->cook : NULL;
-    if (cs == NULL || id.hash == 0)
+    if (id.hash == 0 || s == NULL || s->pipeline == NULL)
+        return false;
+    if (s->resolved != NULL && de__resolved_asset(s->resolved, id) == NULL)
+        implicit_sub_ensure(s, id);
+    cs = s->pipeline->cook;
+    if (cs == NULL)
         return false;
     de_mutex_lock(&cs->lock);
     const cook_sub *e = sub_find_locked(cs, id);
@@ -370,6 +417,7 @@ bool de__cook_stage_plan(de_asset_system *s, u32 slot, de__cook_plan *p) {
             return false;
         bool found = false;
         de_asset_id parent = {0};
+        implicit_sub_ensure(s, sl->id);
         de_mutex_lock(&cs->lock);
         const cook_sub *e = sub_find_locked(cs, sl->id);
         if (e != NULL) {

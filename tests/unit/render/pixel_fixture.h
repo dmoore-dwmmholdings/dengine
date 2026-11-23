@@ -23,6 +23,7 @@ typedef struct pixel_fixture {
     de_gpu_texture target, pattern;
     de_gpu_buffer readback;
     bool native;
+    de_gpu_format target_format; /**< of the output target; DE_FMT_UNKNOWN: RGBA8_UNORM */
     u8 *packed_readback;
     u32 iw, ih, ow, oh, internal_seen, ui_seen;
     de_vec2 residual;
@@ -121,7 +122,9 @@ static void start_pixel(pixel_fixture *f, de_gpu_backend backend, u32 iw, u32 ih
     f->oh = oh;
     f->target = de_gpu_texture_create(f->d, &(de_gpu_texture_desc){.width = ow,
                                                                    .height = oh,
-                                                                   .format = DE_FMT_RGBA8_UNORM,
+                                                                   .format = f->target_format
+                                                                                 ? f->target_format
+                                                                                 : DE_FMT_RGBA8_UNORM,
                                                                    .usage = DE_USAGE_RENDER_TARGET |
                                                                             DE_USAGE_SAMPLED |
                                                                             DE_USAGE_COPY_SRC});

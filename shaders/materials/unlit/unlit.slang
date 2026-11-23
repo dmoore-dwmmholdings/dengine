@@ -6,7 +6,8 @@
 //
 //   resolve_gbuffer  emission = base colour x factor x vertex colour x texture, exactly; the
 //                    UNLIT feature (G-buffer DE_GB_FLAG_UNLIT, GB1 left cleared). KHR unlit has no
-//                    emissive term, so the material's emissive is not added.
+//                    emissive term, so the material's emissive is not added. An unlit
+//                    DeSprite (DE_GPU_MATERIAL_SPRITE; DENG-763) samples its atlas region.
 //   evaluate etc.    no BSDF: 0, and sample returns no direction
 module unlit;
 
@@ -14,6 +15,7 @@ import bindless;
 __exported import "../material_interface";
 import "../../scene/scene_types";
 import "../../visbuffer/resolve_model";
+import "../../sprite/sprite_vis";
 
 public struct UnlitModel : IMaterialModel
 {
@@ -26,6 +28,13 @@ public struct UnlitModel : IMaterialModel
 
     public static SurfaceData resolve_gbuffer(Params m, VertexAttribs v, TextureLodInfo lod)
     {
+        // An unlit DeSprite (DE_GPU_MATERIAL_SPRITE; DENG-763) samples its atlas region.
+        if (de_sprite_is(m))
+        {
+            v.uv[0] = de_sprite_uv(m, v.uv[0]);
+            lod.dx[0] *= m.subsurface.zw;
+            lod.dy[0] *= m.subsurface.zw;
+        }
         float4 base = m.base_color * v.color *
                       de_resolve_sample(m, DE_RESOLVE_TEX_BASE_COLOR, v, lod,
                                         float4(1.0, 1.0, 1.0, 1.0));
