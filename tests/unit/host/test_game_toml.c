@@ -90,6 +90,7 @@ TEST_F(game_toml, full, gt_fx) {
     EXPECT_EQ(c.timing.max_catchup_steps, 8u);
     EXPECT_FLOAT_EQ(c.timing.time_scale, 0.5, 0.0);
     EXPECT_EQ(c.timing.frame_cap_hz, 144u);
+    EXPECT_TRUE(c.timing_critical_thread); /* DENG-726 */
     EXPECT_EQ(c.task_workers, 3u);
     EXPECT_EQ(c.frame_arena_mib, 32u);
     EXPECT_EQ(c.asset_io_threads, 4u); /* DENG-143: [assets] */
@@ -138,6 +139,7 @@ TEST_F(game_toml, defaults, gt_fx) {
     EXPECT_EQ(c.timing.max_catchup_steps, DE_TIMING_DEFAULT_MAX_CATCHUP_STEPS);
     EXPECT_FLOAT_EQ(c.timing.time_scale, DE_TIMING_DEFAULT_TIME_SCALE, 0.0);
     EXPECT_EQ(c.timing.frame_cap_hz, DE_TIMING_DEFAULT_FRAME_CAP_HZ);
+    EXPECT_FALSE(c.timing_critical_thread); /* DENG-726: opt-in */
     EXPECT_STREQ(c.name, "DEngine");
     EXPECT_STREQ(c.library, "");
     EXPECT_STREQ(c.window_title, "");
@@ -186,6 +188,7 @@ TEST_F(game_toml, bad_types, gt_fx) {
         {"[timing]\ntime_scale = -1.0\n", "timing.time_scale"},
         {"[timing]\ntime_scale = nan\n", "timing.time_scale"},
         {"[timing]\nframe_cap_hz = true\n", "timing.frame_cap_hz"},
+        {"[timing]\ntiming_critical_thread = 1\n", "timing.timing_critical_thread"},
         {"[window]\nwidth = 1.5\n", "window.width"},
         {"[window]\nheight = 0\n", "window.height"},
         {"[window]\nheight = 99999999999\n", "window.height"},
