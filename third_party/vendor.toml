@@ -637,3 +637,20 @@ local = ["CMakeLists.txt", "patches/**"]
 # physics.mouseSpring).
 patches = ["patches/0001-raw-values-preserve-reader-tracking.patch"]
 notes = "Dev-only: linked by the host's editor service (src/host/editor), never in Shipping."
+
+[[lib]]
+name = "recastnavigation"
+# Recast (navmesh voxelization), Detour (navmesh runtime), DetourTileCache (tiled layers for
+# runtime rebuilds and obstacles) and DetourCrowd (crowds, DENG-78) for the nav module
+# (src/gameplay/nav/, DENG-76; SPEC §21.2, §22; DENG-2 Q1: C++ behind a C interface inside one
+# module). Linked only into de_nav; no C++ type leaves src/gameplay/nav/*.cpp. Release tarball
+# of tag v1.6.0 (GitHub tag archive).
+version = "1.6.0"
+url = "https://github.com/recastnavigation/recastnavigation/archive/refs/tags/v1.6.0.tar.gz"
+sha256 = "d48ca0121962fa0639502c0f56c4e3ae72f98e55d88727225444f500775c0074"
+license = "Zlib"
+license_file = "License.txt"
+# The four runtime libraries only; no DebugUtils, RecastDemo, Tests or build files.
+files = ["Recast/Include/*", "Recast/Source/*", "Detour/Include/*", "Detour/Source/*",
+         "DetourTileCache/Include/*", "DetourTileCache/Source/*", "DetourCrowd/Include/*",
+         "DetourCrowd/Source/*"]

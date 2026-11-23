@@ -1,0 +1,21 @@
+# tests/data/nav/plane_box.navmesh: a 100 x 100 m plane with a 2 m box in its middle (DENG-76).
+[build]
+cell_size = 0.25
+cell_height = 0.1
+agent_radius = 0.5
+agent_height = 2.0
+agent_max_climb = 0.4
+agent_max_slope_deg = 45.0
+tile_size = 32.0
+
+[region]
+min = [0.0, 0.0, -1.0]
+max = [100.0, 100.0, 3.0]
+
+[[mesh]]
+vertices = [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [100.0, 100.0, 0.0], [0.0, 100.0, 0.0]]
+indices = [0, 1, 2, 0, 2, 3]
+
+[[box]]
+center = [50.0, 50.0, 1.0]
+half_extents = [1.0, 1.0, 1.0]

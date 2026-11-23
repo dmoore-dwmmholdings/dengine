@@ -256,3 +256,10 @@ target_sources(de_cooker PRIVATE importers/aseprite/atlas_pack.c
     importers/aseprite/atlas_pack.h importers/aseprite/atlas_texture.c)
 target_sources(de_cooker PRIVATE importers/aseprite/aseprite_import.c
     importers/aseprite/aseprite_import.h)
+
+# DENG-76: the navmesh importer (importers/navmesh/): `.navmesh` TOML sources to DNAV containers
+# (src/gameplay/nav/nav_build.h). The build code is the de_nav_build library, shared with the
+# runtime. Registered as the built-in `navmesh` importer (engine_importers.c).
+target_sources(de_cooker PRIVATE importers/navmesh/navmesh_import.h
+    importers/navmesh/navmesh_import.c)
+target_link_libraries(de_cooker PRIVATE de_nav_build)
