@@ -251,6 +251,46 @@ bool de_ep_material_graph_target_status_parse(de_ep_str s, de_ep_material_graph_
     return false;
 }
 
+const char *de_ep_override_kind_name(de_ep_override_kind v) {
+    switch (v) {
+    case DE_EP_OVERRIDE_KIND_FIELD:
+        return "field";
+    case DE_EP_OVERRIDE_KIND_COMPONENT_ADDED:
+        return "component_added";
+    case DE_EP_OVERRIDE_KIND_COMPONENT_REMOVED:
+        return "component_removed";
+    case DE_EP_OVERRIDE_KIND_ENTITY_ADDED:
+        return "entity_added";
+    case DE_EP_OVERRIDE_KIND_ENTITY_REMOVED:
+        return "entity_removed";
+    }
+    return "";
+}
+
+bool de_ep_override_kind_parse(de_ep_str s, de_ep_override_kind *out) {
+    if (de_ep_str_eq(s, "field")) {
+        *out = DE_EP_OVERRIDE_KIND_FIELD;
+        return true;
+    }
+    if (de_ep_str_eq(s, "component_added")) {
+        *out = DE_EP_OVERRIDE_KIND_COMPONENT_ADDED;
+        return true;
+    }
+    if (de_ep_str_eq(s, "component_removed")) {
+        *out = DE_EP_OVERRIDE_KIND_COMPONENT_REMOVED;
+        return true;
+    }
+    if (de_ep_str_eq(s, "entity_added")) {
+        *out = DE_EP_OVERRIDE_KIND_ENTITY_ADDED;
+        return true;
+    }
+    if (de_ep_str_eq(s, "entity_removed")) {
+        *out = DE_EP_OVERRIDE_KIND_ENTITY_REMOVED;
+        return true;
+    }
+    return false;
+}
+
 const char *de_ep_ui_text_align_name(de_ep_ui_text_align v) {
     switch (v) {
     case DE_EP_UI_TEXT_ALIGN_START:
@@ -5945,6 +5985,9 @@ void de_ep_write_override(mpack_writer_t *w, const de_ep_override *v) {
     ++n;
     ++n;
     ++n;
+    n += v->has_kind ? 1u : 0u;
+    n += v->has_parent ? 1u : 0u;
+    n += v->has_local ? 1u : 0u;
     mpack_start_map(w, n);
     mpack_write_cstr(w, "path");
     de_ep_write_str(w, v->path);
@@ -5968,6 +6011,18 @@ void de_ep_write_override(mpack_writer_t *w, const de_ep_override *v) {
         mpack_write_u64(w, v->ids.items[i_1]);
     }
     mpack_finish_array(w);
+    if (v->has_kind) {
+        mpack_write_cstr(w, "kind");
+        mpack_write_cstr(w, de_ep_override_kind_name(v->kind));
+    }
+    if (v->has_parent) {
+        mpack_write_cstr(w, "parent");
+        mpack_write_u64(w, v->parent);
+    }
+    if (v->has_local) {
+        mpack_write_cstr(w, "local");
+        mpack_write_u64(w, v->local);
+    }
     mpack_finish_map(w);
 }
 
@@ -6011,6 +6066,23 @@ void de_ep_read_override(mpack_reader_t *r, de_ep_arena *a, de_ep_override *out)
                 out->ids.items[i_3] = mpack_expect_u64(r);
             }
             mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "kind")) {
+            seen |= (uint64_t)1 << 7;
+            out->has_kind = true;
+            {
+                de_ep_str s_;
+                de_ep_read_str(r, &s_);
+                if (!de_ep_override_kind_parse(s_, &out->kind))
+                    mpack_reader_flag_error(r, mpack_error_data);
+            }
+        } else if (de_ep_str_eq(k, "parent")) {
+            seen |= (uint64_t)1 << 8;
+            out->has_parent = true;
+            out->parent = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "local")) {
+            seen |= (uint64_t)1 << 9;
+            out->has_local = true;
+            out->local = mpack_expect_u64(r);
         } else {
             mpack_discard(r);
         }
@@ -6081,6 +6153,8 @@ void de_ep_write_override_path_params(mpack_writer_t *w, const de_ep_override_pa
     ++n;
     ++n;
     n += v->has_target ? 1u : 0u;
+    n += v->has_kind ? 1u : 0u;
+    n += v->has_local ? 1u : 0u;
     n += v->has_revision ? 1u : 0u;
     n += v->has_tx ? 1u : 0u;
     mpack_start_map(w, n);
@@ -6091,6 +6165,14 @@ void de_ep_write_override_path_params(mpack_writer_t *w, const de_ep_override_pa
     if (v->has_target) {
         mpack_write_cstr(w, "target");
         de_ep_write_str(w, v->target);
+    }
+    if (v->has_kind) {
+        mpack_write_cstr(w, "kind");
+        mpack_write_cstr(w, de_ep_override_kind_name(v->kind));
+    }
+    if (v->has_local) {
+        mpack_write_cstr(w, "local");
+        mpack_write_u64(w, v->local);
     }
     if (v->has_revision) {
         mpack_write_cstr(w, "revision");
@@ -6120,12 +6202,25 @@ void de_ep_read_override_path_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ov
             seen |= (uint64_t)1 << 2;
             out->has_target = true;
             de_ep_read_str(r, &out->target);
-        } else if (de_ep_str_eq(k, "revision")) {
+        } else if (de_ep_str_eq(k, "kind")) {
             seen |= (uint64_t)1 << 3;
+            out->has_kind = true;
+            {
+                de_ep_str s_;
+                de_ep_read_str(r, &s_);
+                if (!de_ep_override_kind_parse(s_, &out->kind))
+                    mpack_reader_flag_error(r, mpack_error_data);
+            }
+        } else if (de_ep_str_eq(k, "local")) {
+            seen |= (uint64_t)1 << 4;
+            out->has_local = true;
+            out->local = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "revision")) {
+            seen |= (uint64_t)1 << 5;
             out->has_revision = true;
             out->revision = mpack_expect_u64(r);
         } else if (de_ep_str_eq(k, "tx")) {
-            seen |= (uint64_t)1 << 4;
+            seen |= (uint64_t)1 << 6;
             out->has_tx = true;
             out->tx = mpack_expect_u32(r);
         } else {
