@@ -22,7 +22,10 @@
  * and `reparent` carry the old index, so undo puts an entity back where it was.
  *
  * Terrain (DENG-580, protocol 1.11, world.terrain): an op whose name starts with `terrain.` goes to
- * the terrain area (editor_terrain.c, render builds); its inverse is a `terrain.restore`. */
+ * the terrain area (editor_terrain.c, render builds); its inverse is a `terrain.restore`.
+ *
+ * Foliage (DENG-581, protocol 1.22, world.foliage): an op whose name starts with `foliage.` goes to
+ * the foliage area (editor_foliage.c, render builds); its inverse is a `foliage.restore`. */
 #include "host/editor/editor_internal.h"
 
 #include <dengine/de_memory.h>
@@ -930,6 +933,9 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
     if (ed->terrain_op != NULL && ((o->op.len > 8 && memcmp(o->op.ptr, "terrain.", 8) == 0) ||
                                    de_ep_str_eq(o->op, "spline.carve")))
         return ed->terrain_op(ed, a, o, inv, &f->code, f->msg, sizeof f->msg);
+    /* DENG-581: the world.foliage ops, in render builds. */
+    if (ed->foliage_op != NULL && o->op.len > 8 && memcmp(o->op.ptr, "foliage.", 8) == 0)
+        return ed->foliage_op(ed, a, o, inv, &f->code, f->msg, sizeof f->msg);
 
     return fail(f, DE_EP_ERR_INVALID_PARAMS, "unknown op %.*s", (int)o->op.len, o->op.ptr);
 }

@@ -654,6 +654,15 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
     target_include_directories(test_editor_terrain PRIVATE "${DE_ROOT_DIR}/src")
 endif()
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
+    # DENG-581: world.foliage, the foliage.paint/erase/scatter/restore edit ops and their queries.
+    de_add_test(NAME editor_foliage SOURCES test_editor_foliage.c
+        LIBS de_host de_foliage de_terrain de_render de_tp_dide_protocol LABELS unit host
+        CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_foliage PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_editor_foliage PRIVATE
+        DE_EDITOR_FOLIAGE_DATA_DIR="${DE_ROOT_DIR}/tests/unit/host/data/foliage")
+endif()
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
     # DENG-777: the spline.carve edit op (world.splines on a world.terrain entity), its tile-exact
     # terrain.restore inverse and undo through the edit transactions.
     de_add_test(NAME editor_spline_carve SOURCES test_editor_spline_carve.c

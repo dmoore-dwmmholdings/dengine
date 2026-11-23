@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.21"
-#define DE_EP_SCHEMA_HASH "b6c744f10f18b392"
+#define DE_EP_PROTOCOL_VERSION "1.22"
+#define DE_EP_SCHEMA_HASH "f4fbaf670cecf894"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -196,6 +196,15 @@ typedef struct de_ep_event_record de_ep_event_record;
 typedef struct de_ep_events_params de_ep_events_params;
 typedef struct de_ep_field_change de_ep_field_change;
 typedef struct de_ep_field_info de_ep_field_info;
+typedef struct de_ep_foliage_cell de_ep_foliage_cell;
+typedef struct de_ep_foliage_cell_params de_ep_foliage_cell_params;
+typedef struct de_ep_foliage_info de_ep_foliage_info;
+typedef struct de_ep_foliage_instances de_ep_foliage_instances;
+typedef struct de_ep_foliage_params de_ep_foliage_params;
+typedef struct de_ep_foliage_scatter de_ep_foliage_scatter;
+typedef struct de_ep_foliage_stroke de_ep_foliage_stroke;
+typedef struct de_ep_foliage_type de_ep_foliage_type;
+typedef struct de_ep_foliage_type_params de_ep_foliage_type_params;
 typedef struct de_ep_font_atlas_page de_ep_font_atlas_page;
 typedef struct de_ep_font_atlas_params de_ep_font_atlas_params;
 typedef struct de_ep_gizmo_drag_end de_ep_gizmo_drag_end;
@@ -393,6 +402,11 @@ typedef struct de_ep_map_raw {
     uint32_t count;
 } de_ep_map_raw;
 
+typedef struct de_ep_list_i32 {
+    int32_t *items;
+    uint32_t count;
+} de_ep_list_i32;
+
 typedef struct de_ep_list_u32 {
     uint32_t *items;
     uint32_t count;
@@ -542,6 +556,11 @@ typedef struct de_ep_list_field_change {
     de_ep_field_change *items;
     uint32_t count;
 } de_ep_list_field_change;
+
+typedef struct de_ep_list_foliage_cell {
+    de_ep_foliage_cell *items;
+    uint32_t count;
+} de_ep_list_foliage_cell;
 
 typedef struct de_ep_list_ui_theme_info {
     de_ep_ui_theme_info *items;
@@ -942,7 +961,7 @@ struct de_ep_edit_begin_params {
     de_ep_str merge_key;
 };
 
-/* One operation. `op` is spawn, despawn, add, remove, set, reparent, instantiate or uninstantiate; the other fields are the ones that op uses. `instantiate` (`path` the prefab asset, `scene`, optional `parent`) spawns a prefab instance and returns its root in `assignedIds`; its inverse is `uninstantiate`. `uninstantiate` (`entity` the instance root; any other entity is INVALID_PARAMS) removes the tree, its scene memberships and the instance record; its inverse is `instantiate` with `value` an opaque snapshot, which restores the same entity ids, scene ids, components and instance record (CONFLICT if an id is taken). `edit.undo` and `edit.redo` replace each pair's other side with the inverse the replay returns. With the optional world.terrain capability (protocol 1.11) there are four more, each on the terrain `entity`: `terrain.stroke` (`value` a TerrainStroke as a map), `terrain.import` (`path` a heightmap file, `value` a map with `format` and an optional `tile` [x, y]), `terrain.bake` (writes the enabled auto-material rules into the splat map and turns them off) and `terrain.restore` (`value` opaque: the tiles one of the others changed, as they were). The inverse of each is a `terrain.restore`. With the optional world.splines capability (protocol 1.12) there is `spline.carve` on a terrain `entity` (`value` a SplineCarve as a map), whose inverse is also a `terrain.restore`. Since protocol 1.14, `spawn`, `reparent` and `instantiate` take an optional `index`: the sibling position under `parent`, counted without the entity itself. Absent, or at or past the end, appends; a `reparent` to the same parent reorders. The inverse of a `reparent` carries the entity's old index, so undo restores the order. Since protocol 1.18 there is `prefab.state` (`value` opaque: prefab definition and instance base values), which `prefab.applyOverride` writes and whose inverse is another `prefab.state`. Clients do not author it; `edit.undo` and `edit.redo` replay it, and each replay bumps the prefab revision. */
+/* One operation. `op` is spawn, despawn, add, remove, set, reparent, instantiate or uninstantiate; the other fields are the ones that op uses. `instantiate` (`path` the prefab asset, `scene`, optional `parent`) spawns a prefab instance and returns its root in `assignedIds`; its inverse is `uninstantiate`. `uninstantiate` (`entity` the instance root; any other entity is INVALID_PARAMS) removes the tree, its scene memberships and the instance record; its inverse is `instantiate` with `value` an opaque snapshot, which restores the same entity ids, scene ids, components and instance record (CONFLICT if an id is taken). `edit.undo` and `edit.redo` replace each pair's other side with the inverse the replay returns. With the optional world.terrain capability (protocol 1.11) there are four more, each on the terrain `entity`: `terrain.stroke` (`value` a TerrainStroke as a map), `terrain.import` (`path` a heightmap file, `value` a map with `format` and an optional `tile` [x, y]), `terrain.bake` (writes the enabled auto-material rules into the splat map and turns them off) and `terrain.restore` (`value` opaque: the tiles one of the others changed, as they were). The inverse of each is a `terrain.restore`. With the optional world.splines capability (protocol 1.12) there is `spline.carve` on a terrain `entity` (`value` a SplineCarve as a map), whose inverse is also a `terrain.restore`. Since protocol 1.14, `spawn`, `reparent` and `instantiate` take an optional `index`: the sibling position under `parent`, counted without the entity itself. Absent, or at or past the end, appends; a `reparent` to the same parent reorders. The inverse of a `reparent` carries the entity's old index, so undo restores the order. Since protocol 1.18 there is `prefab.state` (`value` opaque: prefab definition and instance base values), which `prefab.applyOverride` writes and whose inverse is another `prefab.state`. Clients do not author it; `edit.undo` and `edit.redo` replay it, and each replay bumps the prefab revision. With the optional world.foliage capability (protocol 1.22) there are four more, each on the foliage layer `entity`: `foliage.paint` and `foliage.erase` (`value` a FoliageStroke as a map), `foliage.scatter` (`value` a FoliageScatter as a map) and `foliage.restore` (`value` opaque: the cells one of the others changed, as they were). The inverse of each is a `foliage.restore`. */
 struct de_ep_edit_op {
     de_ep_str op;
     bool has_scene;
@@ -1031,6 +1050,92 @@ struct de_ep_field_info {
     uint32_t count; /* array length; 1 for a scalar */
     de_ep_list_str flags;
     de_ep_map_raw attributes;
+};
+
+struct de_ep_foliage_cell {
+    de_ep_list_i32 cell; /* [x, z] */
+    uint32_t count; /* instances in the cell */
+    uint64_t revision; /* changes when an edit changes the cell */
+};
+
+struct de_ep_foliage_cell_params {
+    uint64_t entity;
+    de_ep_list_i32 cell; /* [x, z]; any other length is invalid_params */
+    bool has_type;
+    uint32_t type; /* only this palette index */
+};
+
+struct de_ep_foliage_info {
+    uint64_t entity;
+    de_ep_str component; /* the reflected component holding the palette and the rules */
+    float cell_size; /* metres per streaming cell edge */
+    uint32_t max_types;
+    uint32_t max_rules;
+    uint32_t max_per_cell; /* instances per cell; a paint or scatter stops placing in a full cell */
+    de_ep_str type_suffix; /* the file suffix of foliage type assets, e.g. ".foliage.toml" */
+    uint64_t count; /* instances in the layer */
+    de_ep_list_foliage_cell cells; /* the cells holding at least one instance, sorted by z then x */
+    uint64_t revision; /* the entity revision this reply describes */
+};
+
+/* The instances in one cell, in a stable order. A cell with none gives empty lists. Lists are parallel: one entry per instance (transforms has 10). */
+struct de_ep_foliage_instances {
+    de_ep_list_i32 cell; /* [x, z] */
+    uint64_t revision; /* as FoliageCell.revision */
+    de_ep_list_u32 types; /* palette index */
+    de_ep_list_u32 rules; /* the id of the rule that placed it; 0 = painted */
+    de_ep_list_f32 transforms; /* world space, 10 values per instance: position xyz, rotation quaternion xyzw, scale xyz */
+};
+
+struct de_ep_foliage_params {
+    uint64_t entity;
+};
+
+/* The `foliage.scatter` op's value. Re-runs scatter rules: first removes every instance a listed rule placed, then (unless `clear`) places the rule again over its area from its seed, on its terrain where the splat weight of `layer` is at least min_weight, within the slope, height and noise limits and the type's own limits, keeping the type's minSpacing from every instance of that type. The same rule over the same terrain gives the same instances. Painted instances are kept. */
+struct de_ep_foliage_scatter {
+    bool has_rules;
+    de_ep_list_u32 rules; /* rule ids; absent runs every enabled rule. An id that is not in the layer is invalid_params */
+    bool has_clear;
+    bool clear; /* only remove the rules' instances, for a rule that is deleted or disabled */
+};
+
+/* The `foliage.paint` and `foliage.erase` ops' value: one stroke, or the dabs of one while it is drawn (the IDE merges those into one undo step with a mergeKey). `points` are world [x, y, z, pressure] dabs, already spaced, as in TerrainStroke. Weight at a point is strength x falloff(distance / radius) x pressure. Paint adds instances of `type` until the density under the brush reaches weight x density, keeping the type's minSpacing, slope and height limits; each lands on the highest of `surfaces` at its x, z and nowhere else. Erase removes instances under the brush (of `type`, or of every type when it is absent), each with probability weight, so full weight clears it; painted and scattered instances alike. */
+struct de_ep_foliage_stroke {
+    bool has_type;
+    uint32_t type; /* palette index; paint needs it */
+    de_ep_list_f32 points; /* 4 values per dab */
+    float radius; /* metres */
+    float strength; /* 0..1 */
+    de_ep_list_f32 falloff; /* falloff curve, sampled evenly from the centre (1st) to the edge (last) */
+    bool has_density;
+    float density; /* paint: instances per m2 at full weight; absent uses the type's density */
+    bool has_seed;
+    uint32_t seed; /* placement and erase randomness; the same stroke on the same layer gives the same result */
+    bool has_surfaces;
+    de_ep_list_u64 surfaces; /* paint: the entities to place on, terrains (world.terrain) or entities with a mesh; paint needs at least one */
+};
+
+/* A foliage type asset as the engine loaded it. Ranges are [min, max]. */
+struct de_ep_foliage_type {
+    de_ep_str id; /* the asset id */
+    de_ep_str mesh; /* mesh asset id */
+    bool has_impostor;
+    de_ep_str impostor; /* impostor asset id, drawn past impostorDistance; absent draws the mesh at every distance */
+    bool has_impostor_distance;
+    float impostor_distance; /* metres */
+    float density; /* instances per m2 a paint stroke places at full weight */
+    de_ep_list_f32 scale; /* [min, max] uniform scale */
+    de_ep_list_f32 rotation; /* [min, max] degrees about the up axis */
+    bool align_to_normal; /* tilt the instance's up axis to the surface normal */
+    de_ep_list_f32 slope; /* [min, max] surface slope in degrees where instances are placed */
+    de_ep_list_f32 height; /* [min, max] world height in metres where instances are placed; max <= min does not limit */
+    float min_spacing; /* metres between instances of this type */
+    bool collision;
+    float cull_distance; /* metres; 0 never culls */
+};
+
+struct de_ep_foliage_type_params {
+    de_ep_str id; /* a foliageType asset; not_found otherwise, invalid_params when its file does not parse */
 };
 
 struct de_ep_font_atlas_page {
@@ -2333,6 +2438,24 @@ void de_ep_write_field_change(mpack_writer_t *w, const de_ep_field_change *v);
 void de_ep_read_field_change(mpack_reader_t *r, de_ep_arena *a, de_ep_field_change *out);
 void de_ep_write_field_info(mpack_writer_t *w, const de_ep_field_info *v);
 void de_ep_read_field_info(mpack_reader_t *r, de_ep_arena *a, de_ep_field_info *out);
+void de_ep_write_foliage_cell(mpack_writer_t *w, const de_ep_foliage_cell *v);
+void de_ep_read_foliage_cell(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_cell *out);
+void de_ep_write_foliage_cell_params(mpack_writer_t *w, const de_ep_foliage_cell_params *v);
+void de_ep_read_foliage_cell_params(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_cell_params *out);
+void de_ep_write_foliage_info(mpack_writer_t *w, const de_ep_foliage_info *v);
+void de_ep_read_foliage_info(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_info *out);
+void de_ep_write_foliage_instances(mpack_writer_t *w, const de_ep_foliage_instances *v);
+void de_ep_read_foliage_instances(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_instances *out);
+void de_ep_write_foliage_params(mpack_writer_t *w, const de_ep_foliage_params *v);
+void de_ep_read_foliage_params(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_params *out);
+void de_ep_write_foliage_scatter(mpack_writer_t *w, const de_ep_foliage_scatter *v);
+void de_ep_read_foliage_scatter(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_scatter *out);
+void de_ep_write_foliage_stroke(mpack_writer_t *w, const de_ep_foliage_stroke *v);
+void de_ep_read_foliage_stroke(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_stroke *out);
+void de_ep_write_foliage_type(mpack_writer_t *w, const de_ep_foliage_type *v);
+void de_ep_read_foliage_type(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_type *out);
+void de_ep_write_foliage_type_params(mpack_writer_t *w, const de_ep_foliage_type_params *v);
+void de_ep_read_foliage_type_params(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_type_params *out);
 void de_ep_write_font_atlas_page(mpack_writer_t *w, const de_ep_font_atlas_page *v);
 void de_ep_read_font_atlas_page(mpack_reader_t *r, de_ep_arena *a, de_ep_font_atlas_page *out);
 void de_ep_write_font_atlas_params(mpack_writer_t *w, const de_ep_font_atlas_params *v);
@@ -2677,6 +2800,9 @@ typedef enum de_ep_method {
     DE_EP_METHOD_EDIT_COMMIT,
     DE_EP_METHOD_EDIT_REDO,
     DE_EP_METHOD_EDIT_UNDO,
+    DE_EP_METHOD_FOLIAGE_INFO,
+    DE_EP_METHOD_FOLIAGE_INSTANCES,
+    DE_EP_METHOD_FOLIAGE_TYPE,
     DE_EP_METHOD_GIZMO_SET_SELECTION,
     DE_EP_METHOD_GIZMO_SET_TOOL,
     DE_EP_METHOD_GOODBYE,
@@ -2873,6 +2999,12 @@ bool de_ep_read_params_edit_redo(const de_ep_request *req, de_ep_arena *a, de_ep
 void de_ep_write_response_edit_redo(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_edit_undo(const de_ep_request *req, de_ep_arena *a, de_ep_tx_params *out);
 void de_ep_write_response_edit_undo(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_foliage_info(const de_ep_request *req, de_ep_arena *a, de_ep_foliage_params *out);
+void de_ep_write_response_foliage_info(mpack_writer_t *w, uint64_t id, const de_ep_foliage_info *result);
+bool de_ep_read_params_foliage_instances(const de_ep_request *req, de_ep_arena *a, de_ep_foliage_cell_params *out);
+void de_ep_write_response_foliage_instances(mpack_writer_t *w, uint64_t id, const de_ep_foliage_instances *result);
+bool de_ep_read_params_foliage_type(const de_ep_request *req, de_ep_arena *a, de_ep_foliage_type_params *out);
+void de_ep_write_response_foliage_type(mpack_writer_t *w, uint64_t id, const de_ep_foliage_type *result);
 bool de_ep_read_params_gizmo_set_selection(const de_ep_request *req, de_ep_arena *a, de_ep_entity_list *out);
 void de_ep_write_response_gizmo_set_selection(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_gizmo_set_tool(const de_ep_request *req, de_ep_arena *a, de_ep_gizmo_tool_params *out);

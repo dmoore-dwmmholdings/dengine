@@ -3318,6 +3318,656 @@ void de_ep_read_field_info(mpack_reader_t *r, de_ep_arena *a, de_ep_field_info *
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
+void de_ep_write_foliage_cell(mpack_writer_t *w, const de_ep_foliage_cell *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "cell");
+    mpack_start_array(w, v->cell.count);
+    for (uint32_t i_1 = 0; i_1 < v->cell.count; ++i_1) {
+        mpack_write_i32(w, v->cell.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "count");
+    mpack_write_u32(w, v->count);
+    mpack_write_cstr(w, "revision");
+    mpack_write_u64(w, v->revision);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_foliage_cell(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_cell *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "cell")) {
+            seen |= (uint64_t)1 << 0;
+            out->cell.count = mpack_expect_array(r);
+            out->cell.items = (int32_t *)de_ep_arena_array(r, a, out->cell.count, sizeof(*out->cell.items));
+            for (uint32_t i_3 = 0; out->cell.items && i_3 < out->cell.count; ++i_3)
+            {
+                out->cell.items[i_3] = mpack_expect_i32(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "count")) {
+            seen |= (uint64_t)1 << 1;
+            out->count = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "revision")) {
+            seen |= (uint64_t)1 << 2;
+            out->revision = mpack_expect_u64(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(7)) != UINT64_C(7))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_foliage_cell_params(mpack_writer_t *w, const de_ep_foliage_cell_params *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    n += v->has_type ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "entity");
+    mpack_write_u64(w, v->entity);
+    mpack_write_cstr(w, "cell");
+    mpack_start_array(w, v->cell.count);
+    for (uint32_t i_1 = 0; i_1 < v->cell.count; ++i_1) {
+        mpack_write_i32(w, v->cell.items[i_1]);
+    }
+    mpack_finish_array(w);
+    if (v->has_type) {
+        mpack_write_cstr(w, "type");
+        mpack_write_u32(w, v->type);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_foliage_cell_params(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_cell_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "entity")) {
+            seen |= (uint64_t)1 << 0;
+            out->entity = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "cell")) {
+            seen |= (uint64_t)1 << 1;
+            out->cell.count = mpack_expect_array(r);
+            out->cell.items = (int32_t *)de_ep_arena_array(r, a, out->cell.count, sizeof(*out->cell.items));
+            for (uint32_t i_3 = 0; out->cell.items && i_3 < out->cell.count; ++i_3)
+            {
+                out->cell.items[i_3] = mpack_expect_i32(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "type")) {
+            seen |= (uint64_t)1 << 2;
+            out->has_type = true;
+            out->type = mpack_expect_u32(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(3)) != UINT64_C(3))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_foliage_info(mpack_writer_t *w, const de_ep_foliage_info *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "entity");
+    mpack_write_u64(w, v->entity);
+    mpack_write_cstr(w, "component");
+    de_ep_write_str(w, v->component);
+    mpack_write_cstr(w, "cellSize");
+    mpack_write_float(w, v->cell_size);
+    mpack_write_cstr(w, "maxTypes");
+    mpack_write_u32(w, v->max_types);
+    mpack_write_cstr(w, "maxRules");
+    mpack_write_u32(w, v->max_rules);
+    mpack_write_cstr(w, "maxPerCell");
+    mpack_write_u32(w, v->max_per_cell);
+    mpack_write_cstr(w, "typeSuffix");
+    de_ep_write_str(w, v->type_suffix);
+    mpack_write_cstr(w, "count");
+    mpack_write_u64(w, v->count);
+    mpack_write_cstr(w, "cells");
+    mpack_start_array(w, v->cells.count);
+    for (uint32_t i_1 = 0; i_1 < v->cells.count; ++i_1) {
+        de_ep_write_foliage_cell(w, &v->cells.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "revision");
+    mpack_write_u64(w, v->revision);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_foliage_info(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_info *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "entity")) {
+            seen |= (uint64_t)1 << 0;
+            out->entity = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "component")) {
+            seen |= (uint64_t)1 << 1;
+            de_ep_read_str(r, &out->component);
+        } else if (de_ep_str_eq(k, "cellSize")) {
+            seen |= (uint64_t)1 << 2;
+            out->cell_size = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "maxTypes")) {
+            seen |= (uint64_t)1 << 3;
+            out->max_types = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "maxRules")) {
+            seen |= (uint64_t)1 << 4;
+            out->max_rules = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "maxPerCell")) {
+            seen |= (uint64_t)1 << 5;
+            out->max_per_cell = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "typeSuffix")) {
+            seen |= (uint64_t)1 << 6;
+            de_ep_read_str(r, &out->type_suffix);
+        } else if (de_ep_str_eq(k, "count")) {
+            seen |= (uint64_t)1 << 7;
+            out->count = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "cells")) {
+            seen |= (uint64_t)1 << 8;
+            out->cells.count = mpack_expect_array(r);
+            out->cells.items = (de_ep_foliage_cell *)de_ep_arena_array(r, a, out->cells.count, sizeof(*out->cells.items));
+            for (uint32_t i_3 = 0; out->cells.items && i_3 < out->cells.count; ++i_3)
+            {
+                de_ep_read_foliage_cell(r, a, &out->cells.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "revision")) {
+            seen |= (uint64_t)1 << 9;
+            out->revision = mpack_expect_u64(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(1023)) != UINT64_C(1023))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_foliage_instances(mpack_writer_t *w, const de_ep_foliage_instances *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "cell");
+    mpack_start_array(w, v->cell.count);
+    for (uint32_t i_1 = 0; i_1 < v->cell.count; ++i_1) {
+        mpack_write_i32(w, v->cell.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "revision");
+    mpack_write_u64(w, v->revision);
+    mpack_write_cstr(w, "types");
+    mpack_start_array(w, v->types.count);
+    for (uint32_t i_1 = 0; i_1 < v->types.count; ++i_1) {
+        mpack_write_u32(w, v->types.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "rules");
+    mpack_start_array(w, v->rules.count);
+    for (uint32_t i_1 = 0; i_1 < v->rules.count; ++i_1) {
+        mpack_write_u32(w, v->rules.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "transforms");
+    mpack_start_array(w, v->transforms.count);
+    for (uint32_t i_1 = 0; i_1 < v->transforms.count; ++i_1) {
+        mpack_write_float(w, v->transforms.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_foliage_instances(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_instances *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "cell")) {
+            seen |= (uint64_t)1 << 0;
+            out->cell.count = mpack_expect_array(r);
+            out->cell.items = (int32_t *)de_ep_arena_array(r, a, out->cell.count, sizeof(*out->cell.items));
+            for (uint32_t i_3 = 0; out->cell.items && i_3 < out->cell.count; ++i_3)
+            {
+                out->cell.items[i_3] = mpack_expect_i32(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "revision")) {
+            seen |= (uint64_t)1 << 1;
+            out->revision = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "types")) {
+            seen |= (uint64_t)1 << 2;
+            out->types.count = mpack_expect_array(r);
+            out->types.items = (uint32_t *)de_ep_arena_array(r, a, out->types.count, sizeof(*out->types.items));
+            for (uint32_t i_3 = 0; out->types.items && i_3 < out->types.count; ++i_3)
+            {
+                out->types.items[i_3] = mpack_expect_u32(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "rules")) {
+            seen |= (uint64_t)1 << 3;
+            out->rules.count = mpack_expect_array(r);
+            out->rules.items = (uint32_t *)de_ep_arena_array(r, a, out->rules.count, sizeof(*out->rules.items));
+            for (uint32_t i_3 = 0; out->rules.items && i_3 < out->rules.count; ++i_3)
+            {
+                out->rules.items[i_3] = mpack_expect_u32(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "transforms")) {
+            seen |= (uint64_t)1 << 4;
+            out->transforms.count = mpack_expect_array(r);
+            out->transforms.items = (float *)de_ep_arena_array(r, a, out->transforms.count, sizeof(*out->transforms.items));
+            for (uint32_t i_3 = 0; out->transforms.items && i_3 < out->transforms.count; ++i_3)
+            {
+                out->transforms.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(31)) != UINT64_C(31))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_foliage_params(mpack_writer_t *w, const de_ep_foliage_params *v) {
+    uint32_t n = 0;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "entity");
+    mpack_write_u64(w, v->entity);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_foliage_params(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "entity")) {
+            seen |= (uint64_t)1 << 0;
+            out->entity = mpack_expect_u64(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(1)) != UINT64_C(1))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_foliage_scatter(mpack_writer_t *w, const de_ep_foliage_scatter *v) {
+    uint32_t n = 0;
+    n += v->has_rules ? 1u : 0u;
+    n += v->has_clear ? 1u : 0u;
+    mpack_start_map(w, n);
+    if (v->has_rules) {
+        mpack_write_cstr(w, "rules");
+        mpack_start_array(w, v->rules.count);
+        for (uint32_t i_2 = 0; i_2 < v->rules.count; ++i_2) {
+            mpack_write_u32(w, v->rules.items[i_2]);
+        }
+        mpack_finish_array(w);
+    }
+    if (v->has_clear) {
+        mpack_write_cstr(w, "clear");
+        mpack_write_bool(w, v->clear);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_foliage_scatter(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_scatter *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "rules")) {
+            seen |= (uint64_t)1 << 0;
+            out->has_rules = true;
+            out->rules.count = mpack_expect_array(r);
+            out->rules.items = (uint32_t *)de_ep_arena_array(r, a, out->rules.count, sizeof(*out->rules.items));
+            for (uint32_t i_3 = 0; out->rules.items && i_3 < out->rules.count; ++i_3)
+            {
+                out->rules.items[i_3] = mpack_expect_u32(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "clear")) {
+            seen |= (uint64_t)1 << 1;
+            out->has_clear = true;
+            out->clear = mpack_expect_bool(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    (void)seen;
+}
+
+void de_ep_write_foliage_stroke(mpack_writer_t *w, const de_ep_foliage_stroke *v) {
+    uint32_t n = 0;
+    n += v->has_type ? 1u : 0u;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    n += v->has_density ? 1u : 0u;
+    n += v->has_seed ? 1u : 0u;
+    n += v->has_surfaces ? 1u : 0u;
+    mpack_start_map(w, n);
+    if (v->has_type) {
+        mpack_write_cstr(w, "type");
+        mpack_write_u32(w, v->type);
+    }
+    mpack_write_cstr(w, "points");
+    mpack_start_array(w, v->points.count);
+    for (uint32_t i_1 = 0; i_1 < v->points.count; ++i_1) {
+        mpack_write_float(w, v->points.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "radius");
+    mpack_write_float(w, v->radius);
+    mpack_write_cstr(w, "strength");
+    mpack_write_float(w, v->strength);
+    mpack_write_cstr(w, "falloff");
+    mpack_start_array(w, v->falloff.count);
+    for (uint32_t i_1 = 0; i_1 < v->falloff.count; ++i_1) {
+        mpack_write_float(w, v->falloff.items[i_1]);
+    }
+    mpack_finish_array(w);
+    if (v->has_density) {
+        mpack_write_cstr(w, "density");
+        mpack_write_float(w, v->density);
+    }
+    if (v->has_seed) {
+        mpack_write_cstr(w, "seed");
+        mpack_write_u32(w, v->seed);
+    }
+    if (v->has_surfaces) {
+        mpack_write_cstr(w, "surfaces");
+        mpack_start_array(w, v->surfaces.count);
+        for (uint32_t i_2 = 0; i_2 < v->surfaces.count; ++i_2) {
+            mpack_write_u64(w, v->surfaces.items[i_2]);
+        }
+        mpack_finish_array(w);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_foliage_stroke(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_stroke *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "type")) {
+            seen |= (uint64_t)1 << 0;
+            out->has_type = true;
+            out->type = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "points")) {
+            seen |= (uint64_t)1 << 1;
+            out->points.count = mpack_expect_array(r);
+            out->points.items = (float *)de_ep_arena_array(r, a, out->points.count, sizeof(*out->points.items));
+            for (uint32_t i_3 = 0; out->points.items && i_3 < out->points.count; ++i_3)
+            {
+                out->points.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "radius")) {
+            seen |= (uint64_t)1 << 2;
+            out->radius = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "strength")) {
+            seen |= (uint64_t)1 << 3;
+            out->strength = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "falloff")) {
+            seen |= (uint64_t)1 << 4;
+            out->falloff.count = mpack_expect_array(r);
+            out->falloff.items = (float *)de_ep_arena_array(r, a, out->falloff.count, sizeof(*out->falloff.items));
+            for (uint32_t i_3 = 0; out->falloff.items && i_3 < out->falloff.count; ++i_3)
+            {
+                out->falloff.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "density")) {
+            seen |= (uint64_t)1 << 5;
+            out->has_density = true;
+            out->density = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "seed")) {
+            seen |= (uint64_t)1 << 6;
+            out->has_seed = true;
+            out->seed = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "surfaces")) {
+            seen |= (uint64_t)1 << 7;
+            out->has_surfaces = true;
+            out->surfaces.count = mpack_expect_array(r);
+            out->surfaces.items = (uint64_t *)de_ep_arena_array(r, a, out->surfaces.count, sizeof(*out->surfaces.items));
+            for (uint32_t i_3 = 0; out->surfaces.items && i_3 < out->surfaces.count; ++i_3)
+            {
+                out->surfaces.items[i_3] = mpack_expect_u64(r);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(30)) != UINT64_C(30))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_foliage_type(mpack_writer_t *w, const de_ep_foliage_type *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    n += v->has_impostor ? 1u : 0u;
+    n += v->has_impostor_distance ? 1u : 0u;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "id");
+    de_ep_write_str(w, v->id);
+    mpack_write_cstr(w, "mesh");
+    de_ep_write_str(w, v->mesh);
+    if (v->has_impostor) {
+        mpack_write_cstr(w, "impostor");
+        de_ep_write_str(w, v->impostor);
+    }
+    if (v->has_impostor_distance) {
+        mpack_write_cstr(w, "impostorDistance");
+        mpack_write_float(w, v->impostor_distance);
+    }
+    mpack_write_cstr(w, "density");
+    mpack_write_float(w, v->density);
+    mpack_write_cstr(w, "scale");
+    mpack_start_array(w, v->scale.count);
+    for (uint32_t i_1 = 0; i_1 < v->scale.count; ++i_1) {
+        mpack_write_float(w, v->scale.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "rotation");
+    mpack_start_array(w, v->rotation.count);
+    for (uint32_t i_1 = 0; i_1 < v->rotation.count; ++i_1) {
+        mpack_write_float(w, v->rotation.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "alignToNormal");
+    mpack_write_bool(w, v->align_to_normal);
+    mpack_write_cstr(w, "slope");
+    mpack_start_array(w, v->slope.count);
+    for (uint32_t i_1 = 0; i_1 < v->slope.count; ++i_1) {
+        mpack_write_float(w, v->slope.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "height");
+    mpack_start_array(w, v->height.count);
+    for (uint32_t i_1 = 0; i_1 < v->height.count; ++i_1) {
+        mpack_write_float(w, v->height.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "minSpacing");
+    mpack_write_float(w, v->min_spacing);
+    mpack_write_cstr(w, "collision");
+    mpack_write_bool(w, v->collision);
+    mpack_write_cstr(w, "cullDistance");
+    mpack_write_float(w, v->cull_distance);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_foliage_type(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_type *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "id")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->id);
+        } else if (de_ep_str_eq(k, "mesh")) {
+            seen |= (uint64_t)1 << 1;
+            de_ep_read_str(r, &out->mesh);
+        } else if (de_ep_str_eq(k, "impostor")) {
+            seen |= (uint64_t)1 << 2;
+            out->has_impostor = true;
+            de_ep_read_str(r, &out->impostor);
+        } else if (de_ep_str_eq(k, "impostorDistance")) {
+            seen |= (uint64_t)1 << 3;
+            out->has_impostor_distance = true;
+            out->impostor_distance = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "density")) {
+            seen |= (uint64_t)1 << 4;
+            out->density = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "scale")) {
+            seen |= (uint64_t)1 << 5;
+            out->scale.count = mpack_expect_array(r);
+            out->scale.items = (float *)de_ep_arena_array(r, a, out->scale.count, sizeof(*out->scale.items));
+            for (uint32_t i_3 = 0; out->scale.items && i_3 < out->scale.count; ++i_3)
+            {
+                out->scale.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "rotation")) {
+            seen |= (uint64_t)1 << 6;
+            out->rotation.count = mpack_expect_array(r);
+            out->rotation.items = (float *)de_ep_arena_array(r, a, out->rotation.count, sizeof(*out->rotation.items));
+            for (uint32_t i_3 = 0; out->rotation.items && i_3 < out->rotation.count; ++i_3)
+            {
+                out->rotation.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "alignToNormal")) {
+            seen |= (uint64_t)1 << 7;
+            out->align_to_normal = mpack_expect_bool(r);
+        } else if (de_ep_str_eq(k, "slope")) {
+            seen |= (uint64_t)1 << 8;
+            out->slope.count = mpack_expect_array(r);
+            out->slope.items = (float *)de_ep_arena_array(r, a, out->slope.count, sizeof(*out->slope.items));
+            for (uint32_t i_3 = 0; out->slope.items && i_3 < out->slope.count; ++i_3)
+            {
+                out->slope.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "height")) {
+            seen |= (uint64_t)1 << 9;
+            out->height.count = mpack_expect_array(r);
+            out->height.items = (float *)de_ep_arena_array(r, a, out->height.count, sizeof(*out->height.items));
+            for (uint32_t i_3 = 0; out->height.items && i_3 < out->height.count; ++i_3)
+            {
+                out->height.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "minSpacing")) {
+            seen |= (uint64_t)1 << 10;
+            out->min_spacing = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "collision")) {
+            seen |= (uint64_t)1 << 11;
+            out->collision = mpack_expect_bool(r);
+        } else if (de_ep_str_eq(k, "cullDistance")) {
+            seen |= (uint64_t)1 << 12;
+            out->cull_distance = mpack_expect_float(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(8179)) != UINT64_C(8179))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_foliage_type_params(mpack_writer_t *w, const de_ep_foliage_type_params *v) {
+    uint32_t n = 0;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "id");
+    de_ep_write_str(w, v->id);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_foliage_type_params(mpack_reader_t *r, de_ep_arena *a, de_ep_foliage_type_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "id")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->id);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(1)) != UINT64_C(1))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
 void de_ep_write_font_atlas_page(mpack_writer_t *w, const de_ep_font_atlas_page *v) {
     uint32_t n = 0;
     ++n;
@@ -11709,6 +12359,9 @@ static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
     "edit.commit",
     "edit.redo",
     "edit.undo",
+    "foliage.info",
+    "foliage.instances",
+    "foliage.type",
     "gizmo.setSelection",
     "gizmo.setTool",
     "goodbye",
@@ -11830,6 +12483,9 @@ static const char *const de_ep__capabilities[DE_EP_METHOD_COUNT] = {
     NULL,
     NULL,
     NULL,
+    "world.foliage",
+    "world.foliage",
+    "world.foliage",
     NULL,
     NULL,
     NULL,
@@ -12394,6 +13050,45 @@ bool de_ep_read_params_edit_undo(const de_ep_request *req, de_ep_arena *a, de_ep
 void de_ep_write_response_edit_undo(mpack_writer_t *w, uint64_t id, const de_ep_empty *result) {
     de_ep_write_result_begin(w, id);
     de_ep_write_empty(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_foliage_info(const de_ep_request *req, de_ep_arena *a, de_ep_foliage_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_foliage_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_foliage_info(mpack_writer_t *w, uint64_t id, const de_ep_foliage_info *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_foliage_info(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_foliage_instances(const de_ep_request *req, de_ep_arena *a, de_ep_foliage_cell_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_foliage_cell_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_foliage_instances(mpack_writer_t *w, uint64_t id, const de_ep_foliage_instances *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_foliage_instances(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_foliage_type(const de_ep_request *req, de_ep_arena *a, de_ep_foliage_type_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_foliage_type_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_foliage_type(mpack_writer_t *w, uint64_t id, const de_ep_foliage_type *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_foliage_type(w, result);
     de_ep_write_result_end(w);
 }
 

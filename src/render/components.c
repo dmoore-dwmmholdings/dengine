@@ -493,6 +493,88 @@ static de_result reg_terrain(de_world *w, de_component *out) {
     return register_component(w, d, construct_terrain, out);
 }
 
+/* ---- DeFoliage -------------------------------------------------------------------------- */
+
+static void construct_foliage(void *obj) {
+    DeFoliage *fo = (DeFoliage *)obj;
+    memset(fo, 0, sizeof *fo);
+    /* As the DIDE mock engine (mock-engine/src/foliage.rs, protocol 1.22). */
+    for (u32 r = 0; r < DE_FOLIAGE_RULES; ++r) {
+        fo->rules[r].layer = -1;
+        fo->rules[r].min_weight = 0.5f;
+        fo->rules[r].noise_threshold = 0.5f;
+        fo->rules[r].density = 0.1f;
+    }
+}
+
+static de_result reg_foliage(de_world *w, de_component *out) {
+    static const de_field_info k_rule[] = {
+        DE_FIELD_EX(de_foliage_rule, id, DE_FK_U32, AUTHORED,
+                    {0, 0, 0, "Rule id; 0 is an empty slot", 0, 0}),
+        DE_FIELD_EX(de_foliage_rule, enabled, DE_FK_BOOL, AUTHORED, {0, 0, 0, 0, 0, 0}),
+        DE_FIELD_EX(de_foliage_rule, type, DE_FK_U8, AUTHORED,
+                    {0, DE_FOLIAGE_TYPES - 1, 0, "Palette slot", 0, 0}),
+        DE_FIELD_EX(de_foliage_rule, terrain, DE_FK_ENTITY, AUTHORED,
+                    {0, 0, 0, "Terrain entity to scatter on", 0, 0}),
+        DE_FIELD_EX(de_foliage_rule, layer, DE_FK_I32, AUTHORED,
+                    {-1, DE_TERRAIN_LAYERS - 1, 0, "Splat layer that gates the rule; -1: any", 0,
+                     0}),
+        DE_FIELD_EX(de_foliage_rule, min_weight, DE_FK_F32, AUTHORED, {0, 1, 0, 0, 0, 0}),
+        DE_FIELD_EX(de_foliage_rule, min_slope, DE_FK_F32, AUTHORED, {0, 90, "deg", 0, 0, 0}),
+        DE_FIELD_EX(de_foliage_rule, max_slope, DE_FK_F32, AUTHORED, {0, 90, "deg", 0, 0, 0}),
+        DE_FIELD_EX(de_foliage_rule, min_height, DE_FK_F32, AUTHORED, {0, 0, "m", 0, 0, 0}),
+        DE_FIELD_EX(de_foliage_rule, max_height, DE_FK_F32, AUTHORED, {0, 0, "m", 0, 0, 0}),
+        DE_FIELD_EX(de_foliage_rule, noise_scale, DE_FK_F32, AUTHORED,
+                    {0, 0, "m", "Noise feature size; 0: no noise", 0, 0}),
+        DE_FIELD_EX(de_foliage_rule, noise_threshold, DE_FK_F32, AUTHORED, {0, 1, 0, 0, 0, 0}),
+        DE_FIELD_EX(de_foliage_rule, density, DE_FK_F32, AUTHORED,
+                    {0, 100, "1/m2", "Candidates per square metre", 0, 0}),
+        DE_FIELD_EX(de_foliage_rule, seed, DE_FK_U32, AUTHORED, {0, 0, 0, 0, 0, 0}),
+        DE_FIELD_EX(de_foliage_rule, area_min, DE_FK_VEC2, AUTHORED,
+                    {0, 0, "m", "World x and z", 0, 0}),
+        DE_FIELD_EX(de_foliage_rule, area_max, DE_FK_VEC2, AUTHORED,
+                    {0, 0, "m", "World x and z", 0, 0}),
+    };
+    static const de_field_info k_cell[] = {
+        DE_FIELD(de_foliage_cell, x, DE_FK_I32, AUTHORED),
+        DE_FIELD(de_foliage_cell, z, DE_FK_I32, AUTHORED),
+        DE_FIELD(de_foliage_cell, count, DE_FK_U32, AUTHORED),
+        DE_FIELD(de_foliage_cell, revision, DE_FK_U64, AUTHORED),
+    };
+    static const de_field_info k_inst[] = {
+        DE_FIELD(de_foliage_instance, x, DE_FK_F32, AUTHORED),
+        DE_FIELD(de_foliage_instance, y, DE_FK_F32, AUTHORED),
+        DE_FIELD(de_foliage_instance, z, DE_FK_F32, AUTHORED),
+        DE_FIELD(de_foliage_instance, yaw, DE_FK_F32, AUTHORED),
+        DE_FIELD(de_foliage_instance, scale, DE_FK_F32, AUTHORED),
+        DE_FIELD(de_foliage_instance, rule, DE_FK_U32, AUTHORED),
+        DE_FIELD(de_foliage_instance, type, DE_FK_U8, AUTHORED),
+    };
+    de_type_id t;
+    de_type_desc rule = DE_TYPE_DESC(de_foliage_rule, 1, k_rule);
+    de_type_desc cell = DE_TYPE_DESC(de_foliage_cell, 1, k_cell);
+    de_type_desc inst = DE_TYPE_DESC(de_foliage_instance, 1, k_inst);
+    DE_TRY(ensure_type(de_world_types(w), &rule, &t));
+    DE_TRY(ensure_type(de_world_types(w), &cell, &t));
+    DE_TRY(ensure_type(de_world_types(w), &inst, &t));
+#define HIDDEN (AUTHORED | DE_FIELD_EDITOR_HIDDEN)
+    static const de_field_info k_fields[] = {
+        DE_FIELD_EX(DeFoliage, types, DE_FK_FIXED_ARRAY, ASSET_REF,
+                    {0, 0, 0, "Foliage type assets; instances name them by index", "asset",
+                     DE_FOLIAGE_TYPES}),
+        DE_FIELD_EX(DeFoliage, rules, DE_FK_FIXED_ARRAY, AUTHORED,
+                    {0, 0, 0, "Scatter rules", "de_foliage_rule", DE_FOLIAGE_RULES}),
+        DE_FIELD(DeFoliage, cell_count, DE_FK_U32, HIDDEN),
+        DE_FIELD(DeFoliage, instance_count, DE_FK_U32, HIDDEN),
+        DE_FIELD_EX(DeFoliage, cells, DE_FK_FIXED_ARRAY, HIDDEN,
+                    {0, 0, 0, 0, "de_foliage_cell", DE_FOLIAGE_CELLS}),
+        DE_FIELD_EX(DeFoliage, instances, DE_FK_FIXED_ARRAY, HIDDEN,
+                    {0, 0, 0, 0, "de_foliage_instance", DE_FOLIAGE_INSTANCES}),
+    };
+#undef HIDDEN
+    return register_component(w, DE_TYPE_DESC(DeFoliage, 1, k_fields), construct_foliage, out);
+}
+
 /* ---- DeWater ----------------------------------------------------------------------------- */
 
 static void construct_water(void *obj) {
@@ -635,6 +717,7 @@ static const struct {
     {reg_water, offsetof(DeRenderComponents, water)},
     {reg_reflection_probe, offsetof(DeRenderComponents, reflection_probe)},
     {reg_irradiance_volume, offsetof(DeRenderComponents, irradiance_volume)},
+    {reg_foliage, offsetof(DeRenderComponents, foliage)},
 };
 
 /* The resource type: component ids only, no reflected fields (never serialized). */

@@ -1,0 +1,2 @@
+# A foliage type with no density: foliage.type reports it as invalid_params.
+mesh = "m"

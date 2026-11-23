@@ -86,6 +86,7 @@ struct de__editor {
     struct de__ed_extra *extra;
     struct de__ed_water *water;
     de__ed_op_fn terrain_op; /* DENG-580: the terrain.* ops (editor_terrain.c), NULL without */
+    de__ed_op_fn foliage_op; /* DENG-581: the foliage.* ops (editor_foliage.c), NULL without */
 };
 
 /* ---------- Lifecycle (editor.c) ---------- */
@@ -331,6 +332,9 @@ void de__ed_water_register(de__editor *ed);
 /* DENG-580: terrain.info, terrain.sample, terrain.exportHeightmap and the terrain.* edit ops
  * (editor_terrain.c, render builds only); capability world.terrain (protocol 1.11). */
 void de__ed_terrain_register(de__editor *ed);
+/* DENG-581: foliage.info, foliage.instances, foliage.type and the foliage.* edit ops
+ * (editor_foliage.c, render builds only); capability world.foliage (protocol 1.22). */
+void de__ed_foliage_register(de__editor *ed);
 /* DENG-778: ui.layout (editor_ui.c, UI builds only); capability ui.editor (protocol 1.14). DENG-785
  * adds the 1.15 methods: ui.nodeCorners, ui.themes, ui.themeVars, ui.previewTheme, loc.locales,
  * loc.strings and loc.previewLocale (`unsupported` below 1.15). The

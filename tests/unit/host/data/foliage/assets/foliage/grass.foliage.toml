@@ -1,0 +1,10 @@
+mesh = "mesh:grass"
+density = 4.0
+scale = [0.8, 1.2]
+rotation = [0.0, 360.0]
+alignToNormal = true
+slope = [0.0, 40.0]
+height = [0.0, 0.0]
+minSpacing = 0.2
+collision = false
+cullDistance = 60.0
