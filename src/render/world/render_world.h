@@ -263,6 +263,40 @@ typedef struct de__render_thread {
 
 /* ---------- The render world of one renderer ---------- */
 
+/* ---------- Foliage (foliage_extract.c, DENG-822) ---------- */
+
+#define DE__RW_FOLIAGE_TYPE_CACHE 64u
+
+/** A foliageType asset (.foliage.toml) as the renderer uses it, resolved on the main thread. */
+typedef struct de__rw_foliage_type {
+    u32 blob;           /**< de_blob id; 0: a free entry */
+    const void *data;   /**< the blob bytes last parsed (a reload changes them) */
+    de_mesh mesh;       /**< `mesh` */
+    f32 cull_distance;  /**< `cullDistance`, metres; <= 0: never culled */
+    bool ok;            /**< parsed and the mesh resolved */
+    bool pinned;        /**< set by de__rw_foliage_set_type (tests): never re-read */
+    de_load_handle load; /**< the mesh's load request */
+} de__rw_foliage_type;
+
+/** The slots of one DeFoliage entity. */
+typedef struct de__rw_foliage_layer {
+    u64 entity;
+    u64 sig;          /**< what the slots were built from (cells, LOD bands, types) */
+    u64 seen;         /**< frame that last saw the entity */
+    u32 *slots, count, cap;
+    bool dirty;       /**< DeFoliage changed: rebuild */
+    bool need_bounds; /**< a slot's mesh had no bounds yet */
+} de__rw_foliage_layer;
+
+typedef struct de__rw_foliage {
+    de__rw_foliage_type types[DE__RW_FOLIAGE_TYPE_CACHE];
+    u32 type_gen; /**< bumped when an entry changes */
+    de__rw_foliage_layer *layers;
+    u32 layer_count, layer_cap;
+    de_dvec3 eye; /**< the main camera, for distance LOD */
+    bool has_eye;
+} de__rw_foliage;
+
 typedef struct de__render_world {
     de_renderer *r;
     const de_allocator *alloc;
@@ -292,6 +326,7 @@ typedef struct de__render_world {
     de__rw_lights lights;
     de__rw_pool light_pool;
     u64 inst_frame, light_frame; /**< frame each category last extracted */
+    de__rw_foliage foliage;      /**< DENG-822: DeFoliage instances */
 
     /* The render thread and the frame being rendered. */
     de_system systems[3]; /**< views, meshes, lights in `world` */
@@ -381,6 +416,10 @@ void de__rw_pool_begin(de__render_world *rw, de__rw_kind k);
 u32 de__rw_pool_find(const de__render_world *rw, de__rw_kind k, de_entity e);
 /** Takes a slot for `e` (which has none). DE__RW_NONE when memory runs out (error set). */
 u32 de__rw_pool_take(de__render_world *rw, de__rw_kind k, de_entity e);
+/** Takes a slot that the entity map does not know (DENG-822: one per foliage instance), owned by
+ * `owner` (its entity bits are the slot's, for picking). The caller marks it seen every frame it
+ * keeps it; the sweep frees it otherwise. DE__RW_NONE when memory runs out. */
+u32 de__rw_pool_take_detached(de__render_world *rw, de__rw_kind k, de_entity owner);
 /** Marks slot `s` written this frame (dirty list, version). */
 void de__rw_pool_touch(de__render_world *rw, de__rw_kind k, u32 s);
 /** Sets the world transform of slot `s`: prev = the old one unless `fresh`, then recomputes the
@@ -389,6 +428,33 @@ void de__rw_pool_set_xform(de__render_world *rw, de__rw_kind k, u32 s, const de_
                            bool fresh);
 /** Recomputes slot `s`'s instance bounds from its local bounds and current transform. */
 void de__rw_inst_update_bounds(de__render_world *rw, u32 s);
+/* Foliage (foliage_extract.c, DENG-822). DeFoliage positions are world space. Each instance of a
+ * DeFoliage entity gets a detached instance slot (its mesh, a transform from position, yaw, the
+ * stored surface tilt and scale); a cell's instances of a type are dropped beyond the type's
+ * cullDistance from the main camera (distance LOD, per 16 m cell). A layer's slots are rebuilt
+ * only when its cells, its LOD bands or its types change. */
+
+/** Views system (main thread): the main camera for LOD, and the foliageType assets of every
+ * DeFoliage of query `q` (terms: DeFoliage) parsed and their meshes resolved. */
+void de__rw_foliage_resolve(de__render_world *rw, de_world *w, de_query q, bool has_eye,
+                            de_dvec3 eye);
+/** Meshes system, between pool begin and end: query `all` (DeFoliage) and `changed` (DeFoliage,
+ * changed). Returns the instances that found no slot. */
+u32 de__rw_foliage_extract(de__render_world *rw, de_world *w, de_query all, de_query changed);
+/** Forgets the layers (another world is attached; their slots are swept). */
+void de__rw_foliage_reset(de__render_world *rw);
+/** Frees the foliage state and releases the mesh loads. */
+void de__rw_foliage_free(de__render_world *rw);
+/** Test hook: entry for `blob` (mesh, cull distance) that is never read from the asset. */
+bool de__rw_foliage_set_type(de__render_world *rw, de_blob blob, de_mesh mesh, f32 cull_distance);
+/** The parts of a foliageType the renderer uses, from its TOML text: `mesh` (the asset path,
+ * into `mesh`, cap bytes) and `cullDistance` (0 when missing). False when it does not parse or
+ * has no mesh. */
+bool de__rw_foliage_parse(const char *text, size_t n, char *mesh, size_t cap, f32 *cull_distance);
+/** The rotation of a foliage instance: `yaw` degrees about +y, then tilted from +y to the surface
+ * normal (nx, nz quantised by 127; y from the unit length). */
+de_quat de__rw_foliage_rotation(f32 yaw, i8 nx, i8 nz);
+
 /** Ends a frame of a pool: frees every slot not seen this frame (`sweep`), recomputes every
  * transform after a rebase, then copies the changes into `f`. */
 de_result de__rw_pool_end(de__render_world *rw, de__rw_kind k, de__render_world_frame *f,

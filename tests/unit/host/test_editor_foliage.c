@@ -582,6 +582,66 @@ TEST_F(editor_foliage, instances_report_ten_floats_each_and_filter_by_type, foli
     EXPECT_EQ(code_of(cell_instances(f, c00, 1, -1)), DE_EP_ERR_INVALID_PARAMS);
 }
 
+/* DENG-822: alignToNormal. On a ramp rising 0.25 m per metre along +x, grass (alignToNormal) takes
+ * the terrain normal, pine stays upright, the reported quaternion turns +y onto the normal, and an
+ * undo/redo (restore data without normals) gives the normals back. */
+static void ramp(foliage_fx *f) {
+    DeTerrain *t = (DeTerrain *)de_entity_get(f->engine.world, f->terrain, f->terrain_comp);
+    ASSERT_TRUE(t != NULL);
+    t->height = 8.0f;
+    for (u32 z = 0; z < DE_TERRAIN_RES; ++z)
+        for (u32 x = 0; x < DE_TERRAIN_RES; ++x)
+            t->heights[z * DE_TERRAIN_RES + x] =
+                (u16)((f64)x / (f64)(DE_TERRAIN_RES - 1) * 65535.0 + 0.5);
+}
+
+TEST_F(editor_foliage, align_to_normal_tilts_on_the_terrain_and_survives_undo, foliage_fx) {
+    ramp(f);
+    de_ep_foliage_stroke s = stroke(f, 0, 4.0f, 4.0f, 1.0f);
+    g_surface[0] = f->terrain.bits;
+    de_ep_edit_op op = stroke_op(f, "foliage.paint", &s);
+    u32 tx = 0;
+    ASSERT_EQ(edit(f, &op, &tx), 0);
+    static inst_list after, now;
+    instances_of(f, &after);
+    ASSERT_TRUE(after.n > 10u);
+    /* n = (-0.25, 1, 0) / |..|: nx = round(-0.2425 * 127) = -31. */
+    for (u32 k = 0; k < after.n; ++k) {
+        EXPECT_TRUE(after.i[k].nx >= -32 && after.i[k].nx <= -30);
+        EXPECT_EQ(after.i[k].nz, 0);
+    }
+    /* The reported quaternion turns +y onto the normal. */
+    f32 xf[10];
+    de__foliage_transform(&after.i[0], xf);
+    const de_vec3 up = de_quat_rotate((de_quat){xf[3], xf[4], xf[5], xf[6]}, (de_vec3){0, 1, 0});
+    EXPECT_FLOAT_EQ(up.x, -0.2425f, 0.01f);
+    EXPECT_FLOAT_EQ(up.y, 0.9701f, 0.01f);
+    EXPECT_FLOAT_EQ(up.z, 0.0f, 0.01f);
+    /* Undo, then redo through the restore data (no normals): the normals come back. */
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+    EXPECT_EQ(layer(f)->instance_count, 0u);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
+    instances_of(f, &now);
+    ASSERT_TRUE(same(&now, &after));
+    for (u32 k = 0; k < now.n; ++k) {
+        EXPECT_EQ(now.i[k].nx, after.i[k].nx);
+        EXPECT_EQ(now.i[k].nz, after.i[k].nz);
+    }
+    /* Pine does not align: upright on the same ramp. */
+    s = stroke(f, 1, 20.0f, 4.0f, 1.0f);
+    g_surface[0] = f->terrain.bits;
+    ASSERT_EQ(paint(f, &s), 0);
+    instances_of(f, &now);
+    u32 pines = 0;
+    for (u32 k = 0; k < now.n; ++k)
+        if (now.i[k].type == 1) {
+            pines++;
+            EXPECT_EQ(now.i[k].nx, 0);
+            EXPECT_EQ(now.i[k].nz, 0);
+        }
+    EXPECT_TRUE(pines > 0u);
+}
+
 /* The layer round-trips through a scene snapshot: the hidden cells and instances are reflected
  * (DE_FIELD_SNAPSHOT), so a saved and reloaded layer keeps its foliage. */
 /* Persistence: the layer goes through the scene text format and back with every cell, instance

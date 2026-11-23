@@ -125,7 +125,13 @@ bool de__foliage_cell_equal(const DeFoliage *a, const DeFoliage *b, i32 x, i32 z
 bool de__foliage_set_cell(DeFoliage *fo, i32 x, i32 z, const de_foliage_instance *inst, u32 n);
 /** True when the cell table and the counts are consistent. */
 bool de__foliage_valid(const DeFoliage *fo);
-/** Position, rotation quaternion about +y (x, y, z, w) and scale (3): 10 floats. */
+/** Gives the upright instances of alignToNormal types the normal of the terrain under them: the
+ * one of `surfaces` whose height there is within 5 cm of the instance's y. The undo data has no
+ * normals (DE_FOLIAGE_STRIDE), so a restore calls this to get them back. */
+void de__foliage_realign(DeFoliage *fo, const de_foliage_env *env,
+                         const de_foliage_surface *surfaces, u32 surface_count);
+/** Position, rotation quaternion (x, y, z, w: the yaw about +y, then for an aligned instance the
+ * tilt of +y onto its normal) and scale (3): 10 floats. */
 void de__foliage_transform(const de_foliage_instance *i, f32 out[10]);
 
 DE_EXTERN_C_END

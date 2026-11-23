@@ -984,6 +984,9 @@ typedef struct de_foliage_instance {
     f32 scale;
     u32 rule;  /**< the scatter rule that placed it; 0: painted */
     u8 type;   /**< palette slot */
+    /** DENG-822: the surface normal's x and z times 127 when the type has alignToNormal (the
+     * instance is tilted from +y to it after its yaw); 0, 0: upright. In the struct's padding. */
+    i8 nx, nz;
 } de_foliage_instance;
 /** A foliage layer: a palette of foliageType assets (.foliage.toml), scatter rules, and instances
  * kept per cell. Cells are sorted by z, then x; the instances are contiguous per cell, in cell

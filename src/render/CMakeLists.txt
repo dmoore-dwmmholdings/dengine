@@ -76,6 +76,7 @@ if(TARGET de_render)
         world/render_world.h
         world/render_world.c
         world/extract.c
+        world/foliage_extract.c
         world/render_thread.c)
 endif()
 
@@ -547,4 +548,12 @@ if(TARGET de_render AND DE_BUILD_TOOLS)
         "$<$<CONFIG:Debug,Dev>:${CMAKE_CURRENT_SOURCE_DIR}/loaders/preview_geometry.c>"
         loaders/preview_geometry.h)
     target_include_directories(de_render PRIVATE "${DE_ROOT_DIR}/tools")
+endif()
+
+# DENG-822: the foliage extract (world/foliage_extract.c) reads the `mesh` and `cullDistance` of
+# foliageType assets with the vendored tomlc17, through core's entry point (core/de_toml_internal.h).
+# Recorded in DE_MODULE_LIBS too, so the aggregate `dengine` links it.
+if(TARGET de_render)
+    target_link_libraries(de_render PRIVATE de_tp_tomlc17)
+    set_property(TARGET de_render APPEND PROPERTY DE_MODULE_LIBS de_tp_tomlc17)
 endif()

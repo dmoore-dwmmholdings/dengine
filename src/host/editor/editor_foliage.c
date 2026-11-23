@@ -504,6 +504,42 @@ static bool op_scatter(de_ep_arena *a, const de_ep_edit_op *o, DeFoliage *fo, co
                     f);
 }
 
+/* The terrains of the world, as surfaces (at most MAX_SURFACES). */
+typedef struct terrain_scan {
+    de_entity e[MAX_SURFACES];
+    u32 n;
+} terrain_scan;
+
+static void terrain_chunk(const de_query_chunk *ch, void *user) {
+    terrain_scan *s = (terrain_scan *)user;
+    for (u32 r = 0; r < ch->count && s->n < MAX_SURFACES; ++r)
+        s->e[s->n++] = ch->entities[r];
+}
+
+/* DENG-822: the undo data has no normals, so a restore gives the restored alignToNormal instances
+ * the normal of the terrain they stand on again. */
+static void realign(de__editor *ed, DeFoliage *fo, const env_ctx *ctx) {
+    de_world *w = world_of(ed);
+    const de_component tc = comp_id(w, DE_TERRAIN_COMPONENT);
+    if (w == NULL || !DE_HANDLE_VALID(tc))
+        return;
+    terrain_scan scan = {.n = 0};
+    const de_query_term terms[1] = {{tc, DE_READ}};
+    const de_query_desc qd = {terms, 1, NULL, 0};
+    const de_query q = de_query_create(w, &qd);
+    de_query_each(w, q, terrain_chunk, &scan);
+    de_query_destroy(w, q);
+    de_foliage_surface surfaces[MAX_SURFACES];
+    u32 n = 0;
+    char msg[8];
+    for (u32 i = 0; i < scan.n; ++i)
+        if (env_surface((void *)ctx, scan.e[i], &surfaces[n], msg, sizeof msg) == DE_FOLIAGE_OK &&
+            surfaces[n].terrain != NULL)
+            n++;
+    const de_foliage_env env = {(void *)ctx, env_type, env_surface};
+    de__foliage_realign(fo, &env, surfaces, n);
+}
+
 static bool foliage_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_ep_edit_op *inv,
                        de_ep_error *code, char *msg, size_t cap) {
     op_fail f = {code, msg, cap};
@@ -536,6 +572,8 @@ static bool foliage_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, d
         if (!o->has_value)
             return op_error(&f, DE_EP_ERR_INVALID_PARAMS, "foliage.restore needs value");
         const int rc = restore(&after, o->value);
+        if (rc == 0)
+            realign(ed, &after, &ctx);
         ok = rc == 0 ||
              op_error(&f, DE_EP_ERR_INVALID_PARAMS, rc == 1 ? "foliage.restore: bad cell data"
                                                              : "foliage.restore: the layer is full");
