@@ -316,7 +316,7 @@ static bool comp_name_ok(const char *name) {
 }
 
 /* The MessagePack nil: the value of a presence marker, and of an absent component. */
-static const char k_nil[1] = {(char)0xc0};
+static const char k_nil[1] = {'\xc0'};
 
 static const char *datum_kind(toml_type_t t) {
     switch (t) {
