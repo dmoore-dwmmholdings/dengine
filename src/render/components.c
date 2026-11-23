@@ -17,6 +17,9 @@
 
 #include "render/renderer_internal.h" /* de_renderer.log */
 
+#include "asset/scene/scene_format.h" /* de__scene_set_loaded_hook (DENG-825) */
+#include "core/de_compiler.h"
+
 #include <dengine/de_reflect.h>
 
 #include <math.h>
@@ -509,6 +512,176 @@ static void construct_foliage(void *obj) {
     }
 }
 
+/* DENG-825: version 1 of DeFoliage kept cells (x, z, count, revision) and their instances inline,
+ * contiguous in cell order. A migrate hook sees only the layer's own row, and pages are entities,
+ * so it parks the v1 data here and names it in DeFoliage.source (marker + number); the scene
+ * loader's hook (de__render_foliage_loaded) then spawns the pages once the entities exist. */
+#define FOLIAGE_V1_MARK 0xF011A6E000000000ull
+#define FOLIAGE_V1_MASK 0xFFFFFFFF00000000ull
+#define FOLIAGE_V1_CELL_SIZE 24u /* i32 x, z; u32 count; (4 padding); u64 revision */
+
+typedef struct foliage_v1 {
+    u64 token;
+    u32 cell_n, inst_n;
+    struct {
+        i32 x, z;
+        u32 count;
+        u64 revision;
+    } *cells;
+    de_foliage_instance *inst;
+} foliage_v1;
+
+static DE_THREAD_LOCAL struct {
+    foliage_v1 *v;
+    u32 n, cap;
+    u32 seq;
+} g_v1;
+
+static void foliage_v1_free(foliage_v1 *f) {
+    DE_FREE(de_heap_allocator(), f->cells, sizeof f->cells[0] * f->cell_n);
+    DE_FREE(de_heap_allocator(), f->inst, sizeof f->inst[0] * f->inst_n);
+    memset(f, 0, sizeof *f);
+}
+
+/* The old field `name` of `kind`, or NULL. */
+static const de_field_info *old_field(const de_field_info *f, u32 n, const char *name,
+                                      de_field_kind kind) {
+    for (u32 i = 0; i < n; ++i)
+        if (f[i].kind == kind && strcmp(f[i].name, name) == 0)
+            return &f[i];
+    return NULL;
+}
+
+static u32 old_u32(const void *img, const de_field_info *f) {
+    u32 v = 0;
+    if (f != NULL && f->size >= sizeof v)
+        memcpy(&v, (const u8 *)img + f->offset, sizeof v);
+    return v;
+}
+
+static bool migrate_foliage(void *obj, u32 from_version, const void *old_data,
+                            const de_field_info *old_fields, u32 old_field_count) {
+    DeFoliage *fo = (DeFoliage *)obj;
+    if (from_version >= 2)
+        return true;
+    const de_field_info *cells = old_field(old_fields, old_field_count, "cells", DE_FK_FIXED_ARRAY);
+    const de_field_info *insts =
+        old_field(old_fields, old_field_count, "instances", DE_FK_FIXED_ARRAY);
+    if (cells == NULL || insts == NULL || cells->attrs.array_count == 0 ||
+        insts->attrs.array_count == 0 ||
+        cells->size / cells->attrs.array_count != FOLIAGE_V1_CELL_SIZE ||
+        insts->size / insts->attrs.array_count != sizeof(de_foliage_instance))
+        return true; /* not the layout this hook knows: the palette and rules load, no instances */
+    u32 cell_n = old_u32(old_data, old_field(old_fields, old_field_count, "cell_count", DE_FK_U32));
+    u32 inst_n =
+        old_u32(old_data, old_field(old_fields, old_field_count, "instance_count", DE_FK_U32));
+    cell_n = cell_n < cells->attrs.array_count ? cell_n : cells->attrs.array_count;
+    inst_n = inst_n < insts->attrs.array_count ? inst_n : insts->attrs.array_count;
+    if (cell_n == 0 || inst_n == 0)
+        return true;
+    if (g_v1.n == g_v1.cap) {
+        const u32 cap = g_v1.cap != 0 ? g_v1.cap * 2u : 4u;
+        foliage_v1 *v = (foliage_v1 *)DE_ALLOC(de_heap_allocator(), sizeof *v * cap,
+                                               DE_ALIGNOF(foliage_v1), DE_MEM_GENERAL);
+        if (v == NULL)
+            return true;
+        if (g_v1.v != NULL) {
+            memcpy(v, g_v1.v, sizeof *v * g_v1.n);
+            DE_FREE(de_heap_allocator(), g_v1.v, sizeof *v * g_v1.cap);
+        }
+        g_v1.v = v;
+        g_v1.cap = cap;
+    }
+    foliage_v1 f;
+    memset(&f, 0, sizeof f);
+    f.cell_n = cell_n;
+    f.inst_n = inst_n;
+    f.cells = DE_ALLOC(de_heap_allocator(), sizeof f.cells[0] * cell_n, 8, DE_MEM_GENERAL);
+    f.inst = (de_foliage_instance *)DE_ALLOC(de_heap_allocator(), sizeof f.inst[0] * inst_n,
+                                             DE_ALIGNOF(de_foliage_instance), DE_MEM_GENERAL);
+    if (f.cells == NULL || f.inst == NULL) {
+        foliage_v1_free(&f);
+        return true;
+    }
+    const u8 *cb = (const u8 *)old_data + cells->offset;
+    for (u32 i = 0; i < cell_n; ++i) {
+        memcpy(&f.cells[i].x, cb + (size_t)i * FOLIAGE_V1_CELL_SIZE, 4);
+        memcpy(&f.cells[i].z, cb + (size_t)i * FOLIAGE_V1_CELL_SIZE + 4, 4);
+        memcpy(&f.cells[i].count, cb + (size_t)i * FOLIAGE_V1_CELL_SIZE + 8, 4);
+        memcpy(&f.cells[i].revision, cb + (size_t)i * FOLIAGE_V1_CELL_SIZE + 16, 8);
+    }
+    memcpy(f.inst, (const u8 *)old_data + insts->offset, sizeof f.inst[0] * inst_n);
+    f.token = FOLIAGE_V1_MARK | (u64)(++g_v1.seq);
+    g_v1.v[g_v1.n++] = f;
+    fo->source = f.token;
+    return true;
+}
+
+/* DENG-825: gives each version 1 layer among `ents` the pages of its parked cells. */
+bool de__render_foliage_loaded(de_world *w, const de_entity *ents, u32 n) {
+    if (g_v1.n == 0)
+        return true;
+    const DeRenderComponents *rc = de__render_components(w);
+    bool ok = rc != NULL;
+    for (u32 i = 0; ok && i < n; ++i) {
+        if (!de_entity_alive(w, ents[i]) || !de_entity_has(w, ents[i], rc->foliage))
+            continue;
+        DeFoliage *fo = (DeFoliage *)de_entity_get(w, ents[i], rc->foliage);
+        if (fo == NULL || (fo->source & FOLIAGE_V1_MASK) != FOLIAGE_V1_MARK)
+            continue;
+        foliage_v1 *f = NULL;
+        for (u32 k = 0; k < g_v1.n && f == NULL; ++k)
+            if (g_v1.v[k].token == fo->source)
+                f = &g_v1.v[k];
+        fo->source = ents[i].bits;
+        if (f == NULL)
+            continue;
+        u32 at = 0;
+        for (u32 c = 0; c < f->cell_n && at < f->inst_n; ++c) {
+            u32 count = f->cells[c].count;
+            if (count == 0)
+                break; /* an unused slot: the table is over */
+            if (count > f->inst_n - at)
+                count = f->inst_n - at;
+            if (c > 0 && f->cells[c].x == f->cells[c - 1].x && f->cells[c].z == f->cells[c - 1].z) {
+                at += count;
+                continue; /* a doubled cell: the first one stands */
+            }
+            for (u32 p = 0; p * DE_FOLIAGE_PAGE_INSTANCES < count; ++p) {
+                const u32 off = p * DE_FOLIAGE_PAGE_INSTANCES;
+                const u32 pc = count - off < DE_FOLIAGE_PAGE_INSTANCES ? count - off
+                                                                       : DE_FOLIAGE_PAGE_INSTANCES;
+                const de_entity e = de_entity_spawn(w);
+                DeFoliagePage *pg =
+                    e.bits != 0 ? (DeFoliagePage *)de_entity_add(w, e, rc->foliage_page) : NULL;
+                if (pg == NULL) {
+                    if (e.bits != 0)
+                        de_entity_despawn(w, e);
+                    ok = false;
+                    break;
+                }
+                memset(pg, 0, sizeof *pg);
+                pg->layer = ents[i];
+                pg->x = f->cells[c].x;
+                pg->z = f->cells[c].z;
+                pg->page = p;
+                pg->count = pc;
+                pg->revision = f->cells[c].revision;
+                memcpy(pg->instances, &f->inst[at + off], sizeof pg->instances[0] * pc);
+                for (u32 q = 0; q < pc; ++q)
+                    if (pg->instances[q].type >= DE_FOLIAGE_TYPES)
+                        pg->instances[q].type = 0;
+            }
+            at += count;
+        }
+    }
+    /* What no entity took (a layer that was dropped) goes too. */
+    for (u32 k = 0; k < g_v1.n; ++k)
+        foliage_v1_free(&g_v1.v[k]);
+    g_v1.n = 0;
+    return ok;
+}
+
 static de_result reg_foliage(de_world *w, de_component *out) {
     static const de_field_info k_rule[] = {
         DE_FIELD_EX(de_foliage_rule, id, DE_FK_U32, AUTHORED,
@@ -565,7 +738,9 @@ static de_result reg_foliage(de_world *w, de_component *out) {
                     {0, 0, 0, "The layer whose pages this one holds", 0, 0}),
     };
     /* Version 2 (DENG-823): the instances moved to DeFoliagePage entities. */
-    return register_component(w, DE_TYPE_DESC(DeFoliage, 2, k_fields), construct_foliage, out);
+    de_type_desc d = DE_TYPE_DESC(DeFoliage, 2, k_fields);
+    d.hooks.migrate = migrate_foliage;
+    return register_component(w, d, construct_foliage, out);
 }
 
 /* ---- DeFoliagePage ---------------------------------------------------------------------- */
@@ -787,6 +962,8 @@ de_result de_render_register_components(de_world *w) {
         return DE_FAIL_WRAP(
             last_error_or(DE_ERR_INTERNAL),
             "de_render_register_components: inserting " DE__RENDER_COMPONENTS_TYPE_NAME);
+    /* DENG-825: version 1 foliage layers get their pages. */
+    de__scene_set_loaded_hook(de__render_foliage_loaded);
     return DE_OK;
 }
 

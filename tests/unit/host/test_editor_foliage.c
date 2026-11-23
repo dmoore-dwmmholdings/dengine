@@ -1088,4 +1088,145 @@ TEST_F(editor_foliage, loaded_pages_join_the_scene_of_their_layer, foliage_fx) {
     EXPECT_TRUE(same(&now, &before));
 }
 
+/* ---- DENG-825: prefab undo, layers larger than the edit arena ---- */
+
+/* The patch prefab (a layer with one page of two instances, in data/foliage): instantiate, make
+ * the page a root beside its layer (as a prefab with several roots leaves it), then undo. The
+ * page goes with the layer; redo brings both back with the same instances. */
+TEST_F(editor_foliage, undoing_a_prefab_instantiate_takes_its_pages_and_redo_brings_them_back,
+       foliage_fx) {
+    de__ed_scene_register(&f->ed);
+    de_ep_edit_op op;
+    memset(&op, 0, sizeof op);
+    op.op = de_ep_cstr("instantiate");
+    op.has_path = true;
+    op.path = de_ep_cstr("props/patch");
+    op.has_scene = true;
+    op.scene = 1;
+    u32 tx = 0;
+    ASSERT_EQ(edit(f, &op, &tx), 0);
+    const de_entity patch = other_layer(f, f->layer);
+    ASSERT_TRUE(patch.bits != 0);
+    EXPECT_EQ(page_count(f, patch), 1u);
+    static page_set ps;
+    const de_entity keep = f->layer;
+    f->layer = patch;
+    pages_of(f, &ps);
+    ASSERT_EQ(ps.n, 1u);
+    const de_entity page = ps.e[0];
+    ASSERT_EQ(de_entity_set_parent(f->engine.world, page, DE_ENTITY_NULL), DE_OK);
+    EXPECT_EQ(count_of(f), 2u);
+    f->layer = keep;
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+    EXPECT_FALSE(de_entity_alive(f->engine.world, patch));
+    EXPECT_FALSE(de_entity_alive(f->engine.world, page));
+    EXPECT_EQ(other_layer(f, f->layer).bits, 0u);
+    static page_set all;
+    all.n = 0;
+    all.layer = patch.bits;
+    const de_query_term terms[1] = {{page_comp(f), DE_READ}};
+    const de_query_desc qd = {terms, 1, NULL, 0};
+    de_query q = de_query_create(f->engine.world, &qd);
+    de_query_each(f->engine.world, q, page_chunk, &all);
+    de_query_destroy(f->engine.world, q);
+    EXPECT_EQ(all.n, 0u);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
+    ASSERT_TRUE(de_entity_alive(f->engine.world, patch));
+    EXPECT_EQ(page_count(f, patch), 1u);
+    f->layer = patch;
+    EXPECT_EQ(count_of(f), 2u);
+    de_foliage_store st;
+    store_of(f, &st);
+    ASSERT_EQ(st.cell_count, 1u);
+    EXPECT_EQ(st.cells[0].revision == 0u, false);
+    EXPECT_FLOAT_EQ(st.cells[0].inst[1].x, 4.0f, 1e-6f);
+    EXPECT_EQ(st.cells[0].inst[1].type, 1u);
+    de__foliage_store_free(&st);
+    f->layer = keep;
+}
+
+/* Paints about 200 000 instances (nine 70 m brushes): more undo data than the 8 MiB edit arena
+ * holds in one op (63 bytes an instance, 7 doubles). */
+static u32 paint_big_layer(foliage_fx *f) {
+    for (u32 k = 0; k < 9; ++k) {
+        de_ep_foliage_stroke s =
+            stroke(f, (int)(k % 2u), 140.0f * ((int)(k % 3u) - 1), 140.0f * ((int)(k / 3u) - 1),
+                   1.0f);
+        s.radius = 70.0f;
+        s.density = 4.0f;
+        ASSERT_EQ(paint(f, &s), 0);
+    }
+    return count_of(f);
+}
+
+/* Despawning a layer whose pages do not fit the edit arena chunks the work: every page goes with
+ * the layer, undo brings every instance back, redo takes them away again. */
+TEST_F(editor_foliage, despawning_a_layer_larger_than_the_edit_arena_chunks_the_clear, foliage_fx) {
+    const u32 n = paint_big_layer(f);
+    ASSERT_GT((size_t)n * DE_FOLIAGE_STRIDE * 9u, (size_t)STORAGE);
+    const u32 pages = page_count(f, f->layer);
+    ASSERT_GT(pages, 100u);
+    const de_ep_edit_op op = entity_op("despawn", f->layer);
+    u32 tx = 0;
+    ASSERT_EQ(edit(f, &op, &tx), 0);
+    EXPECT_FALSE(de_entity_alive(f->engine.world, f->layer));
+    EXPECT_EQ(page_count(f, f->layer), 0u);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+    ASSERT_TRUE(de_entity_alive(f->engine.world, f->layer));
+    EXPECT_EQ(page_count(f, f->layer), pages);
+    EXPECT_EQ(count_of(f), n);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
+    EXPECT_EQ(page_count(f, f->layer), 0u);
+}
+
+/* A copy of such a layer takes every instance, in chunks; undo removes the copy and its pages. */
+TEST_F(editor_foliage, a_copy_of_a_layer_larger_than_the_edit_arena_takes_every_page, foliage_fx) {
+    const u32 n = paint_big_layer(f);
+    ASSERT_GT((size_t)n * DE_FOLIAGE_STRIDE * 9u, (size_t)STORAGE);
+    const u32 pages = page_count(f, f->layer);
+    static unsigned char scratch[64u << 10];
+    de_ep_arena a = {scratch, sizeof scratch, 0};
+    de_ep_str name = de_ep_cstr(DE_FOLIAGE_COMPONENT);
+    const de_ep_list_str only = {&name, 1};
+    de_ep_entity_row row;
+    ASSERT_TRUE(de__ed_entity_row(&f->ed, &a, f->layer, &only, NULL, &row));
+    ASSERT_EQ(row.components.count, 1u);
+    de_ep_kv_raw kv = {name, row.components.items[0].value};
+    de_ep_edit_op op;
+    memset(&op, 0, sizeof op);
+    op.op = de_ep_cstr("spawn");
+    op.has_components = true;
+    op.components.items = &kv;
+    op.components.count = 1;
+    u32 tx = 0;
+    ASSERT_EQ(edit(f, &op, &tx), 0);
+    const de_entity dup = other_layer(f, f->layer);
+    ASSERT_TRUE(dup.bits != 0);
+    EXPECT_EQ(page_count(f, dup), pages);
+    const de_entity keep = f->layer;
+    f->layer = dup;
+    EXPECT_EQ(count_of(f), n);
+    f->layer = keep;
+    EXPECT_EQ(count_of(f), n);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+    EXPECT_EQ(page_count(f, dup), 0u);
+    EXPECT_EQ(page_count(f, f->layer), pages);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
+    EXPECT_EQ(page_count(f, dup), pages);
+}
+
+/* An edit whose undo data cannot fit fails where the user sees it, with nothing changed. */
+TEST_F(editor_foliage, an_edit_whose_undo_data_does_not_fit_fails_with_a_message, foliage_fx) {
+    const u32 n = paint_big_layer(f);
+    const u32 pages = page_count(f, f->layer);
+    /* An erase of every instance: its undo data is the whole layer. */
+    de_ep_foliage_stroke s = stroke(f, -1, 0.0f, 0.0f, 1.0f);
+    s.radius = 400.0f;
+    s.density = 100.0f;
+    const de_ep_edit_op erase = stroke_op(f, "foliage.erase", &s);
+    EXPECT_EQ(edit(f, &erase, NULL), DE_EP_ERR_BUSY);
+    EXPECT_EQ(count_of(f), n);
+    EXPECT_EQ(page_count(f, f->layer), pages);
+}
+
 #endif /* !DE_SHIPPING */

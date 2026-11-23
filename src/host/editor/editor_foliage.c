@@ -879,7 +879,11 @@ static bool foliage_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, d
     }
     const de_ep_raw undo = restore_from(a, &before, keys, nk);
     if (undo.len == 0) {
-        op_error(&f, DE_EP_ERR_BUSY, "%.*s: out of scratch memory", (int)o->op.len, o->op.ptr);
+        /* DENG-825: nothing has changed; the edit fails where the user sees it. */
+        op_error(&f, DE_EP_ERR_BUSY,
+                 "%.*s: the undo data for the %u changed cells does not fit the edit arena; use a "
+                 "smaller stroke or area",
+                 (int)o->op.len, o->op.ptr, nk);
         goto done;
     }
     /* DENG-824: every new page first, so the write below cannot fail half done. */
@@ -930,17 +934,29 @@ static i32 (*cells_of_store(const de_foliage_store *st))[2] {
     return keys;
 }
 
-/* A foliage.restore of layer `bits` in `op` that sets every cell of `from` (as `from` has them,
- * or empty when `clear`). False when it does not fit or out of memory. */
-static bool restore_op(de_ep_arena *a, u64 bits, const de_foliage_store *from, bool clear,
-                       de_ep_edit_op *op) {
-    i32(*keys)[2] = cells_of_store(from);
-    if (from->cell_count != 0 && keys == NULL)
-        return false;
+/* DENG-825: how restore_chunks hands out its ops. */
+typedef enum chunk_mode {
+    CHUNK_SET,  /* apply a restore that sets the cells as `from` has them */
+    CHUNK_CLEAR, /* apply a restore that empties the cells of `from` */
+    CHUNK_PAIR  /* record (set, clear) without applying: the world already holds the cells */
+} chunk_mode;
+
+/* The most undo data one chunk holds: a third of what is left of the arena, half the note buffer
+ * (an op is stored through it), and at most 2 MiB. */
+static size_t chunk_limit(const de__editor *ed, const de_ep_arena *a) {
+    const size_t room = a->size > a->used ? a->size - a->used : 0;
+    size_t lim = room / 3u;
+    if (lim > ed->note_cap / 2u)
+        lim = ed->note_cap / 2u;
+    return lim < (2u << 20) ? lim : (2u << 20);
+}
+
+/* A foliage.restore of layer `bits` in `op` for the `n` cells `keys` of `from` (or empty cells). */
+static bool restore_chunk_op(de_ep_arena *a, u64 bits, const de_foliage_store *from, bool clear,
+                             i32 (*keys)[2], u32 n, de_ep_edit_op *op) {
     de_foliage_store empty;
     de__foliage_store_init(&empty, NULL);
-    const de_ep_raw v = restore_from(a, clear ? &empty : from, keys, from->cell_count);
-    DE_FREE(de_heap_allocator(), keys, sizeof(i32[2]) * from->cell_count);
+    const de_ep_raw v = restore_from(a, clear ? &empty : from, keys, n);
     if (v.len == 0)
         return false;
     memset(op, 0, sizeof *op);
@@ -952,26 +968,116 @@ static bool restore_op(de_ep_arena *a, u64 bits, const de_foliage_store *from, b
     return true;
 }
 
-static bool hook_before(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o,
-                        de_ep_edit_op *pre) {
-    if (!o->has_entity || foliage_get(ed, o->entity) == NULL)
+/* DENG-825: hands every cell of `from` of layer `bits` to `emit`, as foliage.restore ops of at
+ * most chunk_limit bytes each (a layer larger than the edit arena takes several). The arena is
+ * rewound after each, so only one chunk is held at a time. False: out of memory, a cell that
+ * does not fit a chunk, or an emit that failed; the chunks emitted before stay valid. */
+static bool restore_chunks(de__editor *ed, de_ep_arena *a, u64 bits, const de_foliage_store *from,
+                           chunk_mode mode, de__ed_extra_fn emit, void *user) {
+    if (from->cell_count == 0)
+        return true;
+    i32(*keys)[2] = cells_of_store(from);
+    if (keys == NULL)
         return false;
-    const bool despawn = de_ep_str_eq(o->op, "despawn");
-    const bool remove = de_ep_str_eq(o->op, "remove") && o->has_component &&
-                        de_ep_str_eq(o->component, DE_FOLIAGE_COMPONENT);
-    if (!despawn && !remove)
-        return false;
+    const size_t limit = chunk_limit(ed, a);
+    const size_t mark = a->used;
+    bool ok = true;
+    u32 start = 0;
+    while (ok && start < from->cell_count) {
+        size_t est = 64;
+        u32 end = start;
+        while (end < from->cell_count) {
+            u32 n = 0;
+            (void)de__foliage_cell(from, keys[end][0], keys[end][1], &n);
+            const size_t cost = 48u + (size_t)n * DE_FOLIAGE_STRIDE * 9u;
+            if (end > start && est + cost > limit)
+                break;
+            est += cost;
+            ++end;
+        }
+        de_ep_edit_op fwd, inv;
+        ok = restore_chunk_op(a, bits, from, mode == CHUNK_CLEAR, keys + start, end - start, &fwd);
+        if (ok && mode == CHUNK_PAIR)
+            ok = restore_chunk_op(a, bits, from, true, keys + start, end - start, &inv);
+        if (ok)
+            ok = emit(user, &fwd, mode == CHUNK_PAIR ? &inv : NULL);
+        a->used = mark;
+        start = end;
+    }
+    DE_FREE(de_heap_allocator(), keys, sizeof(i32[2]) * from->cell_count);
+    return ok;
+}
+
+/* Appends the foliage layers of the prefab tree under `root` (and `root` itself) to `out`. */
+static u32 layers_under(de__editor *ed, u64 root, u64 *out, u32 cap) {
+    u64 tree[1024];
+    u32 n = de__ed_scene_tree(ed, (de_entity){root}, tree, 1024);
+    if (n > 1024)
+        n = 1024;
+    u32 m = 0;
+    for (u32 i = 0; i < n && m < cap; ++i)
+        if (foliage_get(ed, tree[i]) != NULL)
+            out[m++] = tree[i];
+    return m;
+}
+
+/* Hands the pages of layer `bits` to `emit` (see restore_chunks). Nothing when it has none. */
+static bool layer_chunks(de__editor *ed, de_ep_arena *a, u64 bits, chunk_mode mode,
+                         de__ed_extra_fn emit, void *user) {
     page_list l;
     de_foliage_store st;
     de__foliage_store_init(&st, NULL);
-    bool ok = layer_load(ed, o->entity, &l, &st) == LOAD_OK && st.cell_count != 0 &&
-              restore_op(a, o->entity, &st, true, pre);
+    bool ok = layer_load(ed, bits, &l, &st) == LOAD_OK &&
+              restore_chunks(ed, a, bits, &st, mode, emit, user);
     pages_free(&l);
     de__foliage_store_free(&st);
     return ok;
 }
 
-static bool hook_after_spawn(de__editor *ed, de_ep_arena *a, u64 e, de_ep_edit_op *post) {
+static bool hook_before(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o,
+                        de__ed_extra_fn emit, void *user) {
+    if (!o->has_entity)
+        return false;
+    const bool unin = de_ep_str_eq(o->op, "uninstantiate");
+    if (!unin && foliage_get(ed, o->entity) == NULL)
+        return false;
+    const bool despawn = de_ep_str_eq(o->op, "despawn");
+    const bool remove = de_ep_str_eq(o->op, "remove") && o->has_component &&
+                        de_ep_str_eq(o->component, DE_FOLIAGE_COMPONENT);
+    if (!despawn && !remove && !unin)
+        return false;
+    u64 layers[64];
+    u32 n = 0;
+    if (unin)
+        n = layers_under(ed, o->entity, layers, 64);
+    else
+        layers[n++] = o->entity;
+    bool all = true;
+    for (u32 i = 0; i < n; ++i)
+        if (!layer_chunks(ed, a, layers[i], CHUNK_CLEAR, emit, user)) {
+            DE_WARN(ed->log, "editor: the foliage pages of layer %llu could not be emptied",
+                    (unsigned long long)layers[i]);
+            all = false;
+        }
+    return all;
+}
+
+static bool hook_after_instantiate(de__editor *ed, de_ep_arena *a, u64 root, de__ed_extra_fn emit,
+                                   void *user) {
+    u64 layers[64];
+    const u32 n = layers_under(ed, root, layers, 64);
+    bool all = true;
+    for (u32 i = 0; i < n; ++i)
+        if (!layer_chunks(ed, a, layers[i], CHUNK_PAIR, emit, user)) {
+            DE_WARN(ed->log, "editor: the foliage pages of layer %llu are not in the edit's undo",
+                    (unsigned long long)layers[i]);
+            all = false;
+        }
+    return all;
+}
+
+static bool hook_after_spawn(de__editor *ed, de_ep_arena *a, u64 e, de__ed_extra_fn emit,
+                             void *user) {
     const DeFoliage *fo = foliage_get(ed, e);
     if (fo == NULL || fo->source == 0 || fo->source == e)
         return false;
@@ -985,11 +1091,21 @@ static bool hook_after_spawn(de__editor *ed, de_ep_arena *a, u64 e, de_ep_edit_o
     /* A copy of a layer that is gone (or whose pages are bad) starts empty. */
     if (!ok)
         de__foliage_store_free(&st);
-    ok = restore_op(a, e, &st, false, post);
+    ok = restore_chunks(ed, a, e, &st, CHUNK_SET, emit, user);
+    if (ok && st.cell_count == 0) {
+        /* Nothing to copy: the layer is its own all the same. */
+        de_world *w = world_of(ed);
+        DeFoliage *own = (DeFoliage *)de_entity_get(w, (de_entity){e},
+                                                     comp_id(w, DE_FOLIAGE_COMPONENT));
+        if (own != NULL)
+            own->source = e;
+    }
     pages_free(&l);
     de__foliage_store_free(&st);
     if (!ok) {
         /* No room for the copy: the layer starts empty rather than share the original's. */
+        DE_WARN(ed->log, "editor: the copy of foliage layer %llu could not take its pages",
+                (unsigned long long)fo->source);
         de_world *w = world_of(ed);
         DeFoliage *own = (DeFoliage *)de_entity_get(w, (de_entity){e},
                                                      comp_id(w, DE_FOLIAGE_COMPONENT));
@@ -1131,7 +1247,8 @@ static bool hook_import_v1(de__editor *ed, de_entity layer, const void *toml) {
     return ok;
 }
 
-static const de__ed_foliage_hooks k_hooks = {hook_before, hook_after_spawn, hook_loaded,
+static const de__ed_foliage_hooks k_hooks = {hook_before, hook_after_spawn,
+                                             hook_after_instantiate, hook_loaded,
                                              hook_import_v1, hook_page_layer};
 
 bool de__ed_foliage_load(de__editor *ed, de_entity layer, de_foliage_store *st) {

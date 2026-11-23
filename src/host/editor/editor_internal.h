@@ -345,16 +345,29 @@ struct de_foliage_store;
 /** DENG-823: loads the instances of DeFoliage layer `layer` from its DeFoliagePage entities into
  * `st` (initialised, empty). False when the pages are not a valid cell table or out of memory. */
 bool de__ed_foliage_load(de__editor *ed, de_entity layer, struct de_foliage_store *st);
+/** DENG-825: where the foliage hooks hand the ops the editor adds to an edit. With `inv` NULL,
+ * `fwd` is applied now and recorded with its own inverse; with `inv`, the pair is only recorded
+ * (the world already holds the result of `fwd`). The ops may live in the edit arena: the hook
+ * rewinds the arena after each call, so one call must not keep them. False: the edit could not
+ * record the pair. */
+typedef bool (*de__ed_extra_fn)(void *user, de_ep_edit_op *fwd, de_ep_edit_op *inv);
 /** DENG-824: what the edit transactions and the scene loader ask of the foliage pages. */
 typedef struct de__ed_foliage_hooks {
-    /* Before op `o`: when it despawns a foliage layer or removes its DeFoliage, a foliage.restore
-     * in `pre` that empties the layer's pages (applied first, so an undo restores them after the
-     * layer). False: no such op is needed or it cannot be built (the pages then stay, unseen). */
-    bool (*before)(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_ep_edit_op *pre);
+    /* Before op `o`: when it despawns a foliage layer, removes its DeFoliage or uninstantiates a
+     * prefab that holds layers, foliage.restore ops (in chunks that fit the arena) that empty the
+     * pages of each layer, applied first, so an undo restores them after the layer. False: some
+     * of the pages could not be emptied (a warning says so; they stay, unseen). */
+    bool (*before)(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de__ed_extra_fn emit,
+                   void *user);
     /* After a spawn of `e`: when `e` is a copy of another layer (a DIDE Duplicate, whose
-     * DeFoliage.source still names the original), a foliage.restore in `post` that gives `e` the
-     * original's pages. False: not a copy. */
-    bool (*after_spawn)(de__editor *ed, de_ep_arena *a, u64 e, de_ep_edit_op *post);
+     * DeFoliage.source still names the original), foliage.restore ops (in chunks) that give `e`
+     * the original's pages. False: not a copy, or the copy could not be completed (the layer
+     * then starts empty). */
+    bool (*after_spawn)(de__editor *ed, de_ep_arena *a, u64 e, de__ed_extra_fn emit, void *user);
+    /* After an instantiate of prefab root `root` (DENG-825): for each layer under it, a pair that
+     * empties its pages on undo and brings them back on redo. */
+    bool (*after_instantiate)(de__editor *ed, de_ep_arena *a, u64 root, de__ed_extra_fn emit,
+                              void *user);
     /* After scene text or a prefab spawned `ents`: their layers get their own `source`, and their
      * pages join the scene of their layer (a prefab's root-level page is not parented). */
     void (*loaded)(de__editor *ed, const u64 *ents, u32 n, de_entity parent);
