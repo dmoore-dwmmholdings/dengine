@@ -236,6 +236,56 @@ TEST_F(editor_spline_carve, undo_and_redo_restore_the_exact_bytes, carve_fx) {
     EXPECT_EQ(memcmp(terrain(f), &carved, sizeof carved), 0);
 }
 
+/* DENG-793: a set on a fixed-array field (DeSpline.points, an array of structs) has an inverse
+ * that carries the old array, so undo restores it exactly. */
+TEST_F(editor_spline_carve, set_on_a_fixed_array_field_undoes_to_the_exact_old_array, carve_fx) {
+    const f32 pts[9] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+    const de_entity s = spline(f, DE_SPLINE_CATMULL_ROM, pts, 3, 0, 0, 0);
+    DeSpline *sp = (DeSpline *)de_entity_get(f->engine.world, s, f->ids.spline);
+    ASSERT_TRUE(sp != NULL);
+    sp->points[1].out_tangent = (de_vec3){0.5f, 0.25f, 0.125f};
+    static de_spline_point before[DE_SPLINE_MAX_POINTS];
+    memcpy(before, sp->points, sizeof before);
+
+    /* Two new points, each {position: [x, y, z]}. */
+    static char value[512];
+    mpack_writer_t w;
+    mpack_writer_init(&w, value, sizeof value);
+    mpack_start_array(&w, 2);
+    for (u32 i = 0; i < 2; ++i) {
+        mpack_start_map(&w, 1);
+        mpack_write_cstr(&w, "position");
+        mpack_start_array(&w, 3);
+        for (u32 c = 0; c < 3; ++c)
+            mpack_write_double(&w, 100.0 + (double)(i * 3 + c));
+        mpack_finish_array(&w);
+        mpack_finish_map(&w);
+    }
+    mpack_finish_array(&w);
+    const size_t vn = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    const de_ep_edit_op op = {.op = de_ep_cstr("set"),
+                              .has_entity = true,
+                              .entity = s.bits,
+                              .has_path = true,
+                              .path = de_ep_cstr("DeSpline.points"),
+                              .has_value = true,
+                              .value = {value, vn}};
+    u32 tx = 0;
+    ASSERT_EQ(edit(f, &op, &tx), 0);
+    sp = (DeSpline *)de_entity_get(f->engine.world, s, f->ids.spline);
+    EXPECT_FLOAT_EQ(sp->points[0].position.x, 100.0f, 0.0f);
+    EXPECT_FLOAT_EQ(sp->points[1].position.z, 105.0f, 0.0f);
+    EXPECT_NE(memcmp(sp->points, before, sizeof before), 0);
+
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+    sp = (DeSpline *)de_entity_get(f->engine.world, s, f->ids.spline);
+    EXPECT_EQ(memcmp(sp->points, before, sizeof before), 0);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
+    sp = (DeSpline *)de_entity_get(f->engine.world, s, f->ids.spline);
+    EXPECT_FLOAT_EQ(sp->points[0].position.x, 100.0f, 0.0f);
+}
+
 TEST_F(editor_spline_carve, inverse_is_a_restore_of_only_the_changed_tiles, carve_fx) {
     level(f, 4.0f);
     /* A short line inside tile (0, 0) (samples 0..15 on each side), no falloff. */
