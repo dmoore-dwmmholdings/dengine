@@ -450,6 +450,9 @@ void de__mtl_residency_encoder(de_gpu_device *d, void *encoder, de__mtl_encoder_
                                de_gpu_cmd *c);
 /** True when the device uses useHeaps: per encoder, false with a residency set (tests). */
 bool de__mtl_residency_uses_heaps(de_gpu_device *d);
+/** True when command list `c` retains the native object `obj` (a heap or a texture its encoders
+ * named for residency) until the list completes (DENG-432, tests). */
+bool de__mtl_residency_retains(de_gpu_cmd *c, void *obj);
 /** True when this build has the residency-set path (built with the macOS 15 SDK or later). */
 bool de__mtl_residency_sets_built(void);
 

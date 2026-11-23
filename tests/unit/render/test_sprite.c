@@ -100,6 +100,45 @@ TEST_F(sprite, material_maps_atlas_alpha, rwt) {
     de__sprite_pack_material(&s, &m, NULL, NULL);
     ASSERT_TRUE(m.features & DE__MATERIAL_FEATURE_FORWARD);
     ASSERT_EQ(m.alpha_mode, 2u);
+    /* Lit sprites keep the Sprite model; the SPRITE flag only marks the atlas row. */
+    ASSERT_EQ(m.model, DE__GS_MATERIAL_MODEL_SPRITE);
+    ASSERT_EQ(m.flags & (DE__MATERIAL_FLAG_SPRITE | DE__MATERIAL_FLAG_UNLIT),
+              (u32)DE__MATERIAL_FLAG_SPRITE);
+    ASSERT_EQ(m.features & DE__MATERIAL_FEATURE_UNLIT, 0u);
+}
+
+/* DENG-763: an unlit sprite takes the Unlit model with its atlas region and alpha mode; only
+ * the base colour texture is bound and no emission is added. */
+TEST_F(sprite, material_unlit, rwt) {
+    DeSprite s = {.texture = {1},
+                  .normal_tex = {2},
+                  .rough_metal_tex = {3},
+                  .emissive_tex = {4},
+                  .height_tex = {5},
+                  .uv_rect = {.25f, .125f, .5f, .25f},
+                  .flip_y = true,
+                  .color = {1, .5f, .25f, 1},
+                  .unlit = true};
+    de__gs_material m;
+    de__sprite_pack_material(&s, &m, fake_texture, NULL);
+    ASSERT_EQ(m.model, DE__GS_MATERIAL_MODEL_UNLIT);
+    ASSERT_EQ(m.flags & (DE__MATERIAL_FLAG_SPRITE | DE__MATERIAL_FLAG_UNLIT | DE__MATERIAL_FLAG_READY),
+              (u32)(DE__MATERIAL_FLAG_SPRITE | DE__MATERIAL_FLAG_UNLIT | DE__MATERIAL_FLAG_READY));
+    ASSERT_TRUE(m.features & DE__MATERIAL_FEATURE_UNLIT);
+    ASSERT_TRUE(m.features & DE__MATERIAL_FEATURE_ALPHA_MASK);
+    ASSERT_EQ(m.alpha_mode, 1u);
+    ASSERT_EQ(de__material_params_texture(&m, 0), 101u);
+    for (u32 slot = 1; slot < DE__MATERIAL_TEXTURES; ++slot)
+        ASSERT_EQ(de__material_params_texture(&m, slot), 0u);
+    ASSERT_FLOAT_EQ(m.emissive.v[0], 0, .00001);
+    ASSERT_FLOAT_EQ(m.subsurface.v[1], .375f, .00001);
+    ASSERT_FLOAT_EQ(m.subsurface.v[3], -.25f, .00001);
+    ASSERT_FLOAT_EQ(m.base_color.v[1], .5f, .00001);
+    s.translucent = true;
+    de__sprite_pack_material(&s, &m, NULL, NULL);
+    ASSERT_EQ(m.model, DE__GS_MATERIAL_MODEL_UNLIT);
+    ASSERT_TRUE(m.features & DE__MATERIAL_FEATURE_FORWARD);
+    ASSERT_EQ(m.alpha_mode, 2u);
 }
 
 TEST_F(sprite, ten_thousand_no_alloc, rwt) {

@@ -30,6 +30,7 @@
 #define _CRT_SECURE_NO_WARNINGS /* snprintf */
 #endif
 #include "host/editor/editor_gizmo.h"
+#include "world/spline/spline.h"
 
 #include <dengine/de_ecs.h>
 #include <dengine/de_math.h>
@@ -489,6 +490,12 @@ void de__ed_gizmo_set_tool(const de_ep_gizmo_tool_params *q) {
                     (void)parse_hex(q->colors.items[i].value, &G.col[k]);
     }
     G.hover = H_NONE;
+}
+
+u32 de__ed_gizmo_selection(u64 *out, u32 cap) {
+    for (u32 i = 0; i < G.sel_count && i < cap; ++i)
+        out[i] = G.sel[i];
+    return G.sel_count;
 }
 
 void de__ed_gizmo_set_selection(const u64 *entities, u32 count) {
@@ -1476,6 +1483,17 @@ bool de__ed_cam_flat(const de__ed_cam *c) {
     return ortho(c) && (fabs(f.x) > 0.995 || fabs(f.y) > 0.995 || fabs(f.z) > 0.995);
 }
 
+void de__ed_cam_ray(const de__ed_cam *c, f32 x, f32 y, f64 origin[3], f32 direction[3]) {
+    v3 o, d;
+    ray(c, x, y, &o, &d);
+    origin[0] = o.x;
+    origin[1] = o.y;
+    origin[2] = o.z;
+    direction[0] = (f32)d.x;
+    direction[1] = (f32)d.y;
+    direction[2] = (f32)d.z;
+}
+
 typedef struct sprite_hit {
     u64 e;
     f64 depth;
@@ -2118,6 +2136,82 @@ static void draw_gizmo(const de__ed_cam *c, const de__ed_canvas *cv, const gz_la
     }
 }
 
+/* DENG-775: a selected spline's curve and point handles (DIDE world.splines), in the selection
+ * colour; a Bezier spline also shows its tangent handles. The curve is the one spline.sample
+ * returns (de__spline_poly with the entity's world transform). */
+static void draw_splines(de__editor *ed, const de__ed_cam *c, const de__ed_canvas *cv) {
+    de_world *w = ed->e->world;
+    const de_component comp = de_component_find(w, DE_SPLINE_COMPONENT);
+    if (comp.id == 0)
+        return;
+    static de_spline_poly poly; /* 33 KB; the overlay draws on the main thread only */
+    const rgb col = G.col[C_SELECTED];
+    for (u32 i = 0; i < G.sel_count; ++i) {
+        const DeSpline *s = (const DeSpline *)de_entity_get_const(w, (de_entity){G.sel[i]}, comp);
+        gz_ent g;
+        if (s == NULL || !ent_of(w, G.sel[i], &g))
+            continue;
+        de__spline_poly(s, &g.world0, &poly);
+        for (u32 k = 1; k < poly.n; ++k) {
+            const de_vec3 a = poly.p[k - 1], b = poly.p[k];
+            wseg(c, cv, (v3){a.x, a.y, a.z}, (v3){b.x, b.y, b.z}, col, 1.0f, 2);
+        }
+        const u32 n = s->count < DE_SPLINE_MAX_POINTS ? s->count : DE_SPLINE_MAX_POINTS;
+        for (u32 k = 0; k < n; ++k) {
+            const de_spline_point *q = &s->points[k];
+            const v3 p =
+                de_transform_point(&g.world0, (v3){q->position.x, q->position.y, q->position.z});
+            if (s->kind == DE_SPLINE_BEZIER) {
+                const de_vec3 t[2] = {q->in_tangent, q->out_tangent};
+                for (u32 j = 0; j < 2; ++j) {
+                    const v3 h = de_transform_point(&g.world0, (v3){q->position.x + t[j].x,
+                                                                    q->position.y + t[j].y,
+                                                                    q->position.z + t[j].z});
+                    wseg(c, cv, p, h, col, 0.6f, 1);
+                    f64 x, y;
+                    if (proj(c, h, &x, &y))
+                        box(cv, x, y, 2.5, col, 0.8f);
+                }
+            }
+            f64 x, y;
+            if (!proj(c, p, &x, &y))
+                continue;
+            box(cv, x, y, 4.5, grey(30), 0.9f);
+            box(cv, x, y, 3.5, col, 1.0f);
+        }
+    }
+}
+
+#if DE_HAS_RENDER
+/* DENG-776: the buoyancy probes water.showProbes asks for (DIDE world.water), in every viewport:
+ * three circles per probe sphere, coloured by depth: grey when no water is under it, light blue
+ * above the surface, deeper blues as it sinks below. */
+static void draw_water_probes(de__editor *ed, const de__ed_cam *c, const de__ed_canvas *cv) {
+    enum { MAX = 512, N = 32 };
+    static de__ed_probe_mark m[MAX];
+    const u32 n = de__ed_water_marks(ed, m, MAX);
+    for (u32 i = 0; i < n; ++i) {
+        rgb col = grey(160);
+        if (m[i].wet) {
+            const f32 s = m[i].depth <= 0.0f ? 0.0f : m[i].depth >= 2.0f ? 1.0f : m[i].depth * 0.5f;
+            col = m[i].depth < 0.0f ? (rgb){150, 220, 255}
+                                    : (rgb){(u8)(90 - 70 * s), (u8)(180 - 110 * s), 255};
+        }
+        const f64 r = m[i].radius;
+        const v3 o = m[i].p, ax[3][2] = {{V(1, 0, 0), V(0, 1, 0)},
+                                         {V(1, 0, 0), V(0, 0, 1)},
+                                         {V(0, 1, 0), V(0, 0, 1)}};
+        for (u32 k = 0; k < 3; ++k)
+            for (u32 j = 0; j < N; ++j) {
+                const f64 a0 = 2 * DE_PI * j / N, a1 = 2 * DE_PI * (j + 1) / N;
+                wseg(c, cv, add(o, add(mul(ax[k][0], cos(a0) * r), mul(ax[k][1], sin(a0) * r))),
+                     add(o, add(mul(ax[k][0], cos(a1) * r), mul(ax[k][1], sin(a1) * r))), col,
+                     0.9f, 1);
+            }
+    }
+}
+#endif
+
 void de__ed_gizmo_draw(de__editor *ed, u32 view, const de__ed_cam *c, const de__ed_canvas *cv,
                        u32 show, const u64 *skip, u32 skip_count) {
     if (ed->e->world == NULL || c->w == 0 || c->h == 0)
@@ -2131,6 +2225,12 @@ void de__ed_gizmo_draw(de__editor *ed, u32 view, const de__ed_cam *c, const de__
     draw_colliders(ed, c, cv, (show & DE__ED_SHOW_COLLIDERS) != 0);
     icon_draw idr = {c, cv};
     icons_each(ed, show, skip, skip_count, draw_icon, &idr);
+    if ((show & DE__ED_SHOW_GIZMOS) && G.sel_count != 0)
+        draw_splines(ed, c, cv);
+#if DE_HAS_RENDER
+    if (show & DE__ED_SHOW_GIZMOS)
+        draw_water_probes(ed, c, cv);
+#endif
     if (!(show & DE__ED_SHOW_GIZMOS) || !tool_drags() || G.sel_count == 0)
         return;
     if (G.drag && G.view == view) {

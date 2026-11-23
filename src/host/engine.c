@@ -263,19 +263,27 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
         return engine_fail(e, r, "asset system");
     /* DENG-213: a packed game reads only packs. Every .dpak file of game:/ is mounted at
      * priority 0 in file-name order (later names override earlier ones); see host_packs.h. A
-     * missing game:/ (an engine made without de_fs_init) counts as no pack. */
-    if (ad.mode == DE_ASSET_MODE_PACKED) {
+     * missing game:/ (an engine made without de_fs_init) counts as no pack.
+     * DENG-789: Release has no cooker either, so it mounts game:/'s packs too (the ones
+     * de_add_game(ASSETS) cooks); a mounted pack overrides the manifests' sources. Release
+     * without a pack is not an error: a game may load nothing but raw files. */
+    bool mount_packs = ad.mode == DE_ASSET_MODE_PACKED;
+#if !DE_HAS_COOKER
+    mount_packs = true;
+#endif
+    if (mount_packs) {
         u32 packs = 0;
         r = de__host_mount_packs(e->pub.assets, DE__HOST_PACK_DIR, a, &packs);
         if (r == DE_ERR_NOT_FOUND && packs == 0)
             de_error_clear();
         else if (r != DE_OK)
             return engine_fail(e, r, "packs");
-        if (packs == 0)
-            DE_LOG(DE_LOG_WARN, e->log_host,
-                   "no .dpak pack in %s: a packed build loads assets from packs only",
-                   DE__HOST_PACK_DIR);
-        else
+        if (packs == 0) {
+            if (ad.mode == DE_ASSET_MODE_PACKED)
+                DE_LOG(DE_LOG_WARN, e->log_host,
+                       "no .dpak pack in %s: a packed build loads assets from packs only",
+                       DE__HOST_PACK_DIR);
+        } else
             DE_LOG(DE_LOG_INFO, e->log_host, "mounted %u pack%s from %s", (unsigned)packs,
                    packs == 1 ? "" : "s", DE__HOST_PACK_DIR);
     }

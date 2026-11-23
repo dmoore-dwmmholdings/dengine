@@ -25,6 +25,25 @@ if(DE_IS_SHIPPING AND DE_BUILD_SHARED)
     set(DE_BUILD_SHARED OFF)
 endif()
 
+# ---- mpack debug checks (DENG-805) ----
+# mpack turns on MPACK_DEBUG (asserts, and read/write tracking that breaks on an unclosed map or
+# array) only when DEBUG or _DEBUG is defined. MSVC Debug defines _DEBUG; Clang and GCC do not, so
+# without this a missing mpack_done_map() fails only on Windows. MPACK_DEBUG changes the layout of
+# mpack_reader_t and mpack_writer_t, so it is defined for every target in the build, never one.
+#   Debug  on in the Debug config only, the same as MSVC (default)
+#   ON     on in every config except Shipping (for example Dev)
+#   OFF    not forced; mpack's own DEBUG/_DEBUG detection still applies
+set(DE_MPACK_DEBUG "Debug" CACHE STRING "Define MPACK_DEBUG=1 for every target: Debug, ON or OFF")
+set_property(CACHE DE_MPACK_DEBUG PROPERTY STRINGS Debug ON OFF)
+if(NOT DE_MPACK_DEBUG MATCHES "^(Debug|ON|OFF)$")
+    message(FATAL_ERROR "DE_MPACK_DEBUG must be Debug, ON or OFF (got '${DE_MPACK_DEBUG}')")
+endif()
+if(DE_MPACK_DEBUG STREQUAL "ON")
+    add_compile_definitions($<$<NOT:$<CONFIG:Shipping>>:MPACK_DEBUG=1>)
+elseif(DE_MPACK_DEBUG STREQUAL "Debug")
+    add_compile_definitions($<$<CONFIG:Debug>:MPACK_DEBUG=1>)
+endif()
+
 # ---- Server build ----
 option(DE_HEADLESS "Headless server build: no renderer, GPU, audio or UI (SPEC §4.2)" OFF)
 

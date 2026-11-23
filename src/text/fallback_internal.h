@@ -20,6 +20,7 @@ typedef struct de__text_watch {
 struct de__text_runtime {
     atomic_flag lock;
     u32 epoch, chain_count, watch_count;
+    u64 font_type_hash; /* Immutable for this runtime; typed lookups need no repeated hash. */
     de__text_chain chains[DE_TEXT_MAX_CHAINS];
     de__text_watch watch[256];
 };

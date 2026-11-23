@@ -1,0 +1,75 @@
+msdfgen: walk contours, edges and edge selectors with pointers in the per-pixel loops
+
+ShapeDistanceFinder::distance() and OverlappingContourCombiner::reset() run once per output texel
+(and again per error-correction probe). They walked std::vector with iterators. Under the MSVC
+debug runtime (_ITERATOR_DEBUG_LEVEL=2) every iterator construction, copy and destruction locks
+a global mutex to adopt or orphan the iterator, which made generateMTSDF about 56 s of the 60 s
+MSVC Debug budget of text_import.font.latin_metrics_and_determinism (DENG-758). Pointer and index
+walks visit the same elements in the same order, so every output bit is unchanged; release
+builds compile both forms to the same code.
+
+Engine-local patch (DENG-758), applied by tools/vendor/vendor.py. Drop it if a pinned msdfgen
+release stops using iterators in these loops.
+
+diff --git a/core/ShapeDistanceFinder.hpp b/core/ShapeDistanceFinder.hpp
+--- a/core/ShapeDistanceFinder.hpp
++++ b/core/ShapeDistanceFinder.hpp
+@@ -15,13 +15,16 @@ typename ShapeDistanceFinder<ContourCombiner>::DistanceType ShapeDistanceFinder<
+     typename ContourCombiner::EdgeSelectorType::EdgeCache *edgeCache = shapeEdgeCache.empty() ? NULL : &shapeEdgeCache[0];
+ #endif
+ 
+-    for (std::vector<Contour>::const_iterator contour = shape.contours.begin(); contour != shape.contours.end(); ++contour) {
++    // Pointer walks (DENG-758): checked-iterator builds lock a global mutex per iterator.
++    const Contour *contours = shape.contours.empty() ? NULL : &shape.contours[0];
++    for (const Contour *contour = contours, *contourEnd = contours+shape.contours.size(); contour != contourEnd; ++contour) {
+         if (!contour->edges.empty()) {
+-            typename ContourCombiner::EdgeSelectorType &edgeSelector = contourCombiner.edgeSelector(int(contour-shape.contours.begin()));
++            typename ContourCombiner::EdgeSelectorType &edgeSelector = contourCombiner.edgeSelector(int(contour-contours));
+ 
+-            const EdgeSegment *prevEdge = contour->edges.size() >= 2 ? *(contour->edges.end()-2) : *contour->edges.begin();
+-            const EdgeSegment *curEdge = contour->edges.back();
+-            for (std::vector<EdgeHolder>::const_iterator edge = contour->edges.begin(); edge != contour->edges.end(); ++edge) {
++            const EdgeHolder *edges = &contour->edges[0], *edgesEnd = edges+contour->edges.size();
++            const EdgeSegment *prevEdge = contour->edges.size() >= 2 ? *(edgesEnd-2) : *edges;
++            const EdgeSegment *curEdge = *(edgesEnd-1);
++            for (const EdgeHolder *edge = edges; edge != edgesEnd; ++edge) {
+                 const EdgeSegment *nextEdge = *edge;
+                 edgeSelector.addEdge(*edgeCache++, prevEdge, curEdge, nextEdge);
+                 prevEdge = curEdge;
+@@ -38,13 +41,16 @@ typename ShapeDistanceFinder<ContourCombiner>::DistanceType ShapeDistanceFinder<
+     ContourCombiner contourCombiner(shape);
+     contourCombiner.reset(origin);
+ 
+-    for (std::vector<Contour>::const_iterator contour = shape.contours.begin(); contour != shape.contours.end(); ++contour) {
++    // Pointer walks (DENG-758): checked-iterator builds lock a global mutex per iterator.
++    const Contour *contours = shape.contours.empty() ? NULL : &shape.contours[0];
++    for (const Contour *contour = contours, *contourEnd = contours+shape.contours.size(); contour != contourEnd; ++contour) {
+         if (!contour->edges.empty()) {
+-            typename ContourCombiner::EdgeSelectorType &edgeSelector = contourCombiner.edgeSelector(int(contour-shape.contours.begin()));
++            typename ContourCombiner::EdgeSelectorType &edgeSelector = contourCombiner.edgeSelector(int(contour-contours));
+ 
+-            const EdgeSegment *prevEdge = contour->edges.size() >= 2 ? *(contour->edges.end()-2) : *contour->edges.begin();
+-            const EdgeSegment *curEdge = contour->edges.back();
+-            for (std::vector<EdgeHolder>::const_iterator edge = contour->edges.begin(); edge != contour->edges.end(); ++edge) {
++            const EdgeHolder *edges = &contour->edges[0], *edgesEnd = edges+contour->edges.size();
++            const EdgeSegment *prevEdge = contour->edges.size() >= 2 ? *(edgesEnd-2) : *edges;
++            const EdgeSegment *curEdge = *(edgesEnd-1);
++            for (const EdgeHolder *edge = edges; edge != edgesEnd; ++edge) {
+                 const EdgeSegment *nextEdge = *edge;
+                 typename ContourCombiner::EdgeSelectorType::EdgeCache dummy;
+                 edgeSelector.addEdge(dummy, prevEdge, curEdge, nextEdge);
+diff --git a/core/contour-combiners.cpp b/core/contour-combiners.cpp
+--- a/core/contour-combiners.cpp
++++ b/core/contour-combiners.cpp
+@@ -65,8 +65,9 @@ OverlappingContourCombiner<EdgeSelector>::OverlappingContourCombiner(const Shape
+ template <class EdgeSelector>
+ void OverlappingContourCombiner<EdgeSelector>::reset(const Point2 &p) {
+     this->p = p;
+-    for (typename std::vector<EdgeSelector>::iterator contourEdgeSelector = edgeSelectors.begin(); contourEdgeSelector != edgeSelectors.end(); ++contourEdgeSelector)
+-        contourEdgeSelector->reset(p);
++    // Index walk (DENG-758): checked-iterator builds lock a global mutex per iterator.
++    for (size_t i = 0, n = edgeSelectors.size(); i < n; ++i)
++        edgeSelectors[i].reset(p);
+ }
+ 
+ template <class EdgeSelector>

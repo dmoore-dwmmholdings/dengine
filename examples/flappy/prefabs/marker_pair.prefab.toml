@@ -1,0 +1,25 @@
+# DENG-813: a root (0x10) with flappy/prefab/marker nested under it, flattened as 0x11.
+[prefab]
+[[prefab.nested]]
+asset = "flappy/prefab/marker"
+root = "0x11"
+ids = [["0x1", "0x11"]]
+
+[[entity]]
+id = "0x10"
+[entity.Name]
+value = "Marker pair"
+[entity.DeTransform]
+position = [0, 0, 0]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+
+[[entity]]
+id = "0x11"
+parent = "0x10"
+[entity.Name]
+value = "Pair marker"
+[entity.DeTransform]
+position = [1, 0, 0]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]

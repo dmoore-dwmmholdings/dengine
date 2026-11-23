@@ -39,6 +39,7 @@ if(TARGET de_render) # not built in headless builds (DE_HEADLESS)
         loaders/texture_loader.c
         loaders/mesh_loader.c
         loaders/material_loader.c
+        loaders/material_graph_loader.c
         loaders/loaders.c)
     set(_de_render_with_cooker "$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>")
     target_link_libraries(de_render PRIVATE "$<${_de_render_with_cooker}:de_cooker>")

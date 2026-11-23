@@ -16,6 +16,7 @@ fixed_hz = 120
 max_catchup_steps = 8
 time_scale = 0.5
 frame_cap_hz = 144
+timing_critical_thread = true
 
 [tasks]
 workers = 3

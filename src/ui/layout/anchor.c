@@ -4,6 +4,8 @@
 bool de_ui__absolute(de_ui_layout *layout, u32 index, de_vec4 parent, de_vec4 *rect) {
     de_ui *ui = layout->ui;
     de_ui_record *r = &ui->records[index];
+    if (!(r->component_mask & DE_UI_HAS_ANCHOR))
+        return false;
     const DeUiAnchor *a = de_entity_get_const(ui->world, r->entity, ui->ids.anchor);
     if (!a)
         return false;
@@ -20,7 +22,7 @@ void de_ui__popups(de_ui_layout *layout) {
     de_ui *ui = layout->ui;
     for (u32 i = 0; i < ui->record_count; ++i) {
         de_ui_record *r = &ui->records[i];
-        if (!r->alive)
+        if (!r->alive || !(r->component_mask & DE_UI_HAS_POPUP))
             continue;
         const DeUiPopup *popup = de_entity_get_const(ui->world, r->entity, ui->ids.popup);
         if (!popup)

@@ -15,6 +15,8 @@
  */
 #include "cook/importers/shader/shader_importer.h"
 
+#include "cook/importers/shader/shader_cook.h"
+
 #include "cook/importers/shader/slang_compile.h"
 #include "gpu/shader/shader_format.h"
 
@@ -388,6 +390,13 @@ typedef struct import_state {
     compile_out *outs; /* (target, permutation) compiles, in output order */
     u32 out_count, out_cap;
     compile_out *spirv; /* per permutation: the SPIR-V compile used for the scan */
+    /* de__shader_cook (DENG-770): fixed entry and permutation, the caller's reader, the bytes
+     * returned in blob_out instead of written. */
+    bool fixed;
+    de__slang_read_fn read;
+    void *read_user;
+    u8 **blob_out;
+    size_t *blob_size;
 } import_state;
 
 static de_result compile_one(import_state *st, de__slang_target target, u32 perm,
@@ -412,8 +421,8 @@ static de_result compile_one(import_state *st, de__slang_target target, u32 perm
     d.modules = de__shader_common_modules;
     d.module_count = de__shader_common_module_count;
     d.preload_count = 1; /* bindless: the Metal heap takes buffer index 0 in every program */
-    d.read = read_import;
-    d.read_user = &st->rc;
+    d.read = st->read != NULL ? st->read : read_import;
+    d.read_user = st->read != NULL ? st->read_user : (void *)&st->rc;
     d.entries = st->entry_count != 0 ? ents : NULL;
     d.entry_count = st->entry_count;
     d.allocator = de_asset_import_allocator(st->ctx);
@@ -573,6 +582,11 @@ static de_result write_blob(import_state *st) {
         memcpy(w.p + w.at, st->perms[i], n);
         w.at += n;
     }
+    if (st->blob_out != NULL) {
+        *st->blob_out = w.p;
+        *st->blob_size = total;
+        return DE_OK;
+    }
     de_result r = de_asset_import_write(ctx, w.p, total);
     DE_FREE(a, w.p, total);
     return r;
@@ -594,13 +608,15 @@ static void state_free(import_state *st) {
 static de_result import_run(import_state *st) {
     de_asset_import_ctx *ctx = st->ctx;
     u32 targets = 0;
-    DE_TRY(parse_entries(ctx, st->entries, &st->entry_count));
+    if (!st->fixed)
+        DE_TRY(parse_entries(ctx, st->entries, &st->entry_count));
     DE_TRY(parse_targets(ctx, &targets));
 
     static const char *const k_no_defines[1] = {""};
-    st->perm_count = de_asset_import_setting_string_array(ctx, "permutations", &st->perms);
+    st->perm_count =
+        st->fixed ? 0u : de_asset_import_setting_string_array(ctx, "permutations", &st->perms);
     if (st->perm_count == 0) {
-        if (de_asset_import_setting_has(ctx, "permutations"))
+        if (!st->fixed && de_asset_import_setting_has(ctx, "permutations"))
             return de_asset_import_fail(ctx, DE_ERR_INVALID_ARGUMENT, "`permutations` is empty");
         st->perms = k_no_defines;
         st->perm_count = 1;
@@ -678,5 +694,43 @@ de_result de_shader_import(de_asset_import_ctx *ctx) {
     de_result r = import_run(st);
     state_free(st);
     DE_FREE(de_asset_import_allocator(ctx), st, sizeof *st);
+    return r;
+}
+
+de_result de__shader_cook(const de__shader_cook_desc *d, u8 **out, size_t *out_size) {
+    if (out != NULL)
+        *out = NULL;
+    if (out_size != NULL)
+        *out_size = 0;
+    if (d == NULL || d->ctx == NULL)
+        return DE_ERR_INVALID_ARGUMENT;
+    de_asset_import_ctx *ctx = d->ctx;
+    if (out == NULL || out_size == NULL || d->path == NULL || d->source == NULL ||
+        d->entry == NULL || d->read == NULL || strlen(d->entry) >= ENTRY_NAME_MAX)
+        return de_asset_import_fail(ctx, DE_ERR_INVALID_ARGUMENT, "de__shader_cook: bad argument");
+    char why[512];
+    if (!de__slang_available(why, sizeof why))
+        return de_asset_import_fail(ctx, DE_ERR_UNSUPPORTED, "%s", why);
+    const de_allocator *a = de_asset_import_allocator(ctx);
+    import_state *st =
+        (import_state *)DE_ALLOC(a, sizeof(import_state), DE_ALIGNOF(import_state), DE_MEM_ASSET);
+    if (st == NULL)
+        return de_asset_import_fail(ctx, DE_ERR_OUT_OF_MEMORY, "out of memory");
+    memset(st, 0, sizeof *st);
+    st->ctx = ctx;
+    st->path = d->path;
+    st->source = d->source;
+    st->source_size = d->source_size;
+    st->fixed = true;
+    snprintf(st->entries[0].name, ENTRY_NAME_MAX, "%s", d->entry);
+    st->entries[0].stage = d->stage;
+    st->entry_count = 1;
+    st->read = d->read;
+    st->read_user = d->read_user;
+    st->blob_out = out;
+    st->blob_size = out_size;
+    de_result r = import_run(st);
+    state_free(st);
+    DE_FREE(a, st, sizeof *st);
     return r;
 }

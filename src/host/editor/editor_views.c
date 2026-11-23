@@ -122,6 +122,8 @@ typedef struct ed_pick {
     u64 skip[ED_PICK_SKIP]; /* see through these (Alt-click cycling, locked entities) */
     u32 skip_count;
     u64 sprite; /* the nearest sprite under the cursor: the answer when the GPU sees nothing */
+    de__ed_ui_hit ui[DE__ED_UI_STACK]; /* DENG-785: PickResult.uiStack, topmost first */
+    u32 ui_count;
     bool pending;
     u32 frames; /* frames waited */
 } ed_pick;
@@ -1351,12 +1353,14 @@ static bool pick_skipped(const ed_pick *p, u64 e) {
     return false;
 }
 
-/* Writes a pick response: `entity` (0: none) and the world point under (x, y), where an asset
- * dropped there lands. */
+/* Writes a pick response: `entity` (0: none), the world point under (x, y), where an asset
+ * dropped there lands, and the UI nodes under it (`p`'s stack, protocol 1.15). */
 static void pick_respond(de__editor *ed, mpack_writer_t *w, u64 req_id, const ed_view *v, f32 x,
-                         f32 y, u64 entity, u32 tri, bool has_tri) {
+                         f32 y, u64 entity, u32 tri, bool has_tri, const ed_pick *p) {
     de_ep_pick_result r;
     memset(&r, 0, sizeof r);
+    de_ep_ui_pick_hit ui_items[DE__ED_UI_STACK];
+    de__ed_pick_set_ui_stack(&r, p->ui, p->ui_count, ui_items);
     if (entity != 0) {
         r.has_entity = true;
         r.entity = entity;
@@ -1401,6 +1405,27 @@ static void on_pick(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mp
     p->sprite = 0;
     p->x = (f32)px + 0.5f;
     p->y = (f32)py + 0.5f;
+    p->ui_count = 0;
+#if DE_HAS_UI
+    /* DENG-785 (protocol 1.15): the UI under the pointer, topmost first. A game view shows the
+     * screen UI at its pixels; a scene view shows only the world panels, under the camera ray.
+     * The topmost node that is not seen through is the answer, as in DIDE's mock engine. */
+    if (v->game) {
+        p->ui_count = de__ed_ui_pick(ed, p->x, p->y, NULL, NULL, p->ui, DE__ED_UI_STACK);
+    } else {
+        de__ed_cam c;
+        cam_of(v, &c);
+        f64 origin[3];
+        f32 direction[3];
+        de__ed_cam_ray(&c, p->x, p->y, origin, direction);
+        p->ui_count = de__ed_ui_pick(ed, 0, 0, origin, direction, p->ui, DE__ED_UI_STACK);
+    }
+    for (u32 i = 0; i < p->ui_count; ++i)
+        if (!pick_skipped(p, p->ui[i].entity)) {
+            pick_respond(ed, w, req->id, v, p->x, p->y, p->ui[i].entity, 0, false, p);
+            return;
+        }
+#endif
     if (!v->game) {
         de__ed_cam c;
         cam_of(v, &c);
@@ -1411,7 +1436,7 @@ static void on_pick(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mp
             not_icons[ns++] = p->skip[i];
         const u64 icon = de__ed_icon_pick(ed, &c, p->x, p->y, v->show, not_icons, ns);
         if (icon != 0 && !hidden(icon)) {
-            pick_respond(ed, w, req->id, v, p->x, p->y, icon, 0, false);
+            pick_respond(ed, w, req->id, v, p->x, p->y, icon, 0, false, p);
             return;
         }
         /* The sprites under the cursor, by their rectangles: translucent ones too. */
@@ -1422,7 +1447,7 @@ static void on_pick(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mp
                 p->sprite = sprites[i];
         /* A 2D view is all sprites: the nearest one is the answer. */
         if (de__ed_cam_flat(&c) && p->sprite != 0) {
-            pick_respond(ed, w, req->id, v, p->x, p->y, p->sprite, 0, false);
+            pick_respond(ed, w, req->id, v, p->x, p->y, p->sprite, 0, false, p);
             return;
         }
     }
@@ -1450,7 +1475,7 @@ static void picks_tick(de__editor *ed) {
         mpack_writer_t w;
         de__ed_respond_begin(ed, &w);
         pick_respond(ed, &w, p->req_id, view_find(p->view), p->x, p->y, gpu ? bits : p->sprite, tri,
-                     gpu);
+                     gpu, p);
         de__ed_send(ed, &w, DE_EP_KIND_RESPONSE);
         p->pending = false;
     }
