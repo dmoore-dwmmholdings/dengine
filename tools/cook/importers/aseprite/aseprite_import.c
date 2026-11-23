@@ -39,8 +39,80 @@ static const de_aseprite_slice_key *key_at(const de_aseprite_slice *slice, u32 f
 static bool same_name(de_aseprite_string name, const char *text) {
     return strlen(text) == name.size && !memcmp(name.data, text, name.size);
 }
-static bool clip_size(const de_aseprite_doc *doc, u64 *size, u32 *keys) {
-    if (doc->tag_count > DE__SPRITE_TAG_LIMIT || doc->slice_count > DE__SPRITE_SLICE_LIMIT)
+/* DENG-827: per-frame events. Aseprite has no frame user data; the convention is the user-data
+ * text of a cel (Aseprite: right-click the cel, Properties, User Data). Each line of the form
+ * `event: <name>` adds the event <name> to that cel's frame, as an `[[events]]` entry with a name
+ * and a frame does in a .sprite.toml clip. The prefix is lower case; spaces and tabs before it
+ * and around the name are trimmed, and so is a trailing CR. Other lines are ignored, so the text
+ * may carry notes. An event named on several cels of a frame (layers) is one event. The
+ * flattened clip takes the events of every cel; a keep-layers clip only those of its own
+ * layer's cels. */
+typedef struct frame_event {
+    u32 frame;
+    u64 name;
+} frame_event;
+static bool event_name(const char *line, u32 size, const char **name, u32 *length) {
+    static const char prefix[] = "event:";
+    u32 first = 0, end = size;
+    while (first < size && (line[first] == ' ' || line[first] == '\t'))
+        ++first;
+    if (size - first < sizeof prefix - 1 || memcmp(line + first, prefix, sizeof prefix - 1))
+        return false;
+    u32 begin = first + (u32)sizeof prefix - 1;
+    while (begin < end && (line[begin] == ' ' || line[begin] == '\t'))
+        ++begin;
+    while (end > begin && (line[end - 1] == ' ' || line[end - 1] == '\t' || line[end - 1] == '\r'))
+        --end;
+    *name = line + begin;
+    *length = end - begin;
+    return end > begin;
+}
+/* The events of the cels of `layer` (UINT32_MAX: every cel), with duplicates, in cel order.
+ * `out` NULL only counts. */
+static u64 collect_events(const de_aseprite_doc *doc, u32 layer, frame_event *out) {
+    u64 count = 0;
+    for (u32 i = 0; i < doc->cel_count; ++i) {
+        const de_aseprite_cel *cel = &doc->cels[i];
+        const de_aseprite_string text = cel->user.text;
+        if ((layer != UINT32_MAX && cel->layer != layer) || cel->frame >= doc->frame_count ||
+            !text.data)
+            continue;
+        for (u32 at = 0; at < text.size;) {
+            u32 end = at;
+            while (end < text.size && text.data[end] != '\n')
+                ++end;
+            const char *name;
+            u32 length;
+            if (event_name(text.data + at, end - at, &name, &length)) {
+                if (out)
+                    out[count] = (frame_event){cel->frame, de_hash64(name, length, 0)};
+                ++count;
+            }
+            at = end + 1;
+        }
+    }
+    return count;
+}
+static int event_order(const void *left, const void *right) {
+    const frame_event *a = left, *b = right;
+    if (a->frame != b->frame)
+        return a->frame < b->frame ? -1 : 1;
+    return a->name < b->name ? -1 : a->name > b->name;
+}
+/* Sorts `events` as the clip stores them (frame, then name hash) and drops repeats. */
+static u32 unique_events(frame_event *events, u64 count) {
+    if (!count)
+        return 0;
+    qsort(events, (size_t)count, sizeof *events, event_order);
+    u32 unique = 1;
+    for (u64 i = 1; i < count; ++i)
+        if (event_order(&events[i], &events[unique - 1]))
+            events[unique++] = events[i];
+    return unique;
+}
+static bool clip_size(const de_aseprite_doc *doc, u64 events, u64 *size, u32 *keys) {
+    if (doc->tag_count > DE__SPRITE_TAG_LIMIT || doc->slice_count > DE__SPRITE_SLICE_LIMIT ||
+        events > DE__SPRITE_EVENT_LIMIT)
         return false;
     u64 count = 0;
     for (u32 i = 0; i < doc->slice_count; ++i)
@@ -48,7 +120,8 @@ static bool clip_size(const de_aseprite_doc *doc, u64 *size, u32 *keys) {
     if (count > DE__SPRITE_SLICE_LIMIT)
         return false;
     *keys = (u32)count;
-    *size = 96u + (u64)doc->frame_count * 64u + (u64)doc->tag_count * 24u + count * 64u;
+    *size = 96u + (u64)doc->frame_count * 64u + (u64)doc->tag_count * 24u + events * 16u +
+            count * 64u;
     return true;
 }
 de_result de_aseprite_clip_encode(const de_aseprite_doc *doc, const de_aseprite_atlas *atlas,
@@ -69,18 +142,34 @@ de_result de_aseprite_clip_encode(const de_aseprite_doc *doc, const de_aseprite_
         (u64)atlas->sets[set].first_frame + doc->frame_count > atlas->frame_count ||
         (doc->tag_count && !doc->tags) || (doc->slice_count && !doc->slices))
         return DE_ERR_INVALID_ARGUMENT;
-    u64 size;
-    u32 keys;
-    if (!clip_size(doc, &size, &keys)) {
+    u64 size = 0, candidates = collect_events(doc, atlas->sets[set].layer, NULL);
+    u32 keys = 0, event_count = 0;
+    frame_event *events = NULL;
+    size_t events_bytes = 0;
+    if (candidates > DE__SPRITE_EVENT_LIMIT * 8ull) {
         if (why)
-            *why = "Aseprite tags/slice keys exceed sprite clip limits";
+            *why = "Aseprite frame events exceed sprite clip limits";
         return DE_ERR_UNSUPPORTED;
     }
     const char *message = "Aseprite clip allocation failed";
     de_result result = DE_ERR_OUT_OF_MEMORY;
-    u8 *out = DE_ALLOC(allocator, (size_t)size, 8, DE_MEM_ASSET);
+    u8 *out = NULL;
     u64 *slice_names = NULL;
     size_t names_bytes = (size_t)doc->slice_count * sizeof *slice_names;
+    if (candidates) {
+        events_bytes = (size_t)candidates * sizeof *events;
+        events = DE_ALLOC(allocator, events_bytes, 8, DE_MEM_ASSET);
+        if (!events)
+            goto done;
+        collect_events(doc, atlas->sets[set].layer, events);
+        event_count = unique_events(events, candidates);
+    }
+    if (!clip_size(doc, event_count, &size, &keys)) {
+        message = "Aseprite tags/slice keys/events exceed sprite clip limits";
+        result = DE_ERR_UNSUPPORTED;
+        goto done;
+    }
+    out = DE_ALLOC(allocator, (size_t)size, 8, DE_MEM_ASSET);
     if (!out)
         goto done;
     memset(out, 0, (size_t)size);
@@ -111,14 +200,16 @@ de_result de_aseprite_clip_encode(const de_aseprite_doc *doc, const de_aseprite_
     }
     memcpy(out, "DSCP", 4);
     u32 tags = 96u + (u32)doc->frame_count * 64u;
-    u32 slices = tags + doc->tag_count * 24u;
+    u32 evs = tags + doc->tag_count * 24u;
+    u32 slices = evs + event_count * 16u;
     de_cooked_put_u32(out + 4, DE__SPRITE_CLIP_GEOMETRY_VERSION);
     de_cooked_put_u32(out + 8, (u32)size);
     de_cooked_put_u32(out + 12, doc->frame_count);
     de_cooked_put_u32(out + 16, doc->tag_count);
+    de_cooked_put_u32(out + 20, event_count);
     de_cooked_put_u32(out + 24, 96);
     de_cooked_put_u32(out + 28, tags);
-    de_cooked_put_u32(out + 32, slices); /* no generated frame events */
+    de_cooked_put_u32(out + 32, evs);
     de_cooked_put_u32(out + 36, atlas->width);
     de_cooked_put_u32(out + 40, atlas->height);
     de_cooked_put_u64(out + 48, texture.hash);
@@ -168,6 +259,11 @@ de_result de_aseprite_clip_encode(const de_aseprite_doc *doc, const de_aseprite_
     }
     if (doc->tag_count)
         qsort(out + tags, doc->tag_count, 24, record_order);
+    for (u32 i = 0; i < event_count; ++i) {
+        u8 *p = out + evs + i * 16u;
+        de_cooked_put_u32(p, events[i].frame);
+        de_cooked_put_u64(p + 8, events[i].name);
+    }
     u32 entry = 0;
     for (u32 i = 0; i < doc->slice_count; ++i) {
         const de_aseprite_slice *slice = &doc->slices[i];
@@ -204,6 +300,7 @@ de_result de_aseprite_clip_encode(const de_aseprite_doc *doc, const de_aseprite_
     result = DE_OK;
 done:
     DE_FREE(allocator, out, (size_t)size);
+    DE_FREE(allocator, events, events_bytes);
     DE_FREE(allocator, slice_names, names_bytes);
     if (why)
         *why = message;
@@ -340,7 +437,11 @@ de_result de_aseprite_import(de_asset_import_ctx *ctx) {
         goto done;
     u64 one_clip;
     u32 keys;
-    if (!clip_size(doc, &one_clip, &keys) ||
+    /* Every clip has at most as many events as the flattened one (an upper bound before dedupe). */
+    const u64 most_events = collect_events(doc, UINT32_MAX, NULL);
+    if (most_events > DE__SPRITE_EVENT_LIMIT * 8ull ||
+        !clip_size(doc, most_events < DE__SPRITE_EVENT_LIMIT ? most_events : DE__SPRITE_EVENT_LIMIT,
+                   &one_clip, &keys) ||
         one_clip * atlas->set_count + texture_bytes > OUTPUT_LIMIT) {
         result = DE_ERR_UNSUPPORTED;
         why = "Aseprite aggregate cooked output exceeds 256 MiB";
@@ -389,6 +490,6 @@ de_asset_type_desc de_aseprite_import_type_desc(void) {
     return (de_asset_type_desc){.name = "aseprite",
                                 .extensions = extensions,
                                 .extension_count = 2,
-                                .importer_version = 2,
+                                .importer_version = 3,
                                 .import = de_aseprite_import};
 }
