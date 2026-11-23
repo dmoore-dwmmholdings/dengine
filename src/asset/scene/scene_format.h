@@ -205,8 +205,9 @@ de_result de__prefab_instantiate_ids(de_asset_system *s, de_world *w, de_prefab 
 
 /** Called for each component of a prefab, decoded into scratch memory. Entity fields hold
  * prefab-local scene ids, not entities. `obj` is valid during the call only; it is NULL for a
- * tag (a component without data). Each entity is first visited once with `component` and `obj`
- * NULL and a zero `type`, so an entity without components is seen too. */
+ * tag (a component without data). Each entity is first visited once with `component` NULL, a
+ * zero `type` and `obj` pointing at a u64, its parent's scene id (0 for a root; DENG-811), so
+ * an entity without components is seen too. */
 typedef void (*de__prefab_visit_fn)(void *user, u64 scene_id, de_type_id type,
                                     const char *component, const void *obj);
 /** Visits every component of a loaded prefab or scene, in record order. Main thread. */

@@ -268,7 +268,12 @@ de_result de__prefab_visit(de_asset_system *s, de_world *w, de_prefab p, de__pre
     de_result r = DE_OK;
     for (u32 i = 0; i < v->entity_count && r == DE_OK; ++i) {
         de__scene_entity_rec e = de__scene_entity_at(v, i);
-        fn(user, e.scene_id, (de_type_id){0}, NULL, NULL); /* the entity itself */
+        /* The entity itself, with its parent's scene id (0: a root, DENG-811). */
+        const u64 parent_sid =
+            e.parent != DE__SCENE_NO_PARENT && e.parent < v->entity_count
+                ? de__scene_entity_at(v, e.parent).scene_id
+                : 0;
+        fn(user, e.scene_id, (de_type_id){0}, NULL, &parent_sid);
         for (u32 k = 0; k < e.component_count && r == DE_OK; ++k) {
             de__scene_comp_rec c = de__scene_comp_at(v, e.first_component + k);
             de__scene_type_rec tr = de__scene_type_at(v, c.type_index);
