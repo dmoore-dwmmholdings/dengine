@@ -253,9 +253,11 @@ const char *de__ed_asset_source_path(de__editor *ed, const char *id);
  * `i` or fewer (DENG-807). */
 const char *de__ed_asset_nth(de__editor *ed, const char *type, u32 i);
 
-/** One field to write into a prefab source (DENG-798): `path` is "Component.field", `val` the
- * editor's MessagePack value in prefab space. A `follow` edit is for a level that inherits the
- * field: it only replaces a value the source already sets. */
+/** One edit to write into a prefab source (DENG-798): `path` is "Component.field" and `val` the
+ * editor's MessagePack value in prefab space; or `path` is "Component" and `val` the whole
+ * component as a map of field to value, or nil to take the component away (DENG-810). A
+ * `follow` edit is for a level that inherits the field or component: it only replaces a value
+ * the source already sets, and only drops a component the source has. */
 typedef struct de__ed_src_edit {
     u64 sid;
     const char *path;

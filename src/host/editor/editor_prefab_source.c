@@ -5,6 +5,8 @@
  * text, not re-serialized: only the value span of each changed `key = value` line is replaced,
  * so comments, blank lines, key order, quoting of other values and line endings stay as they
  * are. A field that the component table does not set yet is inserted after the table's last key.
+ * A whole-component edit (DENG-810: path "Component") deletes the component's table, from its
+ * header line to its last key line, or writes a new table at the end of the entity's block.
  *
  * Two entity layouts are understood (Trama "host: Scene text serialization"):
  *   array:  [[entity]] / id = "0x1" / [entity.Comp]
@@ -294,6 +296,7 @@ typedef struct item {
     u8 nseg; /* SEG_MAX + 1: deeper than we look */
     char seg[SEG_MAX][SEG_CAP];
     size_t vs, ve; /* IT_KEY: the value span */
+    size_t line_start; /* where the item's line begins */
     size_t line_end; /* just past the line's newline (or the end of the text) */
 } item;
 
@@ -482,6 +485,7 @@ static bool scan_all(scan *c, const char *s, size_t n) {
     c->p = 0;
     c->oom = false;
     while (c->p < c->n) {
+        const size_t line_start = c->p;
         skip_ws(c);
         size_t end;
         if (at_eol(c) || c->s[c->p] == '#') {
@@ -492,6 +496,7 @@ static bool scan_all(scan *c, const char *s, size_t n) {
         item *it = push(c);
         if (it == NULL)
             return false;
+        it->line_start = line_start;
         if (c->s[c->p] == '[') {
             const bool arr = c->p + 1 < c->n && c->s[c->p + 1] == '[';
             c->p += arr ? 2 : 1;
@@ -633,7 +638,7 @@ static loc locate(const scan *c, u64 sid, const char *comp, const char *field) {
     return out;
 }
 
-/* ---------- Entry point ---------- */
+
 
 static const char *failf(char *msg, size_t cap, const char *reason, const char *fmt, ...) {
     va_list ap;
@@ -642,6 +647,176 @@ static const char *failf(char *msg, size_t cap, const char *reason, const char *
     va_end(ap);
     return reason;
 }
+
+/* ---------- Locating a whole component (DENG-810) ---------- */
+
+enum { CL_TABLE, CL_NONE, CL_LAYOUT };
+
+typedef struct cloc {
+    int what;
+    size_t start, end;  /* CL_TABLE: the table, from its header line to its last key line */
+    size_t insert;      /* CL_NONE: where a new table goes (the end of the entity's block) */
+    bool keyed;         /* the keyed layout: a new header is [entity.<id>.Comp] */
+    char id[SEG_CAP];   /* the keyed layout: the id as the source spells it */
+} cloc;
+
+static cloc locate_comp(const scan *c, u64 sid, const char *comp) {
+    bool array = false;
+    for (u32 i = 0; i < c->count; ++i)
+        array |= c->items[i].kind == IT_ARRAY && c->items[i].nseg == 1 &&
+                 seg_is(&c->items[i], 0, "entity");
+    cloc out;
+    memset(&out, 0, sizeof out);
+    out.what = CL_LAYOUT;
+    out.keyed = !array;
+    bool seen = false;     /* the entity exists */
+    bool found = false;    /* its component table exists */
+    bool in_entity = false;
+    bool in_block = false; /* keys go to the entity's top level */
+    bool in_comp = false;  /* keys go to the component table */
+    for (u32 i = 0; i < c->count; ++i) {
+        const item *it = &c->items[i];
+        if (it->kind == IT_ARRAY) {
+            in_entity = false;
+            in_block = it->nseg == 1 && seg_is(it, 0, "entity");
+            in_comp = false;
+            continue;
+        }
+        if (it->kind == IT_TABLE) {
+            in_block = false;
+            in_comp = false;
+            u64 id = 0;
+            if (array) {
+                if (!seg_is(it, 0, "entity"))
+                    in_entity = false;
+                if (!in_entity)
+                    continue;
+                if (seg_is(it, 1, comp)) {
+                    if (found || it->nseg != 2)
+                        return (cloc){CL_LAYOUT, 0, 0, 0, false, {0}};
+                    found = in_comp = true;
+                    out.start = it->line_start;
+                    out.end = it->line_end;
+                }
+            } else if (seg_is(it, 0, "entity") && it->nseg >= 2 && it->nseg <= SEG_MAX &&
+                       parse_id(it->seg[1], strlen(it->seg[1]), &id) && id == sid) {
+                if (!seen)
+                    snprintf(out.id, sizeof out.id, "%s", it->seg[1]);
+                seen = in_entity = true;
+                if (seg_is(it, 2, comp)) {
+                    if (found || it->nseg != 3)
+                        return (cloc){CL_LAYOUT, 0, 0, 0, false, {0}};
+                    found = in_comp = true;
+                    out.start = it->line_start;
+                    out.end = it->line_end;
+                } else if (it->nseg == 2) {
+                    in_block = true;
+                }
+            } else {
+                in_entity = false;
+                continue;
+            }
+            out.insert = it->line_end;
+            continue;
+        }
+        if (array && in_block && it->nseg == 1 && seg_is(it, 0, "id")) {
+            u64 id = 0;
+            in_entity = parse_id(c->s + it->vs, it->ve - it->vs, &id) && id == sid;
+            seen |= in_entity;
+        }
+        if (!in_entity)
+            continue;
+        if (in_block && seg_is(it, 0, comp))
+            return (cloc){CL_LAYOUT, 0, 0, 0, false, {0}}; /* Comp.field = or Comp = { } */
+        if (in_comp)
+            out.end = it->line_end;
+        out.insert = it->line_end;
+    }
+    if (!seen)
+        return out;
+    out.what = found ? CL_TABLE : CL_NONE;
+    return out;
+}
+
+/* The table text of component `comp` for its editor map `n`, fields in type order. */
+static bool put_table(sbuf *b, const de_type_registry *r, const cloc *l, const char *comp,
+                      mpack_node_t n, const char *eol) {
+    const de_type_id t = de_type_find(r, comp);
+    u32 count = 0;
+    const de_field_info *fields = t.id ? de_type_fields(r, t, &count) : NULL;
+    if (t.id == 0 || mpack_node_type(n) != mpack_type_map)
+        return false;
+    if (l->keyed)
+        sb_putf(b, "[entity.%s.%s]%s", l->id, comp, eol);
+    else
+        sb_putf(b, "[entity.%s]%s", comp, eol);
+    for (u32 i = 0; i < count && fields != NULL; ++i) {
+        if (!mpack_node_map_contains_cstr(n, fields[i].name))
+            continue;
+        sb_puts(b, fields[i].name);
+        sb_puts(b, " = ");
+        if (!put_value(b, r, t, i, &fields[i], mpack_node_map_cstr(n, fields[i].name)))
+            return false;
+        sb_puts(b, eol);
+    }
+    return true;
+}
+
+/* A whole-component edit: `ed->path` is "Component", `ed->val` its map or nil. NULL with `next`
+ * set, or NULL with `next` empty when a follow edit has nothing to do, or a reason. */
+static const char *comp_edit(const de_type_registry *types, const sbuf *cur, scan *c,
+                             const de__ed_src_edit *ed, const char *eol, sbuf *next, bool *skip,
+                             char *msg, size_t msg_cap) {
+    *skip = false;
+    if (strlen(ed->path) >= SEG_CAP)
+        return failf(msg, msg_cap, "source_layout", "%s is not a component name", ed->path);
+    if (!scan_all(c, cur->p, cur->len))
+        return failf(msg, msg_cap, c->oom ? "memory" : "source_layout",
+                     c->oom ? "out of memory" : "the source is not TOML the editor can edit");
+    const cloc l = locate_comp(c, ed->sid, ed->path);
+    if (l.what == CL_LAYOUT)
+        return failf(msg, msg_cap, "source_layout", "the source does not hold entity 0x%llx with "
+                     "%s as a table", (unsigned long long)ed->sid, ed->path);
+    mpack_tree_t tree;
+    mpack_tree_init_data(&tree, (const char *)ed->val, ed->val_len);
+    mpack_tree_parse(&tree);
+    const char *why = NULL;
+    if (mpack_tree_error(&tree) != mpack_ok) {
+        why = failf(msg, msg_cap, "value", "%s has a malformed value", ed->path);
+    } else if (mpack_node_type(mpack_tree_root(&tree)) == mpack_type_nil) {
+        if (l.what == CL_TABLE) {
+            sb_put(next, cur->p, l.start);
+            sb_put(next, cur->p + l.end, cur->len - l.end);
+        } else if (ed->follow) {
+            *skip = true;
+        } else {
+            why = failf(msg, msg_cap, "source_layout", "the source has no [entity.%s] table for "
+                        "0x%llx", ed->path, (unsigned long long)ed->sid);
+        }
+    } else if (l.what == CL_TABLE && ed->follow) {
+        *skip = true; /* a level that sets the component itself keeps it */
+    } else {
+        sbuf table = {0};
+        const size_t at = l.what == CL_TABLE ? l.start : l.insert;
+        const bool ok = put_table(&table, types, &l, ed->path, mpack_tree_root(&tree), eol);
+        if (!ok || table.oom) {
+            why = failf(msg, msg_cap, "value", "%s has no source spelling for its value",
+                        ed->path);
+        } else {
+            sb_put(next, cur->p, at);
+            if (at > 0 && cur->p[at - 1] != '\n')
+                sb_puts(next, eol);
+            sb_put(next, table.p, table.len);
+            const size_t rest = l.what == CL_TABLE ? l.end : at;
+            sb_put(next, cur->p + rest, cur->len - rest);
+        }
+        sb_free(&table);
+    }
+    (void)mpack_tree_destroy(&tree);
+    return why;
+}
+
+/* ---------- Entry point ---------- */
 
 const char *de__ed_prefab_source_edit(const de_type_registry *types, const char *src, size_t len,
                                       const de__ed_src_edit *edits, u32 count, char **out,
@@ -660,8 +835,22 @@ const char *de__ed_prefab_source_edit(const de_type_registry *types, const char 
     for (u32 e = 0; e < count && why == NULL; ++e) {
         const de__ed_src_edit *ed = &edits[e];
         const char *dot = strchr(ed->path, '.');
+        if (dot == NULL) {
+            sbuf next = {0};
+            bool skip = false;
+            why = comp_edit(types, &cur, &c, ed, eol, &next, &skip, msg, msg_cap);
+            if (why == NULL && !skip && next.oom)
+                why = failf(msg, msg_cap, "memory", "out of memory");
+            if (why != NULL || skip) {
+                sb_free(&next);
+                continue;
+            }
+            sb_free(&cur);
+            cur = next;
+            continue;
+        }
         char comp[SEG_CAP];
-        if (dot == NULL || (size_t)(dot - ed->path) >= sizeof comp || strchr(dot + 1, '.')) {
+        if ((size_t)(dot - ed->path) >= sizeof comp || strchr(dot + 1, '.')) {
             why = failf(msg, msg_cap, "source_layout", "%s is not Component.field", ed->path);
             break;
         }
