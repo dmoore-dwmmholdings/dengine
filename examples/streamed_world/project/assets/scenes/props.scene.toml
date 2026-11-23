@@ -1,0 +1,93 @@
+# DENG-836: props of world "arena" (array layout), a few per cell with one parent and child.
+
+[[entity]]
+id = "0x0000000000000020"
+[entity.DeTransform]
+position = [64.0, 64.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+
+[[entity]]
+id = "0x0000000000000021"
+[entity.DeTransform]
+position = [192.0, 192.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+
+[[entity]]
+id = "0x0000000000000022"
+[entity.DeTransform]
+position = [320.0, 64.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+
+[[entity]]
+id = "0x0000000000000023"
+[entity.DeTransform]
+position = [448.0, 192.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+
+[[entity]]
+id = "0x0000000000000024"
+[entity.DeTransform]
+position = [576.0, 64.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+
+[[entity]]
+id = "0x0000000000000025"
+[entity.DeTransform]
+position = [704.0, 192.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+
+[[entity]]
+id = "0x0000000000000026"
+[entity.DeTransform]
+position = [64.0, 320.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+
+[[entity]]
+id = "0x0000000000000027"
+[entity.DeTransform]
+position = [192.0, 448.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+
+[[entity]]
+id = "0x0000000000000028"
+[entity.DeTransform]
+position = [320.0, 320.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+
+[[entity]]
+id = "0x0000000000000029"
+[entity.DeTransform]
+position = [448.0, 448.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+
+[[entity]]
+id = "0x000000000000002a"
+[entity.DeTransform]
+position = [576.0, 320.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+
+[[entity]]
+id = "0x000000000000002b"
+[entity.DeTransform]
+position = [704.0, 448.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+
+[[entity]]
+id = "0x000000000000002c"
+parent = "0x0000000000000020"
+[entity.DeTransform]
+position = [1.0, 0.0, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.5, 0.5, 0.5]

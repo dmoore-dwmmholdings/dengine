@@ -1,0 +1,31 @@
+# DENG-836: terrain tiles of world "arena": one per cell, centre of each 256 m cell.
+
+[entity.0x0000000000000001.DeTransform]
+position = [128.0, 128.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [8.0, 8.0, 1.0]
+
+[entity.0x0000000000000002.DeTransform]
+position = [384.0, 128.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [8.0, 8.0, 1.0]
+
+[entity.0x0000000000000003.DeTransform]
+position = [640.0, 128.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [8.0, 8.0, 1.0]
+
+[entity.0x0000000000000004.DeTransform]
+position = [128.0, 384.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [8.0, 8.0, 1.0]
+
+[entity.0x0000000000000005.DeTransform]
+position = [384.0, 384.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [8.0, 8.0, 1.0]
+
+[entity.0x0000000000000006.DeTransform]
+position = [640.0, 384.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [8.0, 8.0, 1.0]
