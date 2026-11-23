@@ -26,6 +26,7 @@
 #include "cook/importers/model/model_internal.h"
 #include "cook/importers/model/model_ir.h"
 #include "cook/lib/de_cooker.h"
+#include "cook/lib/cooker_internal.h"
 #include "render/formats/de_cooked_material.h"
 #include "render/formats/de_cooked_mesh.h"
 #include "render/formats/de_cooked_model.h"
@@ -224,6 +225,111 @@ static bool has_dep(const de_cook_result *r, const char *id) {
         if (r->dependencies[i].hash == want.hash)
             return true;
     return false;
+}
+
+/* Record real import scratch allocations, then fail the observed ID-array admission.
+ * Discover its ordinal from the adjacent ID-array/mesh-index requests, rather than depending
+ * on parser allocation counts or duplicating the private IR block header size. */
+typedef struct model_oom_probe {
+    de_allocator parent;
+    size_t sizes[512];
+    u32 count, fail_at, failures;
+    u64 partial_bytes;
+    u32 partial_subassets, partial_dependencies;
+} model_oom_probe;
+static void *model_probe_alloc(void *user, size_t size, size_t align, u32 tag) {
+    model_oom_probe *p = user;
+    ASSERT_TRUE(p->count < sizeof p->sizes / sizeof p->sizes[0]);
+    p->sizes[p->count++] = size;
+    if (p->fail_at && p->count == p->fail_at) {
+        ++p->failures;
+        (void)DE_FAIL(DE_ERR_OUT_OF_MEMORY, "injected model ID allocation failure");
+        return NULL;
+    }
+    return DE_ALLOC(&p->parent, size, align, tag);
+}
+static void *model_probe_realloc(void *user, void *ptr, size_t old_size, size_t size, size_t align,
+                                 u32 tag) {
+    model_oom_probe *p = user;
+    return DE_REALLOC(&p->parent, ptr, old_size, size, align, tag);
+}
+static void model_probe_free(void *user, void *ptr, size_t size) {
+    model_oom_probe *p = user;
+    DE_FREE(&p->parent, ptr, size);
+}
+static de_allocator model_probe_allocator(model_oom_probe *p) {
+    return (de_allocator){model_probe_alloc, model_probe_realloc, model_probe_free, p};
+}
+static de_result model_probe_import(de_asset_import_ctx *ctx) {
+    model_oom_probe *p = de_asset_import_user(ctx);
+    p->parent = ctx->scratch;
+    p->count = p->failures = 0;
+    ctx->scratch = model_probe_allocator(p);
+    de_result result = de_model_import(ctx);
+    p->partial_bytes = ctx->out_size;
+    p->partial_subassets = ctx->sub_count;
+    p->partial_dependencies = ctx->dep_count;
+    ctx->scratch = p->parent;
+    return result;
+}
+TEST_F(gltf, model_id_array_allocation_failure, imp_fx) {
+    ASSERT_EQ(load_ir(f, "Box.gltf"), DE_OK);
+    const u32 id_count = f->ir.texture_count + f->ir.material_count + f->ir.mesh_count +
+                         f->ir.skin_count + f->ir.anim_count + 1u;
+    ASSERT_EQ(id_count, 3u);
+    ASSERT_EQ(f->ir.mesh_count, 1u);
+    model_oom_probe probe = {.parent = f->alloc};
+    de_allocator instrumented = model_probe_allocator(&probe);
+    de_model_ir calibration;
+    de_model_ir_init(&calibration, &instrumented, "OOM calibration");
+    ASSERT_TRUE(de_model_ir_array(&calibration, id_count, sizeof(de_asset_id)) != NULL);
+    ASSERT_TRUE(de_model_ir_array(&calibration, f->ir.mesh_count + 1u, sizeof(u32)) != NULL);
+    ASSERT_EQ(probe.count, 2u);
+    const size_t id_bytes = probe.sizes[0], index_bytes = probe.sizes[1];
+    de_model_ir_free(&calibration);
+
+    ASSERT_EQ(de_cooker_create(&(de_cooker_desc){.allocator = &f->alloc,
+                                                 .verify_determinism = DE_COOK_VERIFY_OFF},
+                               &f->c),
+              DE_OK);
+    const de_asset_type_desc model = {.name = "model",
+                                      .importer_version = DE_MODEL_IMPORTER_VERSION,
+                                      .import = model_probe_import,
+                                      .user = &probe};
+    ASSERT_EQ(de_cooker_register_type(f->c, &model), DE_OK);
+    de_cook_result result;
+    ASSERT_EQ(cook(f, "props/oom-box", "Box.gltf", NULL, 0, &result), DE_OK);
+    const u64 expected_hash = result.output_hash;
+    de_cook_result_free(&result);
+    u32 matches = 0, ordinal = 0;
+    for (u32 i = 0; i + 1 < probe.count; ++i)
+        if (probe.sizes[i] == id_bytes && probe.sizes[i + 1] == index_bytes) {
+            ++matches;
+            ordinal = i + 1;
+        }
+    ASSERT_EQ(matches, 1u); /* Prove the intended admission site is unambiguous in this fixture. */
+    const de_tracking_stats before = de_tracking_allocator_stats(&f->track);
+    probe.fail_at = ordinal;
+    EXPECT_EQ(cook(f, "props/oom-box", "Box.gltf", NULL, 0, &result), DE_ERR_OUT_OF_MEMORY);
+    EXPECT_EQ(probe.failures, 1u);
+    EXPECT_EQ(probe.count, ordinal); /* No later allocation after rejected ID admission. */
+    EXPECT_EQ(probe.sizes[ordinal - 1], id_bytes);
+    EXPECT_EQ(probe.partial_bytes, 0u);
+    EXPECT_EQ(probe.partial_subassets, 0u);
+    EXPECT_EQ(probe.partial_dependencies, 0u);
+    EXPECT_TRUE(result.data == NULL && result.subassets == NULL);
+    EXPECT_EQ(result.size, 0u);
+    EXPECT_EQ(result.subasset_count, 0u);
+    de_cook_result_free(&result);
+    const de_tracking_stats after = de_tracking_allocator_stats(&f->track);
+    EXPECT_EQ(after.bytes_live, before.bytes_live);
+    EXPECT_EQ(after.blocks_live, before.blocks_live);
+    printf("model ID admission: failed allocation %u (%zu bytes), no partial outputs/leaks\n",
+           ordinal, id_bytes);
+    probe.fail_at = 0;
+    ASSERT_EQ(cook(f, "props/oom-box", "Box.gltf", NULL, 0, &result), DE_OK);
+    EXPECT_EQ(result.output_hash, expected_hash);
+    de_cook_result_free(&result);
 }
 
 /* ---- import.gltf.import_box ------------------------------------------------------------------ */

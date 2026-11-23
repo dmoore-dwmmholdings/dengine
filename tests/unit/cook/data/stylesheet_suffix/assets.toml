@@ -1,0 +1,10 @@
+# de-cook --check fixture (DENG-780): UI stylesheet sources end with .uistyle.toml so that
+# editors can find them. A sheet with any other name is a warning; it still cooks.
+[project]
+asset_root = "assets"
+
+[assets]
+"ui/good"   = { type = "ui_style",   source = "ui/hud.uistyle.toml" }
+"ui/legacy" = { type = "stylesheet", source = "ui/menu.toml" }
+"ui/plain"  = { type = "ui_style",   source = "ui/plain.toml", locale = { ja = "ui/plain.ja.uistyle.toml" } }
+"ui/table"  = { type = "blob",       source = "ui/table.toml" }

@@ -348,6 +348,7 @@ struct scanner_t {
   const char *cur;  // current char in src[]
   int lineno;       // line number of current char
   const char *line_start;
+  int tok_lineno, tok_colno; // start of the last token (engine: error position)
   char *errmsg; // set to ebuf.ptr if there was an error
   ebuf_t ebuf;  // buffer to store error message
 
@@ -1207,6 +1208,18 @@ bail:
     snprintf(result.errmsg, sizeof(result.errmsg), "Error near line %d\n",
              pp->scanner.lineno);
   }
+  // Engine extension: the error position. Errors carry a "(line N) " prefix;
+  // the column is the start of the last token on that line, else the
+  // scanner's position on that line, else unknown.
+  if (sscanf(result.errmsg, "(line %d)", &result.errline) == 1 &&
+      result.errline > 0) {
+    if (result.errline == pp->scanner.tok_lineno)
+      result.errcol = pp->scanner.tok_colno;
+    else if (result.errline == pp->scanner.lineno && pp->scanner.line_start)
+      result.errcol = (int)(pp->scanner.cur - pp->scanner.line_start) + 1;
+  } else {
+    result.errline = 0;
+  }
   return result;
 }
 
@@ -2064,7 +2077,15 @@ static inline token_t mktoken(scanner_t *sp, toktyp_t typ) {
   tok.str.ptr = sp->cur;
   tok.lineno = sp->lineno;
   tok.colno = (int)(sp->cur - sp->line_start) + 1;
+  sp->tok_lineno = tok.lineno;
+  sp->tok_colno = tok.colno;
   return tok;
+}
+
+// Engine (DENG-780): a string token starts at its opening quote, not after it.
+static inline void token_start_at(scanner_t *sp, token_t *tok, int lineno, int colno) {
+  tok->lineno = sp->tok_lineno = lineno;
+  tok->colno = sp->tok_colno = colno;
 }
 
 #define S_GET() scan_get(sp)
@@ -2124,6 +2145,7 @@ static int scan_escape_chars(scanner_t *sp) {
 // Scan """ ... """
 static int scan_multiline_string(scanner_t *sp, token_t *tok) {
   assert(S_MATCH3('"'));
+  int qline = sp->lineno, qcol = (int)(sp->cur - sp->line_start) + 1;
   S_GET(), S_GET(), S_GET(); // skip opening """
 
   // According to spec: trim first newline after """
@@ -2132,6 +2154,7 @@ static int scan_multiline_string(scanner_t *sp, token_t *tok) {
   }
 
   *tok = mktoken(sp, TOK_MLSTRING);
+  token_start_at(sp, tok, qline, qcol);
   // scan until terminating """
   const char *escp = NULL;
   while (1) {
@@ -2221,16 +2244,17 @@ static int scan_string(scanner_t *sp, token_t *tok) {
 
   // scan until closing "
   *tok = mktoken(sp, TOK_STRING);
+  token_start_at(sp, tok, tok->lineno, tok->colno - 1);
   const char *escp = NULL;
   while (!S_MATCH('"')) {
     int ch = S_GET();
     if (ch == TOK_FIN) {
-      return SETERROR(sp->ebuf, sp->lineno, "unterminated string");
+      return SETERROR(sp->ebuf, tok->lineno, "unterminated string");
     }
     // If non-escaped char ...
     if (ch != '\\') {
       if (!(is_valid_char(ch) || ch == ' ' || ch == '\t')) {
-        return SETERROR(sp->ebuf, sp->lineno, "invalid char in string");
+        return SETERROR(sp->ebuf, tok->lineno, "invalid char in string");
       }
       continue;
     }
@@ -2262,6 +2286,7 @@ static int scan_string(scanner_t *sp, token_t *tok) {
 // Scan ''' ... '''
 static int scan_multiline_litstring(scanner_t *sp, token_t *tok) {
   assert(S_MATCH3('\''));
+  int qline = sp->lineno, qcol = (int)(sp->cur - sp->line_start) + 1;
   S_GET(), S_GET(), S_GET(); // skip opening '''
 
   // According to spec: trim first newline after '''
@@ -2271,6 +2296,7 @@ static int scan_multiline_litstring(scanner_t *sp, token_t *tok) {
 
   // scan until terminating '''
   *tok = mktoken(sp, TOK_MLLITSTRING);
+  token_start_at(sp, tok, qline, qcol);
   while (1) {
     if (S_MATCH3('\'')) {
       if (S_MATCH4('\'')) {
@@ -2312,13 +2338,14 @@ static int scan_litstring(scanner_t *sp, token_t *tok) {
 
   // scan until closing '
   *tok = mktoken(sp, TOK_LITSTRING);
+  token_start_at(sp, tok, tok->lineno, tok->colno - 1);
   while (!S_MATCH('\'')) {
     int ch = S_GET();
     if (ch == TOK_FIN) {
-      return SETERROR(sp->ebuf, sp->lineno, "unterminated string");
+      return SETERROR(sp->ebuf, tok->lineno, "unterminated string");
     }
     if (!(is_valid_char(ch) || ch == '\t')) {
-      return SETERROR(sp->ebuf, sp->lineno, "invalid char in string");
+      return SETERROR(sp->ebuf, tok->lineno, "invalid char in string");
     }
   }
   tok->str.len = sp->cur - tok->str.ptr;

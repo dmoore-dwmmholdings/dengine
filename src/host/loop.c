@@ -239,6 +239,28 @@ static void loop_pacer_desc(u32 cap_hz, de_frame_pacer_desc *out) {
     out->mode = cap_hz != 0 ? DE_FRAME_PACER_CAP : DE_FRAME_PACER_NONE;
 }
 
+/* [timing] timing_critical_thread (DENG-726): the loop thread becomes timing-critical with the
+ * frame period (60 Hz when uncapped), so the pacer's sleep wakes on time under CPU contention.
+ * A refusal (Linux without real-time privileges) leaves normal scheduling and warns once.
+ * Returns true when the loop changed the thread, so it undoes only its own change. */
+static bool loop_timing_critical(de__host *h, u32 cap_hz, bool *warned) {
+    de_thread_timing_desc td;
+    memset(&td, 0, sizeof td);
+    td.period_ns = cap_hz != 0 ? 1000000000ull / cap_hz : 0;
+    de_result r = de_thread_set_timing_critical(&td);
+    if (r == DE_OK)
+        return true;
+    if (!*warned) {
+        const de_error *err = de_error_last();
+        DE_LOG(DE_LOG_WARN, h->log,
+               "main loop: timing.timing_critical_thread refused (%s); normal scheduling",
+               err != NULL ? err->message : de_result_str(r));
+    }
+    *warned = true;
+    de_error_clear();
+    return false;
+}
+
 /* ---- The loop --------------------------------------------------------------------------- */
 
 de_result de__loop_run(de__host *h) {
@@ -281,6 +303,9 @@ de_result de__loop_run(de__host *h) {
     de_frame_pacer_desc pd;
     loop_pacer_desc(ts.timing.frame_cap_hz, &pd);
     de_frame_pacer_init(&pacer, &pd);
+    const bool tc_wanted = ie->config.timing_critical_thread && !de_thread_is_timing_critical();
+    bool tc_warned = false;
+    bool tc_own = tc_wanted && loop_timing_critical(h, pd.target_hz, &tc_warned);
     loop_drop_warn dw;
     memset(&dw, 0, sizeof dw);
 
@@ -312,6 +337,8 @@ de_result de__loop_run(de__host *h) {
         if (ts.timing.frame_cap_hz != pd.target_hz) {
             loop_pacer_desc(ts.timing.frame_cap_hz, &pd);
             de_frame_pacer_set(&pacer, &pd);
+            if (tc_wanted) /* the period follows the cap */
+                tc_own = loop_timing_critical(h, pd.target_hz, &tc_warned) || tc_own;
         }
         /* The first frame has no previous frame: it counts as one fixed step, so frame 0 runs
          * exactly one FixedUpdate (and variable mode gets a sensible dt) instead of none. */
@@ -440,6 +467,8 @@ de_result de__loop_run(de__host *h) {
 
     if (phase_trace)
         fclose(phase_trace);
+    if (tc_own)
+        de_thread_clear_timing_critical();
     if (own_arenas)
         de_frame_arenas_shutdown();
     h->loop_fixed_steps = ts.steps_total; /* DENG-95: the host's exit summary */

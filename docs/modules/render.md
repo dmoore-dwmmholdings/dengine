@@ -140,6 +140,41 @@ clipping, accumulation age, view isolation and effect-off controls still apply.
 This bounds one source of stationary reflection flicker; it does not eliminate
 all stochastic AO/SSR noise or implement temporal upscaling.
 
+## Unlit sprites for exact colour (DENG-763)
+
+Set `DeSprite.unlit = true` to draw a sprite with no lighting. Use it for pixel art that
+must show each texel's exact source colour. The field defaults to false, and lit sprites
+work as before.
+
+- A lit sprite uses the Sprite material model. Its colour goes through the 8-bit sRGB
+  G-buffer GB0, and that round trip changes some 8-bit values by one level (73 of the 256
+  grey levels).
+- An unlit sprite uses the Unlit material model. The resolve (opaque sprites) or the forward
+  pass (`translucent` sprites) writes texel x `color` straight to the fp16 lighting target,
+  as the final colour. GB0 is not read back.
+- The atlas region (`uv_rect`), `flip_x`/`flip_y`, the alpha cutout and translucency work
+  as on lit sprites. The block carries the material flag `DE_GPU_MATERIAL_SPRITE`
+  (`DE__MATERIAL_FLAG_SPRITE`), and shaders test it with `de_sprite_is`
+  (`shaders/sprite/sprite_vis.slang`).
+- An unlit sprite binds only `texture`. It ignores `normal_tex`, `rough_metal_tex`,
+  `emissive_tex` and `height_tex`. It still casts shadows when `cast_shadows` is true.
+
+To get the exact colour at the output, set all of these:
+
+- the camera's tonemapper is `de_tonemapper_builtin(r, DE_TM_NONE)`;
+- the view exposure is 1, which is `DeCamera.exposure_ev100 = -log2(1.2)`, because
+  exposure = 1 / (1.2 x 2^EV100). The Unlit model's colour is scaled by the exposure,
+  like any other emission;
+- bloom and grading are off (`de_post_settings.bloom_disable`, `.grading_disable`);
+- the output target is sRGB (`DE_FMT_RGBA8_SRGB` or `DE_FMT_BGRA8_SRGB`), so the hardware
+  does the encode. A UNORM target receives linear values;
+- the palette LUT and dithering of `de_pixel_art_settings` are off.
+
+The test `render_sprite_unlit` (`tests/unit/render/test_sprite_unlit.c`) renders an sRGB
+pixel-art atlas through a pixel-art view: all 256 grey levels plus a 32-colour palette,
+opaque and translucent. It reads the output back with zero tolerance. It also checks the
+atlas region and the flips.
+
 ## Immutable view and pixel context
 
 Pixel sprite snapshots retain each view's last successfully rendered camera/grid/plane.

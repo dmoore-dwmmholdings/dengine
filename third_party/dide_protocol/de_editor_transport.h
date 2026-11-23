@@ -45,6 +45,8 @@ typedef struct de_ep_listener {
 typedef struct de_ep_conn {
 #ifdef _WIN32
     de_ep_listener *listener; /* the pipe instance is the connection */
+    unsigned char peek;       /* first byte of the next frame, read while waiting */
+    bool has_peek;
 #else
     int fd;
 #endif

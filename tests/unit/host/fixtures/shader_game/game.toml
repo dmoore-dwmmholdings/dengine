@@ -1,0 +1,6 @@
+# Project file of the shader_game fixture (DENG-789).
+[game]
+name = "Shader Game"
+
+[tasks]
+workers = 2

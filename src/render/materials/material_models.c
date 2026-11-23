@@ -43,7 +43,14 @@ const de__material_const *de__material_feature_consts(u32 *count) {
 
 typedef struct mm_entry {
     char name[DE__MATERIAL_MODEL_NAME_MAX + 1u];
-    de_gpu_pipeline resolve; /**< game models; invalid for the built-ins */
+    /** The resolve pipeline id (de_gpu_pipeline.id) of a game model; 0 for the built-ins. Atomic:
+     * a graph model's hot reload swaps it (de__material_models_replace) while the render thread
+     * reads it. */
+    de_atomic_u32 resolve;
+    /** DENG-770: graph models only; DE__MATERIAL_FEATURE_* of the graph's layers (atomic as
+     * `resolve`). */
+    de_atomic_u32 features;
+    bool graph;
 } mm_entry;
 
 struct de__material_models {
@@ -80,9 +87,11 @@ void de__material_models_destroy(de__material_models *m) {
     if (m == NULL)
         return;
     const u32 n = de_atomic_load_u32(&m->count, DE_ATOMIC_ACQUIRE);
-    for (u32 i = 0; i < n; ++i)
-        if (DE_HANDLE_VALID(m->entries[i].resolve))
-            de_gpu_pipeline_destroy(m->dev, m->entries[i].resolve);
+    for (u32 i = 0; i < n; ++i) {
+        const de_gpu_pipeline p = {de_atomic_load_u32(&m->entries[i].resolve, DE_ATOMIC_ACQUIRE)};
+        if (DE_HANDLE_VALID(p))
+            de_gpu_pipeline_destroy(m->dev, p);
+    }
     DE_FREE(m->alloc, m, sizeof *m);
 }
 
@@ -115,7 +124,16 @@ u32 de__material_models_find_hash(const de__material_models *m, u32 hash) {
 de_gpu_pipeline de__material_models_resolve_pipeline(const de__material_models *m, u32 id) {
     if (id < DE__MATERIAL_MODEL_FIRST_GAME || id >= de__material_models_count(m))
         return (de_gpu_pipeline){0};
-    return m->entries[id].resolve;
+    return (de_gpu_pipeline){de_atomic_load_u32(&m->entries[id].resolve, DE_ATOMIC_ACQUIRE)};
+}
+
+bool de__material_models_graph_features(const de__material_models *m, u32 id, u32 *features) {
+    if (id < DE__MATERIAL_MODEL_FIRST_GAME || id >= de__material_models_count(m) ||
+        !m->entries[id].graph)
+        return false;
+    if (features != NULL)
+        *features = de_atomic_load_u32(&m->entries[id].features, DE_ATOMIC_ACQUIRE);
+    return true;
 }
 
 /* The contract of a game model's resolve kernel, or why its reflection breaks it. */
@@ -140,9 +158,44 @@ static bool resolve_contract(const de_shader_reflection *refl, char *why, size_t
     return true;
 }
 
+/* Checks the resolve kernel's contract and makes its pipeline (invalid on failure, error set). */
+static de_gpu_pipeline make_resolve(de__material_models *m, const char *name,
+                                    const de_gpu_shader_blob *code,
+                                    const de_shader_reflection *refl) {
+    char why[160];
+    if (!resolve_contract(refl, why, sizeof why)) {
+        (void)DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                      "material model \"%s\": the shader does not implement IMaterialModel's "
+                      "resolve: %s (it must be de_resolve_tiles<Model> of "
+                      "shaders/visbuffer/resolve_model.slang)",
+                      name, why);
+        return (de_gpu_pipeline){0};
+    }
+    char label[64];
+    snprintf(label, sizeof label, "material model %s resolve", name);
+    const de_gpu_pipeline p = de_gpu_pipeline_create(
+        m->dev,
+        &(de_gpu_pipeline_desc){
+            .kind = DE_PIPE_COMPUTE,
+            .cs = *code,
+            .push_constant_bytes = DE__MATERIAL_MODEL_RESOLVE_PUSH,
+            .threadgroup_size = {refl->threadgroup[0], refl->threadgroup[1], refl->threadgroup[2]},
+            .name = label});
+    if (!DE_HANDLE_VALID(p))
+        (void)DE_FAIL_WRAP(DE_ERR_INTERNAL, "material model \"%s\": the resolve pipeline", name);
+    return p;
+}
+
 de_result de__material_models_add(de__material_models *m, const char *name,
                                   const de_gpu_shader_blob *code, const de_shader_reflection *refl,
                                   u32 *out_id) {
+    return de__material_models_add_ex(m, name, code, refl, false, 0u, out_id);
+}
+
+de_result de__material_models_add_ex(de__material_models *m, const char *name,
+                                     const de_gpu_shader_blob *code,
+                                     const de_shader_reflection *refl, bool graph, u32 features,
+                                     u32 *out_id) {
     if (m == NULL || name == NULL || code == NULL || refl == NULL || out_id == NULL)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "material model: NULL argument");
     const size_t len = strlen(name);
@@ -158,30 +211,41 @@ de_result de__material_models_add(de__material_models *m, const char *name,
                        "material model \"%s\": all %u material model ids are taken (classification "
                        "keeps a tile's models in one 32-bit mask)",
                        name, DE__MATERIAL_MODEL_MAX);
-    char why[160];
-    if (!resolve_contract(refl, why, sizeof why))
-        return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
-                       "material model \"%s\": the shader does not implement IMaterialModel's "
-                       "resolve: %s (it must be de_resolve_tiles<Model> of "
-                       "shaders/visbuffer/resolve_model.slang)",
-                       name, why);
-    char label[64];
-    snprintf(label, sizeof label, "material model %s resolve", name);
-    const de_gpu_pipeline p = de_gpu_pipeline_create(
-        m->dev,
-        &(de_gpu_pipeline_desc){
-            .kind = DE_PIPE_COMPUTE,
-            .cs = *code,
-            .push_constant_bytes = DE__MATERIAL_MODEL_RESOLVE_PUSH,
-            .threadgroup_size = {refl->threadgroup[0], refl->threadgroup[1], refl->threadgroup[2]},
-            .name = label});
-    if (!DE_HANDLE_VALID(p))
-        return DE_FAIL_WRAP(DE_ERR_INTERNAL, "material model \"%s\": the resolve pipeline", name);
+    const de_gpu_pipeline p = make_resolve(m, name, code, refl);
+    if (!DE_HANDLE_VALID(p)) {
+        const de_error *err = de_error_last();
+        return err != NULL ? err->result : DE_ERR_INTERNAL;
+    }
     mm_entry *e = &m->entries[id];
     memcpy(e->name, name, len + 1u);
-    e->resolve = p;
+    de_atomic_store_u32(&e->resolve, p.id, DE_ATOMIC_RELAXED);
+    de_atomic_store_u32(&e->features, graph ? features : 0u, DE_ATOMIC_RELAXED);
+    e->graph = graph;
     de_atomic_store_u32(&m->count, id + 1u, DE_ATOMIC_RELEASE);
     *out_id = id;
+    return DE_OK;
+}
+
+de_result de__material_models_replace(de__material_models *m, u32 id,
+                                      const de_gpu_shader_blob *code,
+                                      const de_shader_reflection *refl, u32 features,
+                                      de_gpu_pipeline *old) {
+    if (old != NULL)
+        *old = (de_gpu_pipeline){0};
+    if (m == NULL || code == NULL || refl == NULL || old == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "material model replace: NULL argument");
+    if (id < DE__MATERIAL_MODEL_FIRST_GAME || id >= de__material_models_count(m) ||
+        !m->entries[id].graph)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                       "material model %u: only a material graph's model can be replaced", id);
+    mm_entry *e = &m->entries[id];
+    const de_gpu_pipeline p = make_resolve(m, e->name, code, refl);
+    if (!DE_HANDLE_VALID(p)) {
+        const de_error *err = de_error_last();
+        return err != NULL ? err->result : DE_ERR_INTERNAL;
+    }
+    *old = (de_gpu_pipeline){de_atomic_exchange_u32(&e->resolve, p.id, DE_ATOMIC_ACQ_REL)};
+    de_atomic_store_u32(&e->features, features, DE_ATOMIC_RELEASE);
     return DE_OK;
 }
 

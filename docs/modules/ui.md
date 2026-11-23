@@ -55,7 +55,18 @@ asset system before adding it. The custom loader validates before publication an
 loads referenced fonts/background images, including theme variants, as dependencies.
 Parsed objects are immutable and independent of UI lifetime. Each UI retains its
 sheet; blob sheets parse their bytes when added. Reloads replace valid sheets and
-preserve the prior sheet on errors, with a source line in the error message.
+preserve the prior sheet on errors, with a source line and column in the error message.
+
+Stylesheet files (DENG-780): a stylesheet source file name ends with
+`DE_UI_STYLESHEET_SUFFIX` (`.uistyle.toml`, defined once as `DE_ASSET_STYLESHEET_SUFFIX` in
+`de_asset.h`), so editors can find sheets by name; `de_ui_is_stylesheet_path` tests a path.
+`de-cook --check` warns about a `ui_style` or `stylesheet` source (or locale source) without
+the suffix. `de_ui_check_stylesheet` validates text without loading it and returns a
+`de_ui_sheet_error` (1-based line and column, reason). `de_ui_list_sheets` lists the loaded
+sheets in load order (the `de_ui_theme_var.sheet` index), then the sheets whose first load
+failed, each with its manifest path, `source` file and any error: a rejected reload keeps the
+old rules and reports the error until a good reload clears it. Error messages have the form
+`UI stylesheet line L, column C: reason`.
 
 ```toml
 [vars]

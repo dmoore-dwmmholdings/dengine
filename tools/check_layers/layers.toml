@@ -294,6 +294,11 @@ to = "physics"
 why = "World systems (terrain, water, streaming cells, vfx collision) create and query physics bodies."
 
 [[allow]]
+from = "world/water"
+to = "world/spline"
+why = "A river's surface and flow map follow its DeSpline curve (DENG-776: the DIDE world.water service)."
+
+[[allow]]
 from = "gameplay/video"
 to = "audio"
 why = "Video playback feeds its sound track to the audio mixer (DENG-60: OPTIONAL_DEPS audio)."
@@ -323,6 +328,11 @@ why = "The app host owns and ticks the services (SPEC §10)."
 from = "host"
 to = "services/*"
 why = "The app host creates the crash, mods, save, steam and bind services (DENG-60: host DEPS crash mods save, OPTIONAL_DEPS steam)."
+
+[[allow]]
+from = "host"
+to = "cook/importers"
+why = "Dev builds only (DE_HAS_COOKER and Slang): the editor service's materialGraph.* methods run the material graph generator and its Slang compile (tools/cook/importers/material_graph; DENG-769). Shipping does not link the cooker."
 
 # ---------------------------------------------------------------- forbidden edges
 # Never add an [[allow]] entry for these. The check fails if one exists.

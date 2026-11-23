@@ -81,3 +81,22 @@ set_tests_properties(deterministic_asm_check PROPERTIES
     RUN_SERIAL TRUE
     SKIP_REGULAR_EXPRESSION "deterministic_asm_check: SKIPPED"
     TIMEOUT 120)
+
+# DE_DEPRECATED(msg) (DENG-767): warns with the message on GCC/Clang; expands to nothing elsewhere.
+# GNU-style compilers only (the checks pass GNU-style flags); skipped for clang-cl and MSVC.
+foreach(_lang C CXX)
+    if(CMAKE_${_lang}_COMPILER_ID MATCHES "^(Clang|AppleClang|GNU)$"
+       AND NOT CMAKE_${_lang}_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+        foreach(_mode warns fallback)
+            string(TOLOWER "${_lang}" _l)
+            add_test(NAME deprecated_macro_${_mode}_${_l}
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DDE_COMPILER=${CMAKE_${_lang}_COMPILER}" -DDE_LANG=${_lang}
+                    "-DDE_INCLUDE_DIR=${DE_ROOT_DIR}/include"
+                    "-DDE_FIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/deprecated/use_deprecated.c"
+                    -DDE_MODE=${_mode}
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/check_deprecated_macro.cmake")
+            set_tests_properties(deprecated_macro_${_mode}_${_l} PROPERTIES LABELS check TIMEOUT 60)
+        endforeach()
+    endif()
+endforeach()

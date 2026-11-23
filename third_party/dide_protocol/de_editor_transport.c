@@ -108,6 +108,7 @@ de_ep_io de_ep_accept(de_ep_listener *l, de_ep_conn *c, uint32_t max_frame, int 
     }
     c->listener = l;
     c->max_frame = max_frame;
+    c->has_peek = false;
     return DE_EP_IO_OK;
 }
 
@@ -115,6 +116,11 @@ de_ep_io de_ep_accept(de_ep_listener *l, de_ep_conn *c, uint32_t max_frame, int 
 static de_ep_io de_ep__io(de_ep_conn *c, bool write, void *p, size_t n) {
     HANDLE pipe = c->listener->pipe;
     unsigned char *b = (unsigned char *)p;
+    if (!write && c->has_peek && n > 0) {
+        *b++ = c->peek;
+        c->has_peek = false;
+        n--;
+    }
     while (n > 0) {
         OVERLAPPED ov;
         memset(&ov, 0, sizeof(ov));
@@ -137,18 +143,49 @@ static de_ep_io de_ep__io(de_ep_conn *c, bool write, void *p, size_t n) {
     return DE_EP_IO_OK;
 }
 
+/* Waits until the IDE has sent a byte. The byte is read into c->peek (and
+ * handed back by the next read in de_ep__io), so the wait is a kernel wait on
+ * the overlapped read's event: it wakes the moment data arrives, with no
+ * timer-tick polling. */
 static de_ep_io de_ep__readable(de_ep_conn *c, int timeout_ms) {
-    ULONGLONG start = GetTickCount64();
-    for (;;) {
-        DWORD avail = 0;
-        if (!PeekNamedPipe(c->listener->pipe, NULL, 0, NULL, &avail, NULL))
-            return DE_EP_IO_CLOSED;
-        if (avail > 0)
-            return DE_EP_IO_OK;
-        if (timeout_ms >= 0 && GetTickCount64() - start >= (ULONGLONG)timeout_ms)
-            return DE_EP_IO_TIMEOUT;
-        Sleep(1);
+    if (c->has_peek)
+        return DE_EP_IO_OK;
+    HANDLE pipe = c->listener->pipe;
+    DWORD avail = 0;
+    if (!PeekNamedPipe(pipe, NULL, 0, NULL, &avail, NULL))
+        return DE_EP_IO_CLOSED;
+    if (avail > 0)
+        return DE_EP_IO_OK;
+    OVERLAPPED ov;
+    memset(&ov, 0, sizeof(ov));
+    ov.hEvent = c->listener->event;
+    ResetEvent(ov.hEvent);
+    DWORD done = 0;
+    if (!ReadFile(pipe, &c->peek, 1, NULL, &ov)) {
+        DWORD e = GetLastError();
+        if (e != ERROR_IO_PENDING)
+            return e == ERROR_BROKEN_PIPE || e == ERROR_NO_DATA || e == ERROR_PIPE_NOT_CONNECTED ? DE_EP_IO_CLOSED
+                                                                                                 : DE_EP_IO_ERROR;
+        DWORD w = WaitForSingleObject(ov.hEvent, de_ep__wait_ms(timeout_ms));
+        if (w != WAIT_OBJECT_0) {
+            /* Cancel and wait for the read to finish: a byte that arrived
+             * meanwhile is kept, not lost. */
+            CancelIoEx(pipe, &ov);
+            if (GetOverlappedResult(pipe, &ov, &done, TRUE) && done == 1) {
+                c->has_peek = true;
+                return DE_EP_IO_OK;
+            }
+            return w == WAIT_TIMEOUT ? DE_EP_IO_TIMEOUT : DE_EP_IO_ERROR;
+        }
     }
+    if (!GetOverlappedResult(pipe, &ov, &done, FALSE)) {
+        DWORD e = GetLastError();
+        return e == ERROR_BROKEN_PIPE || e == ERROR_PIPE_NOT_CONNECTED ? DE_EP_IO_CLOSED : DE_EP_IO_ERROR;
+    }
+    if (done == 0)
+        return DE_EP_IO_CLOSED;
+    c->has_peek = true;
+    return DE_EP_IO_OK;
 }
 
 void de_ep_disconnect(de_ep_conn *c) {
@@ -158,6 +195,7 @@ void de_ep_disconnect(de_ep_conn *c) {
         FlushFileBuffers(c->listener->pipe);
         DisconnectNamedPipe(c->listener->pipe);
     }
+    c->has_peek = false;
     c->listener = NULL;
 }
 

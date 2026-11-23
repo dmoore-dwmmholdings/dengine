@@ -955,6 +955,18 @@ DE_API de_builtin_component_ids de_builtin_components(de_world *w);
  * Immediate: not allowed inside a running system (use de_cmd_set_parent).
  */
 DE_API de_result de_entity_set_parent(de_world *w, de_entity child, de_entity parent);
+/**
+ * de_entity_set_parent() that places `child` as child number `index` of `parent` (0 first; an
+ * index at or past the end appends). The index counts `parent`'s children without `child`, so
+ * when `parent` is already the parent the child moves within the list (the parent's DeChildren is
+ * marked changed). DE_ENTITY_NULL detaches and ignores `index`. Errors and cycle handling as
+ * de_entity_set_parent(). Immediate: not allowed inside a running system. O(index) (DENG-768).
+ */
+DE_API de_result de_entity_set_parent_at(de_world *w, de_entity child, de_entity parent,
+                                         u32 index);
+/** The place of `child` in its parent's child list (0 first), or UINT32_MAX for a root, an
+ * entity that is not alive, or no built-ins. O(index). */
+DE_API u32 de_entity_child_index(const de_world *w, de_entity child);
 /** The parent of `e`, or DE_ENTITY_NULL (a root, not alive, or no built-ins). */
 DE_API de_entity de_entity_parent(const de_world *w, de_entity e);
 /** The first child of `parent` (insertion order), or DE_ENTITY_NULL. */

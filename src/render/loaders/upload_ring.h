@@ -180,6 +180,10 @@ struct de_render_uploader {
      * Any thread. */
     de_atomic_u64 material_epoch;
     struct de_render_mesh *published_meshes; /* protected by lock; publish/unload hooks */
+    /* DENG-770: the renderer's material models, where `material_graph` assets register their
+     * model (NULL: no renderer; render_assets.h de__render_uploader_set_material_models). Main
+     * thread. */
+    struct de__material_models *material_models;
 };
 
 /** DENG-302: a material or texture changed (de_render_uploader.material_epoch). Any thread. */

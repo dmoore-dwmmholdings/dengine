@@ -2054,6 +2054,112 @@ static void skin_render(rsx *f, de_gpu_backend backend, bool allocation_check) {
     free(previous);
 }
 
+static void skin_many_palettes(rsx *f, de_gpu_backend backend) {
+    rsx_open(f, backend);
+    u32 mesh = rsx_mesh_plane(f, 1, 1, 2, 1, false);
+    skin_source(f, mesh);
+    u32 material = material_add((de_vec4){1, 1, 1, 1});
+    de_affine identity = de_affine_identity(), joints[60];
+    for (u32 j = 0; j < 60; ++j)
+        joints[j] = identity;
+    world_free(&f->w, &f->alloc);
+    world_init(&f->w, 100);
+    for (u32 i = 0; i < 100; ++i)
+        world_set(&f->w, i, mesh, identity, identity, material);
+    de__gpu_scene_assets assets = {.mesh = fake_mesh};
+    const u32 vertices = g_mesh[mesh - 1].rm.vertex_count;
+    f32 *current = zalloc((size_t)vertices * 12), *previous = zalloc((size_t)vertices * 12);
+    /* Six frames cover initial previous-position writes, both output buffers,
+     * all four palette upload slots and independently changing palettes. */
+    for (u32 frame = 0; frame < 6; ++frame) {
+        for (u32 i = 0; i < 100; ++i) {
+            f32 delta = .001f * (f32)(i + 1) * (f32)(frame + 1);
+            joints[0].m[9] = -delta;
+            joints[1].m[9] = 2 * delta;
+            de_render_set_skin_palette(&f->skin_renderer, (de_entity){1000 + i}, joints,
+                                       i % 17 == 0 ? 0 : 60);
+        }
+        f->skin_renderer.frame_index = 2000 + frame;
+        ASSERT_EQ(de__skin_extract(&f->skin_renderer, &f->w.f), DE_OK);
+        ASSERT_EQ(de__skin_prepare(&f->skin_renderer, &f->w.f, &assets), DE_OK);
+        de_gpu_wait_idle(f->dev);
+        for (u32 i = 0; i < 100; ++i) {
+            de__skin_entry *e = de__skin_instance(&f->skin_renderer, i);
+            ASSERT_TRUE(e && e->initialized);
+            ASSERT_EQ(e->joint_count, i % 17 == 0 ? 0 : 60);
+            skin_read_positions(f, e, current, previous);
+            for (u32 v = 0; v < vertices; ++v) {
+                const f32 *source = &g_mesh[mesh - 1].pos[v * 3];
+                f32 sign = source[0] >= 0 ? 2.f : -1.f;
+                f32 delta = i % 17 == 0 ? 0 : sign * .001f * (f32)(i + 1);
+                ASSERT_FLOAT_EQ(current[v * 3], source[0] + delta * (f32)(frame + 1), .00001);
+                ASSERT_FLOAT_EQ(previous[v * 3], source[0] + delta * (f32)(frame ? frame : 1),
+                                .00001);
+                for (u32 k = 1; k < 3; ++k) {
+                    ASSERT_FLOAT_EQ(current[v * 3 + k], source[k], .00001);
+                    ASSERT_FLOAT_EQ(previous[v * 3 + k], source[k], .00001);
+                }
+            }
+        }
+    }
+    free(current);
+    free(previous);
+}
+
+/* DENG-474/716: the warmed skin frame's native allocations must not grow with the instance
+ * count. One guarded frame (the unchanged default guard) for 1 and for 100 instances of 60
+ * joints, each after eight warm frames that cover every palette upload slot; the fewest raw
+ * allocations of three guarded frames each. Per-skin barriers split the frame into one compute
+ * encoder per skin, and every encoder costs native allocations: 100 skins then cost far more
+ * than one. This does not replace skin_no_alloc_hundred_metal, which still requires zero. */
+static u64 skin_frame_raw(rsx *f, u32 count, u32 mesh, u32 material, u64 frame_base) {
+    de_affine identity = de_affine_identity(), sixty[60];
+    for (u32 j = 0; j < 60; ++j)
+        sixty[j] = identity;
+    world_free(&f->w, &f->alloc);
+    world_init(&f->w, count);
+    for (u32 i = 0; i < count; ++i)
+        world_set(&f->w, i, mesh, identity, identity, material);
+    de__gpu_scene_assets assets = {.mesh = fake_mesh};
+    u64 fewest = UINT64_MAX;
+    for (u32 frame = 0; frame < 11; ++frame) {
+        de_alloc_guard guard = {0};
+        if (frame >= 8)
+            de_alloc_guard_begin(&guard);
+        for (u32 i = 0; i < count; ++i)
+            de_render_set_skin_palette(&f->skin_renderer, (de_entity){1000 + i}, sixty, 60);
+        f->skin_renderer.frame_index = frame_base + frame;
+        de_result extracted = de__skin_extract(&f->skin_renderer, &f->w.f);
+        de_result prepared = de__skin_prepare(&f->skin_renderer, &f->w.f, &assets);
+        de_gpu_wait_idle(f->dev);
+        if (frame >= 8) {
+            de_alloc_guard_end(&guard);
+            EXPECT_EQ(guard.engine_allocs, 0u);
+            if (guard.raw_mallocs < fewest)
+                fewest = guard.raw_mallocs;
+        }
+        EXPECT_EQ(extracted, DE_OK);
+        EXPECT_EQ(prepared, DE_OK);
+    }
+    return fewest;
+}
+
+static void skin_alloc_scale(rsx *f, de_gpu_backend backend) {
+    if (!de_alloc_guard_counts_raw())
+        SKIP("this build does not count raw malloc-family calls");
+    rsx_open(f, backend);
+    u32 mesh = rsx_mesh_plane(f, 1, 1, 2, 1, false);
+    skin_source(f, mesh);
+    u32 material = material_add((de_vec4){1, 1, 1, 1});
+    const u64 one = skin_frame_raw(f, 1, mesh, material, 4000);
+    const u64 hundred = skin_frame_raw(f, 100, mesh, material, 5000);
+    printf("Warmed skin frame raw allocations: 1 instance %llu, 100 instances %llu\n",
+           (unsigned long long)one, (unsigned long long)hundred);
+    /* The same command buffer, encoder and submission for any count; the slack covers native
+     * bookkeeping that is not per dispatch (hash-table growth for more tracked resources). */
+    ASSERT_LE(hundred, one + 4);
+}
+
 /* Actual sprite instance -> shared quad -> alpha vis -> model-2 resolve readbacks. */
 static void sprite_render(rsx *f, de_gpu_backend backend, bool require_mesh) {
     rsx_open(f, backend);
@@ -2175,6 +2281,9 @@ TEST_F(resolve, positions_uvs_orthographic_stability_metal, rsx) {
     }                                                                                              \
     TEST_F(resolve, game_model_dispatch_##sfx, rsx) {                                              \
         game_model_dispatch(f, backend);                                                           \
+    }                                                                                              \
+    TEST_F(resolve, skin_many_palettes_previous_positions_##sfx, rsx) {                            \
+        skin_many_palettes(f, backend);                                                            \
     }
 
 TEST_F(resolve, skin_frozen_pose_and_despawn_gpu_retirement_metal, rsx) {
@@ -2241,6 +2350,9 @@ TEST_F(resolve, skin_frozen_pose_and_despawn_gpu_retirement_metal, rsx) {
            "passed\n");
 }
 
+TEST_F(resolve, skin_alloc_independent_of_instance_count_metal, rsx) {
+    skin_alloc_scale(f, DE_GPU_METAL);
+}
 TEST_F(resolve, skin_no_alloc_hundred_metal, rsx) {
     skin_render(f, DE_GPU_METAL, true);
 }

@@ -37,6 +37,7 @@ de_add_module(
         time_${_de_platform_os}.c
         dylib_${_de_platform_os}.c
         sleep_pacing.c
+        thread_timing.c
         vfs_internal.h
         vfs.c
         file_${_de_platform_os}.c

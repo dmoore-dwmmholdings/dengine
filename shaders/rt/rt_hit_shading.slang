@@ -17,7 +17,7 @@ public struct DeRtSurface {public SurfaceData material;public float3 position;pu
 public DeRtSurface de_rt_surface(DeResolvePoint point,DeSceneConstants sc,float3 eye,uint sampler,uint lut) {
     DeRtSurface result=(DeRtSurface)0;if(!point.valid)return result;
     DeGpuMaterial m=de_resolve_material_of(de_resolve_material(point),sc);
-    TextureLodInfo lod;VertexAttribs v=de_resolve_attribs(point,eye,lod);lod.sampler=sampler;
+    TextureLodInfo lod;VertexAttribs v=de_resolve_attribs(point,eye,0.0,lod);lod.sampler=sampler;
     result.material=m.model==1?UnlitModel.resolve_gbuffer(m,v,lod):StandardModel.resolve_gbuffer(m,v,lod);
     result.material.brdf_lut=lut;result.position=v.position;result.valid=true;return result;
 }

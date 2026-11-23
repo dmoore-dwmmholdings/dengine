@@ -177,6 +177,20 @@ public float3 de_resolve_world_pos(DeResolvePoint r)
     return de_vis_transform_point(r.inst.transform, de_resolve_object_pos(r));
 }
 
+/// The world position's one-pixel differences in x and y (DENG-771). The corners are taken to
+/// world space first, so the instance's scale and rotation are in them.
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
+public void de_resolve_world_pos_diff(DeResolvePoint r, out float3 dx, out float3 dy)
+{
+    float3 w0 = de_vis_transform_point(r.inst.transform, r.object_pos[0]);
+    float3 w1 = de_vis_transform_point(r.inst.transform, r.object_pos[1]);
+    float3 w2 = de_vis_transform_point(r.inst.transform, r.object_pos[2]);
+    dx = w0 * r.bary_dx.x + w1 * r.bary_dx.y + w2 * r.bary_dx.z;
+    dy = w0 * r.bary_dy.x + w1 * r.bary_dy.y + w2 * r.bary_dy.z;
+}
+
 /// UV set `set` (0 or 1) at the point, and its one-pixel differences in x and y.
 #if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
 [ForceInline]
