@@ -1154,7 +1154,9 @@ TEST_F(editor_prefab_source, apply_writes_the_source_and_keeps_comments_and_orde
                                     (pf_call){.path = "THealth.current"}, &tree, response);
     ASSERT_TRUE(mpack_node_map_contains_cstr(root, "result"));
     mpack_node_t files = mpack_node_map_cstr(mpack_node_map_cstr(root, "result"), "files");
-    ASSERT_EQ(mpack_node_array_length(files), 1u); /* no variant or nesting prefab is loaded */
+    /* The variant and the nesting prefab inherit the field: they follow, though neither was
+     * spawned (DENG-807). */
+    ASSERT_EQ(mpack_node_array_length(files), 3u);
     /* The manifest's source path, one per entry of `prefabs` (DIDE-383). */
     EXPECT_TRUE(node_streq(mpack_node_array_at(files, 0), "crate.prefab.toml"));
     mpack_node_t prefabs = mpack_node_map_cstr(mpack_node_map_cstr(root, "result"), "prefabs");
@@ -1198,6 +1200,111 @@ TEST_F(editor_prefab_source, apply_writes_variant_and_nested_sources, safety_fx)
     ((TTarget *)de_entity_get(f->engine.world, leaf, p.target))->speed = 4;
     prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, leaf, (pf_call){.path = "TTarget.speed"});
     EXPECT_TRUE(text_eq(read_text(STACK), replaced(stack2, "speed = 2.0", "speed = 4.0")));
+}
+
+/* ---------- DENG-807: dependents that were never spawned ---------- */
+
+#define LINKS "safe676:/assets/links.prefab.toml"
+
+static bool files_has(mpack_node_t files, const char *name) {
+    for (size_t i = 0; i < mpack_node_array_length(files); ++i)
+        if (node_streq(mpack_node_array_at(files, i), name))
+            return true;
+    return false;
+}
+
+static void write_text(const char *vpath, text t) {
+    ASSERT_EQ(de_file_write_all_atomic(vpath, t.s, t.n), DE_OK);
+}
+
+TEST_F(editor_prefab_source, apply_writes_the_sources_of_unloaded_dependents, safety_fx) {
+    const pf_world p = prefab_world(f);
+    const text crate = read_text(CRATE), heavy = read_text(HEAVY), stack = read_text(STACK);
+    const text links = read_text(LINKS);
+    /* Only the base is spawned: the variant and the nesting prefab are not loaded. */
+    const de_entity a = spawn_prefab(f, "props/crate");
+    ((THealth *)de_entity_get(f->engine.world, a, p.health))->current = 70;
+    char response[2048];
+    mpack_tree_t tree;
+    mpack_node_t root = prefab_call(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a,
+                                    (pf_call){.path = "THealth.current"}, &tree, response);
+    ASSERT_TRUE(mpack_node_map_contains_cstr(root, "result"));
+    mpack_node_t res = mpack_node_map_cstr(root, "result");
+    const u32 tx = mpack_node_u32(mpack_node_map_cstr(res, "tx"));
+    mpack_node_t files = mpack_node_map_cstr(res, "files");
+    EXPECT_EQ(mpack_node_array_length(files), 3u);
+    EXPECT_TRUE(files_has(files, "crate.prefab.toml"));
+    EXPECT_TRUE(files_has(files, "crate_heavy.prefab.toml"));
+    EXPECT_TRUE(files_has(files, "stack.prefab.toml"));
+    EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(res, "prefabs")), 3u);
+    EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
+    const text crate1 = read_text(CRATE), heavy1 = read_text(HEAVY), stack1 = read_text(STACK);
+    EXPECT_TRUE(text_eq(crate1, replaced(crate, "current = 50.0", "current = 70.0")));
+    EXPECT_TRUE(text_eq(heavy1, replaced(heavy, "current = 50.0", "current = 70.0")));
+    /* The nested copy (0x11) follows; the stack's own root (0x10) does not. */
+    EXPECT_TRUE(text_eq(stack1, replaced(stack, "current = 50.0", "current = 70.0")));
+    EXPECT_TRUE(text_eq(read_text(LINKS), links)); /* not a dependent */
+    /* Undo restores every file byte for byte; redo writes them again. */
+    transaction(f, DE_EP_METHOD_EDIT_UNDO, tx);
+    EXPECT_TRUE(text_eq(read_text(CRATE), crate));
+    EXPECT_TRUE(text_eq(read_text(HEAVY), heavy));
+    EXPECT_TRUE(text_eq(read_text(STACK), stack));
+    transaction(f, DE_EP_METHOD_EDIT_REDO, tx);
+    EXPECT_TRUE(text_eq(read_text(CRATE), crate1));
+    EXPECT_TRUE(text_eq(read_text(HEAVY), heavy1));
+    EXPECT_TRUE(text_eq(read_text(STACK), stack1));
+    /* A dependent that sets the field itself keeps its value: the variant's max. */
+    ((THealth *)de_entity_get(f->engine.world, a, p.health))->max = 60;
+    prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.max"});
+    EXPECT_TRUE(text_eq(read_text(HEAVY), heavy1));
+    EXPECT_TRUE(text_eq(read_text(STACK), replaced(stack1, "current = 70.0\nmax = 50.0",
+                                                   "current = 70.0\nmax = 60.0")));
+}
+
+/* Nothing is written and the world is unchanged; the files are as given. */
+static void apply_refused(safety_fx *f, de_entity a, de_ep_error code, const char *reason,
+                          text crate, text heavy, text stack) {
+    const u64 before = checksum(f);
+    prefab_fails(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.current"},
+                 code, reason);
+    EXPECT_EQ(checksum(f), before);
+    EXPECT_TRUE(overrides_of(f, a, a, "THealth.current").found);
+    EXPECT_TRUE(text_eq(read_text(CRATE), crate));
+    EXPECT_TRUE(text_eq(read_text(STACK), stack));
+    if (heavy.n != 0)
+        EXPECT_TRUE(text_eq(read_text(HEAVY), heavy));
+}
+
+TEST_F(editor_prefab_source, unloaded_dependent_cycles_and_unreadable_sources_are_refused,
+       safety_fx) {
+    const pf_world p = prefab_world(f);
+    const text crate = read_text(CRATE), heavy = read_text(HEAVY), stack = read_text(STACK);
+    const text links = read_text(LINKS);
+    const de_entity a = spawn_prefab(f, "props/crate");
+    ((THealth *)de_entity_get(f->engine.world, a, p.health))->current = 70;
+    /* The stack (which nests the crate) and links are variants of each other. */
+    const text stack_c = replaced(stack, "[prefab]\n", "[prefab]\nbase = \"props/links\"\n");
+    const text links_c = replaced(links, "[[entity]]\nid = \"0x1\"",
+                                  "[prefab]\nbase = \"props/stack\"\n\n[[entity]]\nid = \"0x1\"");
+    write_text(STACK, stack_c);
+    write_text(LINKS, links_c);
+    apply_refused(f, a, DE_EP_ERR_UNSUPPORTED, "dependent_cycle", crate, heavy, stack_c);
+    EXPECT_TRUE(text_eq(read_text(LINKS), links_c));
+    write_text(STACK, stack);
+    write_text(LINKS, links);
+    /* A missing source may be a dependent: refused before any file is written. */
+    ASSERT_EQ(de_file_delete(HEAVY), DE_OK);
+    apply_refused(f, a, DE_EP_ERR_INTERNAL, "dependent_unreadable", crate, (text){{0}, 0}, stack);
+    write_text(HEAVY, heavy);
+#if !defined(_WIN32)
+    set_mode(HEAVY, 0);
+    apply_refused(f, a, DE_EP_ERR_INTERNAL, "dependent_unreadable", crate, (text){{0}, 0}, stack);
+    set_mode(HEAVY, 0644);
+#endif
+    /* Once readable again, the apply goes through and writes all three. */
+    prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.current"});
+    EXPECT_TRUE(text_eq(read_text(HEAVY), replaced(heavy, "current = 50.0", "current = 70.0")));
+    EXPECT_TRUE(text_eq(read_text(STACK), replaced(stack, "current = 50.0", "current = 70.0")));
 }
 
 TEST_F(editor_prefab_source, undo_and_redo_restore_the_exact_bytes, safety_fx) {
