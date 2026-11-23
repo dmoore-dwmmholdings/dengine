@@ -1,0 +1,9 @@
+# DENG-581 fixtures: the DIDE mock engine's two foliage types (mock-engine/src/foliage.rs),
+# for tests/unit/host/test_editor_foliage.c.
+[project]
+asset_root = "assets"
+
+[assets]
+"foliage/grass" = { type = "foliageType", source = "foliage/grass.foliage.toml" }
+"foliage/pine"  = { type = "foliageType", source = "foliage/pine.foliage.toml" }
+"foliage/bad"   = { type = "foliageType", source = "foliage/bad.foliage.toml" }

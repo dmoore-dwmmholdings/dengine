@@ -36,6 +36,7 @@ typedef struct DeRenderComponents {
     de_component water;
     de_component reflection_probe;
     de_component irradiance_volume;
+    de_component foliage;
 } DeRenderComponents;
 
 /** The ids of `w`, or NULL when de_render_register_components has not run on it. Main thread

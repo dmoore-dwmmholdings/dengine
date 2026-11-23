@@ -620,6 +620,7 @@ de_result de__editor_start(de__host *h) {
 #if DE_HAS_RENDER
     de__ed_water_register(ed);   /* DeWater is a render component */
     de__ed_terrain_register(ed); /* so is DeTerrain */
+    de__ed_foliage_register(ed); /* and DeFoliage */
 #endif
 #if DE_ED_MATERIAL_GRAPH
     de__ed_material_graph_register(ed);

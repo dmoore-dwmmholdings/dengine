@@ -35,6 +35,10 @@ name = "terrain"
 dir = "src/world/terrain"
 
 [[module]]
+name = "foliage"
+dir = "src/world/foliage"
+
+[[module]]
 name = "input"
 dir = "src/input"
 

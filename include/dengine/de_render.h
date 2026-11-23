@@ -943,6 +943,58 @@ typedef struct DeTerrain {
     u8 order[DE_TERRAIN_LAYERS]; /**< layer slots in blend order, bottom first */
     de_terrain_rule rules[DE_TERRAIN_RULES];
 } DeTerrain;
+/** DeFoliage's storage (DENG-581, DIDE protocol 1.22 world.foliage): DE_FOLIAGE_TYPES palette
+ * slots, DE_FOLIAGE_RULES scatter rules, and up to DE_FOLIAGE_INSTANCES instances in up to
+ * DE_FOLIAGE_CELLS cells of DE_FOLIAGE_CELL_SIZE metres. The storage is inline and bounded (about
+ * 12 KB), so DeFoliage goes on its own entity, not on the DeTerrain entity (one row must fit a
+ * 16 KiB chunk). */
+#define DE_FOLIAGE_TYPES      8u
+#define DE_FOLIAGE_RULES      8u
+#define DE_FOLIAGE_CELLS      32u
+#define DE_FOLIAGE_INSTANCES  384u
+#define DE_FOLIAGE_CELL_SIZE  16.0f
+/** A procedural scatter rule (reflected as "de_foliage_rule"). Id 0 is an empty slot. A range with
+ * max <= min is unbounded. */
+typedef struct de_foliage_rule {
+    u32 id;
+    bool enabled;
+    u8 type;            /**< palette slot, below DE_FOLIAGE_TYPES */
+    de_entity terrain;  /**< the DeTerrain entity scattered on */
+    i32 layer;          /**< splat layer whose weight gates the rule; -1: any */
+    f32 min_weight;     /**< 0..1 */
+    f32 min_slope, max_slope;   /**< degrees */
+    f32 min_height, max_height; /**< metres */
+    f32 noise_scale;            /**< metres; 0: no noise */
+    f32 noise_threshold;        /**< 0..1 */
+    f32 density;                /**< candidates per square metre */
+    u32 seed;
+    de_vec2 area_min, area_max; /**< world x and z, metres */
+} de_foliage_rule;
+/** A foliage cell (reflected as "de_foliage_cell"): cell (x, z) covers
+ * [x * DE_FOLIAGE_CELL_SIZE, (x + 1) * DE_FOLIAGE_CELL_SIZE) along x and the same along z. */
+typedef struct de_foliage_cell {
+    i32 x, z;
+    u32 count;    /**< instances, stored after those of the cells before it */
+    u64 revision; /**< entity revision of the cell's last change */
+} de_foliage_cell;
+/** A foliage instance (reflected as "de_foliage_instance"). */
+typedef struct de_foliage_instance {
+    f32 x, y, z;
+    f32 yaw;   /**< degrees about +y */
+    f32 scale;
+    u32 rule;  /**< the scatter rule that placed it; 0: painted */
+    u8 type;   /**< palette slot */
+} de_foliage_instance;
+/** A foliage layer: a palette of foliageType assets (.foliage.toml), scatter rules, and instances
+ * kept per cell. Cells are sorted by z, then x; the instances are contiguous per cell, in cell
+ * order. Edit it with the foliage.* edit ops (DIDE world.foliage). */
+typedef struct DeFoliage {
+    de_blob types[DE_FOLIAGE_TYPES]; /**< foliageType assets; instances name them by slot */
+    de_foliage_rule rules[DE_FOLIAGE_RULES];
+    u32 cell_count, instance_count;
+    de_foliage_cell cells[DE_FOLIAGE_CELLS];
+    de_foliage_instance instances[DE_FOLIAGE_INSTANCES];
+} DeFoliage;
 /** The kind of a water body (DeWater.kind; reflected as "de_water_kind": ocean, river, lake). */
 typedef enum de_water_kind {
     DE_WATER_OCEAN = 0,
@@ -1010,6 +1062,8 @@ typedef struct DeWater {
  * - DeDecal: extent 1 x 1 x 1 m, angle_fade 1. DeParticleSystem: playing, time_scale 1.
  * - DeTerrain: 33 x 33 samples over 32 x 32 m, height 32 m, flat at 0, all splat weight in slot
  *   0 ("Ground"), every layer tiling 4 m and sharpness 0.5, order 0..3, no rules enabled.
+ * - DeFoliage: an empty palette, no instances; every rule slot empty (id 0) with layer -1,
+ *   min_weight 0.5, noise_threshold 0.5 and density 0.1 /m2.
  * - DeWater: ocean, Pierson-Moskowitz, wind (5, 0) m/s, choppiness 1, extent 64 x 8 x 64 m, width 4 m, flow_speed 1 m/s,
  *   fog_color (0.05, 0.2, 0.25, 1), fog_density 0.1 /m.
  *

@@ -14,7 +14,7 @@ de_add_module(
         loop.c
         game_module.c
     DEPS
-        core platform task reflect ecs asset anim input text sky terrain water decal streaming spline
+        core platform task reflect ecs asset anim input text sky terrain foliage water decal streaming spline
         tilemap crash mods save
     OPTIONAL_DEPS gpu gpu_d3d12 gpu_vulkan gpu_metal render physics audio net ui vfx nav video steam
 )
@@ -174,6 +174,9 @@ endif()
 # exr heightmaps use tinyexr in Debug and Dev only, as the path tracer export does.
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
     target_sources(de_host PRIVATE editor/editor_terrain.c)
+    # DENG-581: foliage.info/instances/type and the foliage.* edit ops (protocol 1.22,
+    # world.foliage). DeFoliage is a render component too.
+    target_sources(de_host PRIVATE editor/editor_foliage.c)
     target_link_libraries(de_host PRIVATE "$<$<CONFIG:Debug,Dev>:de_tp_tinyexr>")
     set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS "$<$<CONFIG:Debug,Dev>:de_tp_tinyexr>")
 endif()

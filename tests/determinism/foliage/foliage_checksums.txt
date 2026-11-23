@@ -1,0 +1,11 @@
+# de_det v1 scenario=foliage seed=0x581 ticks=10: de_world_checksum after each tick, one per line
+a55228611375fa62
+77a0894a9c75ee8c
+b010a1aad8acb6c9
+a387765f70162804
+592429a9fc51c060
+ebcd8ad9e7975505
+d4f54889e4566cd8
+022fc6def502380c
+09d06ff9ffcc6b86
+d4f54889e4566cd8

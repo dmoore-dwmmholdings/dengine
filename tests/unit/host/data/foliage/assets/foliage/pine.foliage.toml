@@ -1,0 +1,12 @@
+mesh = "mesh:pine"
+impostor = "tex:pine_impostor"
+impostorDistance = 80.0
+density = 0.05
+scale = [0.9, 1.4]
+rotation = [0.0, 360.0]
+alignToNormal = false
+slope = [0.0, 30.0]
+height = [0.0, 0.0]
+minSpacing = 3.0
+collision = true
+cullDistance = 400.0
