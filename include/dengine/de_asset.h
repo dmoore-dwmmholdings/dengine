@@ -736,6 +736,18 @@ DE_API de_result de_asset_import_fail(de_asset_import_ctx *ctx, de_result result
  *   hierarchy comes from `parent`. Asset references are cook dependencies and load before the
  *   scene or prefab is READY. The output depends only on the content: entities are sorted by
  *   scene ID and components by type name, so the key order of the TOML never matters.
+ *
+ *   A top-level `[prefab]` table is editor data and is skipped. In a prefab it holds the variant
+ *   `base` and the nested prefabs (DENG-571). In a scene, scene.serialize writes one
+ *   `[[prefab.nested]]` entry per prefab instance (DENG-799), after the entities:
+ *
+ *       [[prefab.nested]]
+ *       asset = "props/crate"         # the prefab of the instance
+ *       root = "0x9f3a..."            # the scene ID of the instance root
+ *       ids = [["0x1", "0x9f3a..."]]  # [prefab-local ID, scene ID] per entity of the instance
+ *
+ *   The editor reads these entries back on scene.load and scene.reloadFromText, so prefab
+ *   overrides survive a save. An unpacked instance has no entry.
  */
 
 /** A `scene` asset as a de_prefab handle: a scene is a prefab with any number of roots, and

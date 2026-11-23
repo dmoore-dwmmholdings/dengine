@@ -4,6 +4,7 @@
 #include "host/host_internal.h"
 #include "asset/hot_reload_internal.h"
 #include "asset/load_internal.h"
+#include "ecs/ecs_internal.h"
 #include <dengine/de_asset.h>
 #include <dengine/de_ecs.h>
 #include <dengine/de_math.h>
@@ -11,6 +12,7 @@
 #include <dengine/de_task.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #if !defined(_WIN32)
 #include <unistd.h>
 #endif
@@ -1460,6 +1462,323 @@ TEST_F(editor_prefab_reload, the_editors_own_write_does_not_bump_again_or_fight_
     EXPECT_FLOAT_EQ(health_current(f, &p, a), 70, 0);
     EXPECT_TRUE(overrides_of(f, a, a, "THealth.current").found);
     EXPECT_TRUE(text_eq(read_text(CRATE), crate));
+}
+
+/* ---------- DENG-799: prefab instance links in scene text ---------- */
+
+typedef struct pf_big {
+    mpack_tree_t tree;
+    mpack_node_t root;
+    char buffer[65536];
+} pf_big;
+
+static pf_big g_big;
+static char g_params799[65536];
+
+static void big_call(safety_fx *f, de_ep_method method, const char *params, size_t size) {
+    const de_ep_request req = {.id = 799,
+                               .method = de_ep_cstr(de_ep_method_name(method)),
+                               .params = (de_ep_raw){params, size}};
+    de_ep_arena arena = {f->arena, sizeof f->arena, 0};
+    mpack_writer_t w;
+    mpack_writer_init(&w, g_big.buffer, sizeof g_big.buffer);
+    ASSERT_TRUE(f->ed.handlers[method] != NULL);
+    f->ed.handlers[method](&f->ed, &req, &arena, &w);
+    const size_t used = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    mpack_tree_init_data(&g_big.tree, g_big.buffer, used);
+    mpack_tree_parse(&g_big.tree);
+    ASSERT_EQ(mpack_tree_error(&g_big.tree), mpack_ok);
+    g_big.root = mpack_tree_root(&g_big.tree);
+}
+
+static bool big_failed(void) {
+    return mpack_node_map_contains_cstr(g_big.root, "error");
+}
+
+static char g_saved799[32768];
+
+/* scene.serialize of `scene` into g_saved799. */
+static const char *scene_text(safety_fx *f, u64 scene) {
+    mpack_writer_t w;
+    mpack_writer_init(&w, g_params799, sizeof g_params799);
+    const de_ep_scene_params q = {scene};
+    de_ep_write_scene_params(&w, &q);
+    const size_t n = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    big_call(f, DE_EP_METHOD_SCENE_SERIALIZE, g_params799, n);
+    ASSERT_FALSE(big_failed());
+    const mpack_node_t t = mpack_node_map_cstr(mpack_node_map_cstr(g_big.root, "result"), "text");
+    const size_t len = mpack_node_strlen(t);
+    ASSERT_TRUE(len < sizeof g_saved799);
+    memcpy(g_saved799, mpack_node_str(t), len);
+    g_saved799[len] = '\0';
+    EXPECT_EQ(mpack_tree_destroy(&g_big.tree), mpack_ok);
+    return g_saved799;
+}
+
+/* scene.reloadFromText; true on success. */
+static bool scene_reload(safety_fx *f, u64 scene, const char *text) {
+    mpack_writer_t w;
+    mpack_writer_init(&w, g_params799, sizeof g_params799);
+    const de_ep_scene_reload_params q = {scene, de_ep_cstr(text)};
+    de_ep_write_scene_reload_params(&w, &q);
+    const size_t n = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    big_call(f, DE_EP_METHOD_SCENE_RELOAD_FROM_TEXT, g_params799, n);
+    const bool ok = !big_failed();
+    EXPECT_EQ(mpack_tree_destroy(&g_big.tree), mpack_ok);
+    return ok;
+}
+
+/* scene.load (additive) of `path`; the new scene id, 0 on failure. */
+static u64 scene_load(safety_fx *f, const char *path) {
+    mpack_writer_t w;
+    mpack_writer_init(&w, g_params799, sizeof g_params799);
+    const de_ep_scene_load_params q = {de_ep_cstr(path), true};
+    de_ep_write_scene_load_params(&w, &q);
+    const size_t n = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    big_call(f, DE_EP_METHOD_SCENE_LOAD, g_params799, n);
+    const u64 id = big_failed()
+                       ? 0
+                       : mpack_node_u64(mpack_node_map_cstr(
+                             mpack_node_map_cstr(g_big.root, "result"), "scene"));
+    EXPECT_EQ(mpack_tree_destroy(&g_big.tree), mpack_ok);
+    return id;
+}
+
+static u64 sid_of(de_entity e) {
+    u64 scene = 0, sid = 0;
+    EXPECT_TRUE(de__ed_scene_member(e.bits, &scene, &sid));
+    return sid;
+}
+
+/* The live entity of `scene` with scene ID `sid`, or DE_ENTITY_NULL. */
+static de_entity entity_of(safety_fx *f, u64 scene, u64 sid) {
+    de_world *w = f->engine.world;
+    for (u32 ai = 0; ai < w->archetypes.count; ++ai) {
+        const ecs_archetype *a = ((ecs_archetype *const *)w->archetypes.data)[ai];
+        for (u32 c = 0; c < a->chunks.count; ++c) {
+            const ecs_chunk *ch = ecs_table_chunk(a, c);
+            for (u32 r = 0; r < ch->count; ++r) {
+                const de_entity e = ecs_chunk_entities(ch)[r];
+                u64 sc = 0, s = 0;
+                if (de__ed_scene_member(e.bits, &sc, &s) && sc == scene && s == sid)
+                    return e;
+            }
+        }
+    }
+    return DE_ENTITY_NULL;
+}
+
+/* One override, by scene ID so it compares across a reload. */
+typedef struct pf_ov {
+    u64 sid;
+    char path[64], source[64];
+    char value[128], base[128];
+} pf_ov;
+
+/* A printable form of a MessagePack value, to compare values across a reload. */
+static void text_put(char *out, size_t cap, size_t *at, const char *one) {
+    const size_t k = strlen(one);
+    if (*at + k < cap) {
+        memcpy(out + *at, one, k + 1);
+        *at += k;
+    }
+}
+
+static void node_text(mpack_node_t n, char *out, size_t cap, size_t *at) {
+    char one[80] = {0};
+    switch (mpack_node_type(n)) {
+    case mpack_type_uint:
+        snprintf(one, sizeof one, "u%llu,", (unsigned long long)mpack_node_u64(n));
+        break;
+    case mpack_type_int:
+        snprintf(one, sizeof one, "i%lld,", (long long)mpack_node_i64(n));
+        break;
+    case mpack_type_float:
+        snprintf(one, sizeof one, "f%.9g,", (double)mpack_node_float(n));
+        break;
+    case mpack_type_double:
+        snprintf(one, sizeof one, "d%.17g,", mpack_node_double(n));
+        break;
+    case mpack_type_bool:
+        snprintf(one, sizeof one, "b%d,", mpack_node_bool(n) ? 1 : 0);
+        break;
+    case mpack_type_str:
+        snprintf(one, sizeof one, "s%.*s,", (int)mpack_node_strlen(n), mpack_node_str(n));
+        break;
+    case mpack_type_array:
+        text_put(out, cap, at, "[");
+        for (size_t i = 0; i < mpack_node_array_length(n); ++i)
+            node_text(mpack_node_array_at(n, i), out, cap, at);
+        snprintf(one, sizeof one, "],");
+        break;
+    default:
+        snprintf(one, sizeof one, "t%d,", (int)mpack_node_type(n));
+        break;
+    }
+    text_put(out, cap, at, one);
+}
+
+static int cmp_ov(const void *x, const void *y) {
+    const pf_ov *a = x, *b = y;
+    if (a->sid != b->sid)
+        return a->sid < b->sid ? -1 : 1;
+    return strcmp(a->path, b->path);
+}
+
+/* The overrides of the instance at `root`, sorted by (scene ID, path); -1 if not an instance. */
+static int overrides_all(safety_fx *f, de_entity root, pf_ov out[16]) {
+    char response[2048];
+    mpack_tree_t tree;
+    mpack_node_t r = prefab_call(f, DE_EP_METHOD_PREFAB_OVERRIDES, root, (pf_call){0}, &tree,
+                                 response);
+    if (!mpack_node_map_contains_cstr(r, "result")) {
+        EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
+        return -1;
+    }
+    mpack_node_t list = mpack_node_map_cstr(mpack_node_map_cstr(r, "result"), "overrides");
+    u32 n = (u32)mpack_node_array_length(list);
+    if (n > 16)
+        n = 16;
+    for (u32 i = 0; i < n; ++i) {
+        mpack_node_t o = mpack_node_array_at(list, i);
+        pf_ov *v = &out[i];
+        memset(v, 0, sizeof *v);
+        v->sid = sid_of((de_entity){mpack_node_u64(mpack_node_map_cstr(o, "entity"))});
+        mpack_node_t pth = mpack_node_map_cstr(o, "path");
+        snprintf(v->path, sizeof v->path, "%.*s", (int)mpack_node_strlen(pth),
+                 mpack_node_str(pth));
+        mpack_node_t src = mpack_node_map_cstr(o, "source");
+        snprintf(v->source, sizeof v->source, "%.*s", (int)mpack_node_strlen(src),
+                 mpack_node_str(src));
+        size_t at = 0;
+        node_text(mpack_node_map_cstr(o, "value"), v->value, sizeof v->value, &at);
+        at = 0;
+        node_text(mpack_node_map_cstr(o, "base"), v->base, sizeof v->base, &at);
+    }
+    EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
+    qsort(out, n, sizeof(pf_ov), cmp_ov);
+    return (int)n;
+}
+
+static void expect_same_overrides(const pf_ov *a, int na, const pf_ov *b, int nb) {
+    ASSERT_EQ(na, nb);
+    for (int i = 0; i < na; ++i) {
+        EXPECT_EQ(a[i].sid, b[i].sid);
+        EXPECT_STREQ(a[i].path, b[i].path);
+        EXPECT_STREQ(a[i].source, b[i].source);
+        EXPECT_STREQ(a[i].value, b[i].value);
+        EXPECT_STREQ(a[i].base, b[i].base);
+    }
+}
+
+static size_t count_of(const char *text, const char *what) {
+    size_t n = 0;
+    for (const char *at = strstr(text, what); at != NULL; at = strstr(at + 1, what))
+        ++n;
+    return n;
+}
+
+TEST_F(editor_prefab_links, save_and_reload_keep_the_links_and_overrides, safety_fx) {
+    const pf_world p = prefab_world(f);
+    const de_entity s = spawn_prefab(f, "props/stack");
+    const de_entity inner = first_child(f, s);
+    const de_entity leaf = first_child(f, inner);
+    ASSERT_TRUE(inner.bits != 0 && leaf.bits != 0);
+    ((TTarget *)de_entity_get(f->engine.world, leaf, p.target))->speed = 3;
+    ((THealth *)de_entity_get(f->engine.world, inner, p.health))->max = 61;
+    const de_entity v = spawn_prefab(f, "props/crate_heavy");
+    ((THealth *)de_entity_get(f->engine.world, v, p.health))->max = 1;
+    pf_ov os[16], ov[16], got[16];
+    const int ns = overrides_all(f, s, os), nv = overrides_all(f, v, ov);
+    ASSERT_EQ(ns, 2);
+    ASSERT_EQ(nv, 1);
+    const u64 s_sid = sid_of(s), v_sid = sid_of(v);
+    static char saved[32768];
+    snprintf(saved, sizeof saved, "%s", scene_text(f, 1));
+    EXPECT_EQ(count_of(saved, "[[prefab.nested]]\n"), (size_t)2);
+    EXPECT_TRUE(strstr(saved, "asset = \"props/stack\"\n") != NULL);
+    EXPECT_TRUE(strstr(saved, "asset = \"props/crate_heavy\"\n") != NULL);
+
+    /* scene.reloadFromText: new entities, the same links and overrides, the same bytes. */
+    ASSERT_TRUE(scene_reload(f, 1, saved));
+    const de_entity s2 = entity_of(f, 1, s_sid), v2 = entity_of(f, 1, v_sid);
+    ASSERT_TRUE(s2.bits != 0 && v2.bits != 0);
+    EXPECT_TRUE(s2.bits != s.bits);
+    expect_same_overrides(got, overrides_all(f, s2, got), os, ns);
+    expect_same_overrides(got, overrides_all(f, v2, got), ov, nv);
+    EXPECT_STREQ(scene_text(f, 1), saved);
+    /* The nested crate is no instance root of its own after the reload either. */
+    prefab_fails(f, DE_EP_METHOD_PREFAB_UNPACK, first_child(f, s2), (pf_call){0},
+                 DE_EP_ERR_NOT_FOUND, "not_instance");
+
+    /* From a file: scene.load reads the links too. */
+    char path[256];
+    snprintf(path, sizeof path, "%s/level799.scene.toml", f->copy);
+    ASSERT_EQ(de_file_write_all_atomic(path, saved, strlen(saved)), DE_OK);
+    const u64 sc = scene_load(f, path);
+    ASSERT_TRUE(sc != 0);
+    const de_entity s3 = entity_of(f, sc, s_sid), v3 = entity_of(f, sc, v_sid);
+    ASSERT_TRUE(s3.bits != 0 && v3.bits != 0);
+    expect_same_overrides(got, overrides_all(f, s3, got), os, ns);
+    expect_same_overrides(got, overrides_all(f, v3, got), ov, nv);
+    EXPECT_STREQ(scene_text(f, sc), saved);
+
+    /* A loaded link works like a live one: revert puts back the prefab's value. */
+    const u32 tx = prefab_ok(f, DE_EP_METHOD_PREFAB_REVERT_OVERRIDE, v3,
+                             (pf_call){.path = "THealth.max"});
+    EXPECT_EQ(overrides_all(f, v3, got), 0);
+    transaction(f, DE_EP_METHOD_EDIT_UNDO, tx);
+    EXPECT_EQ(overrides_all(f, v3, got), 1);
+}
+
+TEST_F(editor_prefab_links, scenes_without_links_still_load, safety_fx) {
+    (void)prefab_world(f);
+    const de_entity a = spawn_prefab(f, "props/crate");
+    const u64 a_sid = sid_of(a);
+    static char saved[32768];
+    snprintf(saved, sizeof saved, "%s", scene_text(f, 1));
+    char *link = strstr(saved, "\n[[prefab.nested]]\n");
+    ASSERT_TRUE(link != NULL);
+    *link = '\0'; /* the text as it was before DENG-799 */
+    ASSERT_TRUE(scene_reload(f, 1, saved));
+    const de_entity a2 = entity_of(f, 1, a_sid);
+    ASSERT_TRUE(a2.bits != 0);
+    pf_ov got[16];
+    EXPECT_EQ(overrides_all(f, a2, got), -1);
+    EXPECT_STREQ(scene_text(f, 1), saved);
+    /* A link to an entity that is not in the text, or a malformed one, is skipped. */
+    static char bad[32768];
+    snprintf(bad, sizeof bad,
+             "%s\n[[prefab.nested]]\nasset = \"props/crate\"\nroot = \"0x99\"\nids = []\n"
+             "\n[[prefab.nested]]\nasset = 7\n",
+             saved);
+    ASSERT_TRUE(scene_reload(f, 1, bad));
+    EXPECT_STREQ(scene_text(f, 1), saved);
+    /* An authored scene of the old layout. */
+    EXPECT_TRUE(scene_load(f, "safe676:/assets/level_keyed.scene.toml") != 0);
+}
+
+TEST_F(editor_prefab_links, an_unpacked_instance_saves_no_link, safety_fx) {
+    (void)prefab_world(f);
+    const de_entity a = spawn_prefab(f, "props/crate");
+    const de_entity b = spawn_prefab(f, "props/crate");
+    const u64 a_sid = sid_of(a), b_sid = sid_of(b);
+    (void)prefab_ok(f, DE_EP_METHOD_PREFAB_UNPACK, a, (pf_call){0});
+    static char saved[32768];
+    snprintf(saved, sizeof saved, "%s", scene_text(f, 1));
+    EXPECT_EQ(count_of(saved, "[[prefab.nested]]\n"), (size_t)1);
+    char root_line[64];
+    snprintf(root_line, sizeof root_line, "root = \"0x%016llx\"\n", (unsigned long long)b_sid);
+    EXPECT_TRUE(strstr(saved, root_line) != NULL);
+    ASSERT_TRUE(scene_reload(f, 1, saved));
+    pf_ov got[16];
+    EXPECT_EQ(overrides_all(f, entity_of(f, 1, a_sid), got), -1);
+    EXPECT_EQ(overrides_all(f, entity_of(f, 1, b_sid), got), 0);
+    EXPECT_STREQ(scene_text(f, 1), saved);
 }
 #endif
 
