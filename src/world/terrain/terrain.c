@@ -443,6 +443,64 @@ void de__terrain_bake(DeTerrain *t) {
 
 /* ---------- Heightmaps and tiles ---------- */
 
+/* ---------- Carve (DENG-777) ---------- */
+
+static bool finite32(f32 v) {
+    return v == v && v - v == 0.0f; /* not NaN, not infinite */
+}
+
+/* The horizontal distance from (x, z) to the polyline and its height at the nearest point; the
+ * first segment wins a tie. */
+static void nearest_on(const f32 *path, u32 n, f32 x, f32 z, f32 *dist, f32 *at) {
+    bool any = false;
+    for (u32 i = 0; i + 1 < n; ++i) {
+        const f32 *a = path + 3 * i, *b = path + 3 * (i + 1);
+        const f32 dx = b[0] - a[0], dz = b[2] - a[2];
+        const f32 len2 = dx * dx + dz * dz;
+        const f32 s = len2 > 0.0f ? clampf(((x - a[0]) * dx + (z - a[2]) * dz) / len2, 0.0f, 1.0f)
+                                  : 0.0f;
+        const f32 px = a[0] + dx * s, pz = a[2] + dz * s;
+        const f32 d = de_dsqrt((x - px) * (x - px) + (z - pz) * (z - pz));
+        if (!any || d < *dist) {
+            any = true;
+            *dist = d;
+            *at = a[1] + (b[1] - a[1]) * s;
+        }
+    }
+}
+
+bool de__terrain_carve(DeTerrain *t, f64 ox, f64 oy, f64 oz, const f32 *path, u32 n, f32 width,
+                       f32 falloff, f32 depth) {
+    if (path == NULL || n < 2 || !finite32(width) || !(width > 0.0f) || !finite32(falloff) ||
+        falloff < 0.0f || !finite32(depth))
+        return false;
+    for (u32 i = 0; i < 3 * n; ++i)
+        if (!finite32(path[i]))
+            return false;
+    const f32 half = width / 2.0f;
+    for (u32 y = 0; y < RES; ++y)
+        for (u32 x = 0; x < RES; ++x) {
+            f32 wx, wz;
+            world_of(t, ox, oz, x, y, &wx, &wz);
+            f32 d = 0.0f, at = 0.0f;
+            nearest_on(path, n, wx, wz, &d, &at);
+            f32 w;
+            if (d <= half) {
+                w = 1.0f;
+            } else if (falloff > 0.0f && d < half + falloff) {
+                const f32 s = 1.0f - (d - half) / falloff;
+                w = s * s * (3.0f - 2.0f * s);
+            } else {
+                continue;
+            }
+            const u32 i = y * RES + x;
+            const f32 target = at - (f32)oy - depth;
+            const f32 h = metres(t, i);
+            set_metres(t, i, h + (target - h) * w);
+        }
+    return true;
+}
+
 void de__terrain_region(i32 tx, i32 ty, u32 *x0, u32 *y0, u32 *w, u32 *h) {
     if (tx < 0 || ty < 0) {
         *x0 = *y0 = 0;

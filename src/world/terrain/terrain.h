@@ -16,6 +16,8 @@
  *     clamp(strength) * falloff(distance / radius) * clamp(pressure). The falloff curve is
  *     sampled linearly over 0..1 (empty: 1 - t). Height tools move by weight * step, with step
  *     max(radius / 10, 0.1) m.
+ *   - A carve (spline.carve, DENG-777) pulls the samples near a polyline to its height minus a
+ *     depth, with a smoothstep falloff.
  *   - Tiles are DE_TERRAIN_TILE samples on a side (3 x 3 for the 33 grid). Undo data holds the
  *     changed tiles only. Heightmap import and export of one tile include its far edge, shared
  *     with the next tile.
@@ -88,6 +90,15 @@ bool de__terrain_stroke(DeTerrain *t, f64 ox, f64 oz, const de_terrain_stroke *s
                         const de_terrain_grid *stamp, char *err, size_t err_cap);
 /** Writes the enabled rules into the splat map and turns them off. */
 void de__terrain_bake(DeTerrain *t);
+
+/** spline.carve (DENG-777, DIDE protocol 1.12): moves the terrain under a world-space polyline
+ *  (`n` points, xyz each) to the polyline's height minus `depth`. Samples within width / 2 of the
+ *  polyline (horizontal distance, to its nearest point) move all the way; the next `falloff`
+ *  metres blend back with smoothstep. The terrain is at world (ox, oy, oz). Only heights change.
+ *  False (and `t` unchanged) for fewer than 2 points, width <= 0, falloff < 0 or a value that is
+ *  not finite. The mock's terrain::carve, in the same order of operations. */
+bool de__terrain_carve(DeTerrain *t, f64 ox, f64 oy, f64 oz, const f32 *path, u32 n, f32 width,
+                       f32 falloff, f32 depth);
 
 /** The samples of a heightmap import or export: the whole grid (tx < 0), or tile (tx, ty) with
  *  its shared far edge. */

@@ -1,7 +1,7 @@
 /* DENG-580: a fixed script of terrain strokes (every tool), a bake and a heightmap import on the
  * CPU terrain model; the FNV-1a hash of the component after each step must match the golden file
  * on every platform. Regenerate the golden with DE_DET_UPDATE_TERRAIN_GOLDEN=1, only for an
- * intended change of the model. */
+ * intended change of the model. DENG-777 adds a carve script with its own golden, at the end. */
 #include "de_det_harness.h"
 #include "de_test.h"
 #include "world/terrain/terrain.h"
@@ -115,4 +115,69 @@ TEST(terrain_determinism, strokes_match_golden) {
     ASSERT_EQ(de_det_read_checksums(DE_TERRAIN_DET_GOLDEN, golden, STEPS, &count), DE_OK);
     ASSERT_EQ(count, STEPS);
     EXPECT_EQ(de_det_report("terrain vs golden", golden, actual, STEPS), DE_DET_NO_DIVERGENCE);
+}
+
+/* DENG-777: spline.carve on the CPU model. A raised, noisy terrain carved along fixed world-space
+ * polylines (straight, bent, sloped, off-origin, over the grid edge), with and without falloff;
+ * the hash after each carve must match its own golden. Regenerate with
+ * DE_DET_UPDATE_TERRAIN_CARVE_GOLDEN=1, only for an intended change of the carve. */
+#define CARVE_SEED  0x777u
+#define CARVE_STEPS 8u
+
+static void run_carve(u64 *out) {
+    static DeTerrain t;
+    init(&t);
+    for (u32 i = 0; i < DE_TERRAIN_SAMPLES; ++i) {
+        const f32 x = (f32)(i % DE_TERRAIN_RES), z = (f32)(i / DE_TERRAIN_RES);
+        const f32 m = 6.0f + 2.5f * de__terrain_noise(x * 0.21f, z * 0.17f, CARVE_SEED);
+        t.heights[i] = (u16)(m / t.height * 65535.0f + 0.5f);
+    }
+    static const f32 straight[] = {0.3f, 5.5f, 4.2f, 31.7f, 5.5f, 4.2f};
+    static const f32 bent[] = {2.0f, 7.0f, 30.0f, 9.5f, 6.2f, 21.3f, 16.25f, 5.1f, 18.9f,
+                               27.0f, 4.4f, 9.75f};
+    static const f32 sloped[] = {4.1f, 9.0f, 2.0f, 4.1f, 3.0f, 30.0f};
+    static const f32 edge[] = {-6.0f, 6.0f, 12.0f, 40.0f, 6.5f, 20.0f};
+    static const f32 diag[] = {31.0f, 8.0f, 1.0f, 1.0f, 5.0f, 31.0f};
+    struct { const f32 *p; u32 n; f32 width, falloff, depth; f64 ox, oy, oz; } k[CARVE_STEPS] = {
+        {straight, 2, 2.0f, 2.0f, 1.0f, 0.0, 0.0, 0.0},
+        {bent, 4, 3.3f, 1.7f, 0.6f, 0.0, 0.0, 0.0},
+        {sloped, 2, 1.25f, 3.5f, 0.0f, 0.0, 0.0, 0.0},
+        {edge, 2, 4.0f, 0.0f, -1.5f, 0.0, 0.0, 0.0}, /* a raised berm, no falloff */
+        {diag, 2, 0.8f, 2.4f, 2.2f, 0.0, 0.0, 0.0},
+        {bent, 4, 1.9f, 0.9f, 0.3f, 3.5, 1.25, -2.75}, /* the terrain moved: ox, oy, oz */
+        {straight, 2, 64.0f, 0.0f, 0.0f, 0.0, 0.0, 0.0}, /* the whole grid to the curve */
+        {sloped, 2, 2.6f, 5.0f, 40.0f, 0.0, 0.0, 0.0},  /* clamps to the bottom */
+    };
+    for (u32 i = 0; i < CARVE_STEPS; ++i) {
+        ASSERT_TRUE(de__terrain_carve(&t, k[i].ox, k[i].oy, k[i].oz, k[i].p, k[i].n, k[i].width,
+                                      k[i].falloff, k[i].depth));
+        out[i] = hash_of(&t);
+    }
+}
+
+TEST(terrain_determinism, carve_repeat_runs_match) {
+    u64 a[CARVE_STEPS], b[CARVE_STEPS];
+    run_carve(a);
+    run_carve(b);
+    EXPECT_EQ(de_det_report("terrain carve run 1 vs 2", a, b, CARVE_STEPS), DE_DET_NO_DIVERGENCE);
+}
+
+TEST(terrain_determinism, carve_matches_golden) {
+    u64 actual[CARVE_STEPS];
+    run_carve(actual);
+    const char *update = getenv("DE_DET_UPDATE_TERRAIN_CARVE_GOLDEN");
+    if (update != NULL && update[0] == '1')
+        ASSERT_EQ(de_det_write_checksums(DE_TERRAIN_CARVE_DET_GOLDEN, "terrain_carve", CARVE_SEED,
+                                         actual, CARVE_STEPS),
+                  DE_OK);
+    ASSERT_EQ(de_det_write_checksums(DE_DET_OUT_DIR "/terrain_carve.checksums", "terrain_carve",
+                                     CARVE_SEED, actual, CARVE_STEPS),
+              DE_OK);
+    u64 golden[CARVE_STEPS];
+    u32 count = 0;
+    ASSERT_EQ(de_det_read_checksums(DE_TERRAIN_CARVE_DET_GOLDEN, golden, CARVE_STEPS, &count),
+              DE_OK);
+    ASSERT_EQ(count, CARVE_STEPS);
+    EXPECT_EQ(de_det_report("terrain carve vs golden", golden, actual, CARVE_STEPS),
+              DE_DET_NO_DIVERGENCE);
 }
