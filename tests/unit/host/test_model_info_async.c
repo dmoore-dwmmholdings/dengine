@@ -19,11 +19,20 @@ static bool model_send(de__editor *ed, mpack_writer_t *w, u8 kind);
 #define de__ed_send            model_send
 #define de__ed_assets_register model_register
 #define de__ed_assets_shutdown model_shutdown
+/* Other host objects (editor_scene.c) reference these; keep the included copies private. */
+#define de__ed_asset_source       model_asset_source
+#define de__ed_asset_source_vpath model_asset_source_vpath
+#define de__ed_asset_source_path  model_asset_source_path
+#define de__ed_asset_nth          model_asset_nth
 #include "host/editor/editor_assets.c"
 #undef de_time_now_ns
 #undef de__ed_send
 #undef de__ed_assets_register
 #undef de__ed_assets_shutdown
+#undef de__ed_asset_source
+#undef de__ed_asset_source_vpath
+#undef de__ed_asset_source_path
+#undef de__ed_asset_nth
 
 static bool model_send(de__editor *ed, mpack_writer_t *w, u8 kind) {
     (void)kind;
