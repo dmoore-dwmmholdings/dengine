@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.17"
-#define DE_EP_SCHEMA_HASH "15fa7630ebb8df20"
+#define DE_EP_PROTOCOL_VERSION "1.18"
+#define DE_EP_SCHEMA_HASH "bbb34c8b69b9e8f8"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -130,6 +130,7 @@ typedef struct de_ep_animation_joint_frame de_ep_animation_joint_frame;
 typedef struct de_ep_animation_metadata de_ep_animation_metadata;
 typedef struct de_ep_animation_preview de_ep_animation_preview;
 typedef struct de_ep_animation_preview_params de_ep_animation_preview_params;
+typedef struct de_ep_apply_result de_ep_apply_result;
 typedef struct de_ep_archetype de_ep_archetype;
 typedef struct de_ep_archetype_list de_ep_archetype_list;
 typedef struct de_ep_asset_event de_ep_asset_event;
@@ -237,6 +238,7 @@ typedef struct de_ep_peer_checksum de_ep_peer_checksum;
 typedef struct de_ep_pick_params de_ep_pick_params;
 typedef struct de_ep_pick_rect_params de_ep_pick_rect_params;
 typedef struct de_ep_pick_result de_ep_pick_result;
+typedef struct de_ep_prefab_error_data de_ep_prefab_error_data;
 typedef struct de_ep_prefab_instantiate_params de_ep_prefab_instantiate_params;
 typedef struct de_ep_query_params de_ep_query_params;
 typedef struct de_ep_query_result de_ep_query_result;
@@ -248,6 +250,7 @@ typedef struct de_ep_replay_seek_params de_ep_replay_seek_params;
 typedef struct de_ep_replay_speed_params de_ep_replay_speed_params;
 typedef struct de_ep_replay_tick de_ep_replay_tick;
 typedef struct de_ep_resource_list de_ep_resource_list;
+typedef struct de_ep_revert_result de_ep_revert_result;
 typedef struct de_ep_scene_info de_ep_scene_info;
 typedef struct de_ep_scene_list de_ep_scene_list;
 typedef struct de_ep_scene_load_params de_ep_scene_load_params;
@@ -644,6 +647,14 @@ struct de_ep_animation_preview_params {
     uint32_t skeleton_version; /* Send both known tokens to omit unchanged metadata; omit both initially. */
 };
 
+/* The result of prefab.applyOverride. */
+struct de_ep_apply_result {
+    uint32_t tx; /* the edit transaction that holds the change; one undo step */
+    uint64_t revision; /* the prefab revision after the change */
+    de_ep_list_str prefabs; /* the prefab definitions written */
+    de_ep_list_u64 entities; /* the instance entities whose base changed */
+};
+
 struct de_ep_archetype {
     de_ep_list_str components;
     uint32_t count;
@@ -909,7 +920,7 @@ struct de_ep_edit_begin_params {
     de_ep_str merge_key;
 };
 
-/* One operation. `op` is spawn, despawn, add, remove, set, reparent, instantiate or uninstantiate; the other fields are the ones that op uses. `instantiate` (`path` the prefab asset, `scene`, optional `parent`) spawns a prefab instance and returns its root in `assignedIds`; its inverse is `uninstantiate`. `uninstantiate` (`entity` the instance root; any other entity is INVALID_PARAMS) removes the tree, its scene memberships and the instance record; its inverse is `instantiate` with `value` an opaque snapshot, which restores the same entity ids, scene ids, components and instance record (CONFLICT if an id is taken). `edit.undo` and `edit.redo` replace each pair's other side with the inverse the replay returns. With the optional world.terrain capability (protocol 1.11) there are four more, each on the terrain `entity`: `terrain.stroke` (`value` a TerrainStroke as a map), `terrain.import` (`path` a heightmap file, `value` a map with `format` and an optional `tile` [x, y]), `terrain.bake` (writes the enabled auto-material rules into the splat map and turns them off) and `terrain.restore` (`value` opaque: the tiles one of the others changed, as they were). The inverse of each is a `terrain.restore`. With the optional world.splines capability (protocol 1.12) there is `spline.carve` on a terrain `entity` (`value` a SplineCarve as a map), whose inverse is also a `terrain.restore`. Since protocol 1.14, `spawn`, `reparent` and `instantiate` take an optional `index`: the sibling position under `parent`, counted without the entity itself. Absent, or at or past the end, appends; a `reparent` to the same parent reorders. The inverse of a `reparent` carries the entity's old index, so undo restores the order. */
+/* One operation. `op` is spawn, despawn, add, remove, set, reparent, instantiate or uninstantiate; the other fields are the ones that op uses. `instantiate` (`path` the prefab asset, `scene`, optional `parent`) spawns a prefab instance and returns its root in `assignedIds`; its inverse is `uninstantiate`. `uninstantiate` (`entity` the instance root; any other entity is INVALID_PARAMS) removes the tree, its scene memberships and the instance record; its inverse is `instantiate` with `value` an opaque snapshot, which restores the same entity ids, scene ids, components and instance record (CONFLICT if an id is taken). `edit.undo` and `edit.redo` replace each pair's other side with the inverse the replay returns. With the optional world.terrain capability (protocol 1.11) there are four more, each on the terrain `entity`: `terrain.stroke` (`value` a TerrainStroke as a map), `terrain.import` (`path` a heightmap file, `value` a map with `format` and an optional `tile` [x, y]), `terrain.bake` (writes the enabled auto-material rules into the splat map and turns them off) and `terrain.restore` (`value` opaque: the tiles one of the others changed, as they were). The inverse of each is a `terrain.restore`. With the optional world.splines capability (protocol 1.12) there is `spline.carve` on a terrain `entity` (`value` a SplineCarve as a map), whose inverse is also a `terrain.restore`. Since protocol 1.14, `spawn`, `reparent` and `instantiate` take an optional `index`: the sibling position under `parent`, counted without the entity itself. Absent, or at or past the end, appends; a `reparent` to the same parent reorders. The inverse of a `reparent` carries the entity's old index, so undo restores the order. Since protocol 1.18 there is `prefab.state` (`value` opaque: prefab definition and instance base values), which `prefab.applyOverride` writes and whose inverse is another `prefab.state`. Clients do not author it; `edit.undo` and `edit.redo` replay it, and each replay bumps the prefab revision. */
 struct de_ep_edit_op {
     de_ep_str op;
     bool has_scene;
@@ -1370,17 +1381,33 @@ struct de_ep_net_sim_params {
 };
 
 struct de_ep_override {
-    de_ep_str path;
-    de_ep_raw value;
+    de_ep_str path; /* Component.field */
+    de_ep_raw value; /* the instance's value */
+    uint64_t entity; /* the overridden entity (the query covers the entity's subtree) */
+    de_ep_raw base; /* the value the instance inherits */
+    de_ep_str source; /* the prefab that sets the inherited value (variant base or nesting prefab); one of chain */
+    de_ep_list_str chain; /* the prefab chain, nearest first: the instance's prefab .. the root definition */
+    de_ep_list_u64 ids; /* the entity's prefab-local id in each chain level; as long as chain */
 };
 
+/* The result of prefab.overrides. */
 struct de_ep_override_list {
     de_ep_list_override overrides;
+    de_ep_str asset; /* the instance's prefab */
+    uint64_t root; /* the instance root */
+    uint64_t revision; /* the prefab revision; bumps on every apply, undo and redo */
 };
 
+/* The params of prefab.applyOverride and prefab.revertOverride. */
 struct de_ep_override_path_params {
     uint64_t entity;
-    de_ep_str path;
+    de_ep_str path; /* Component.field */
+    bool has_target;
+    de_ep_str target; /* applyOverride only: the chain asset to write; absent means chain[0]. Not in the chain is INVALID_PARAMS reason target */
+    bool has_revision;
+    uint64_t revision; /* optimistic check against the prefab revision; a mismatch is CONFLICT reason stale */
+    bool has_tx;
+    uint32_t tx; /* join this open edit transaction instead of opening and committing one */
 };
 
 struct de_ep_path_result {
@@ -1423,6 +1450,12 @@ struct de_ep_pick_result {
     float distance;
     bool has_ui_stack;
     de_ep_list_ui_pick_hit ui_stack; /* ui.editor (protocol 1.15): every UI node under the point, topmost first; absent when there is none */
+};
+
+/* The error data of prefab.overrides, prefab.applyOverride and prefab.revertOverride. reason by code: not_found not_instance, no_field; invalid_params path, target, params; conflict stale, not_override; wrong_mode play_mode; unsupported no_definition, outside_prefab (an entity value refers outside the target prefab); busy memory, too_large. Edit errors pass through with reason edit. */
+struct de_ep_prefab_error_data {
+    de_ep_str reason;
+    uint64_t revision; /* the current prefab revision */
 };
 
 struct de_ep_prefab_instantiate_params {
@@ -1493,6 +1526,12 @@ struct de_ep_resource_list {
     de_ep_map_raw resources;
 };
 
+/* The result of prefab.revertOverride. */
+struct de_ep_revert_result {
+    uint32_t tx; /* the edit transaction that holds the set */
+    uint64_t revision; /* the prefab revision (a revert does not change it) */
+};
+
 struct de_ep_scene_info {
     uint64_t scene;
     de_ep_str path;
@@ -1504,6 +1543,7 @@ struct de_ep_scene_list {
     de_ep_list_scene_info scenes;
 };
 
+/* Loads the scene file at `path`, replacing the loaded scenes unless `additive`. A malformed scene text is an INVALID_PARAMS error whose `data` is `{reason, line, entity, component}`: `reason` is one of `syntax` (not TOML), `shape` (wrong table or field layout), `id` (a missing or bad scene ID), `duplicate` (a scene ID used twice), `parent` (a parent that is not in the text) or `value` (a component value of the wrong type); `line` is 1-based, and `entity` (scene ID) and `component` name the failing table where there is one, else null. The text is either the keyed `[entity.0x<16 hex>]` layout (components as sub-tables, sorted by scene ID) or the legacy `[[entity]]` array. Both methods exist since protocol 1.17; documenting the error data is not a protocol change. */
 struct de_ep_scene_load_params {
     de_ep_str path;
     bool additive;
@@ -1513,6 +1553,7 @@ struct de_ep_scene_params {
     uint64_t scene;
 };
 
+/* Replaces scene `scene` with the entities in `text`. A malformed scene text is an INVALID_PARAMS error whose `data` is `{reason, line, entity, component}`: `reason` is one of `syntax` (not TOML), `shape` (wrong table or field layout), `id` (a missing or bad scene ID), `duplicate` (a scene ID used twice), `parent` (a parent that is not in the text) or `value` (a component value of the wrong type); `line` is 1-based, and `entity` (scene ID) and `component` name the failing table where there is one, else null. The text is either the keyed `[entity.0x<16 hex>]` layout (components as sub-tables, sorted by scene ID) or the legacy `[[entity]]` array. Both methods exist since protocol 1.17; documenting the error data is not a protocol change. */
 struct de_ep_scene_reload_params {
     uint64_t scene;
     de_ep_str text;
@@ -2105,6 +2146,8 @@ void de_ep_write_animation_preview(mpack_writer_t *w, const de_ep_animation_prev
 void de_ep_read_animation_preview(mpack_reader_t *r, de_ep_arena *a, de_ep_animation_preview *out);
 void de_ep_write_animation_preview_params(mpack_writer_t *w, const de_ep_animation_preview_params *v);
 void de_ep_read_animation_preview_params(mpack_reader_t *r, de_ep_arena *a, de_ep_animation_preview_params *out);
+void de_ep_write_apply_result(mpack_writer_t *w, const de_ep_apply_result *v);
+void de_ep_read_apply_result(mpack_reader_t *r, de_ep_arena *a, de_ep_apply_result *out);
 void de_ep_write_archetype(mpack_writer_t *w, const de_ep_archetype *v);
 void de_ep_read_archetype(mpack_reader_t *r, de_ep_arena *a, de_ep_archetype *out);
 void de_ep_write_archetype_list(mpack_writer_t *w, const de_ep_archetype_list *v);
@@ -2319,6 +2362,8 @@ void de_ep_write_pick_rect_params(mpack_writer_t *w, const de_ep_pick_rect_param
 void de_ep_read_pick_rect_params(mpack_reader_t *r, de_ep_arena *a, de_ep_pick_rect_params *out);
 void de_ep_write_pick_result(mpack_writer_t *w, const de_ep_pick_result *v);
 void de_ep_read_pick_result(mpack_reader_t *r, de_ep_arena *a, de_ep_pick_result *out);
+void de_ep_write_prefab_error_data(mpack_writer_t *w, const de_ep_prefab_error_data *v);
+void de_ep_read_prefab_error_data(mpack_reader_t *r, de_ep_arena *a, de_ep_prefab_error_data *out);
 void de_ep_write_prefab_instantiate_params(mpack_writer_t *w, const de_ep_prefab_instantiate_params *v);
 void de_ep_read_prefab_instantiate_params(mpack_reader_t *r, de_ep_arena *a, de_ep_prefab_instantiate_params *out);
 void de_ep_write_query_params(mpack_writer_t *w, const de_ep_query_params *v);
@@ -2341,6 +2386,8 @@ void de_ep_write_replay_tick(mpack_writer_t *w, const de_ep_replay_tick *v);
 void de_ep_read_replay_tick(mpack_reader_t *r, de_ep_arena *a, de_ep_replay_tick *out);
 void de_ep_write_resource_list(mpack_writer_t *w, const de_ep_resource_list *v);
 void de_ep_read_resource_list(mpack_reader_t *r, de_ep_arena *a, de_ep_resource_list *out);
+void de_ep_write_revert_result(mpack_writer_t *w, const de_ep_revert_result *v);
+void de_ep_read_revert_result(mpack_reader_t *r, de_ep_arena *a, de_ep_revert_result *out);
 void de_ep_write_scene_info(mpack_writer_t *w, const de_ep_scene_info *v);
 void de_ep_read_scene_info(mpack_reader_t *r, de_ep_arena *a, de_ep_scene_info *out);
 void de_ep_write_scene_list(mpack_writer_t *w, const de_ep_scene_list *v);
@@ -2773,13 +2820,13 @@ void de_ep_write_response_pick_rect(mpack_writer_t *w, uint64_t id, const de_ep_
 bool de_ep_read_params_ping(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
 void de_ep_write_response_ping(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_prefab_apply_override(const de_ep_request *req, de_ep_arena *a, de_ep_override_path_params *out);
-void de_ep_write_response_prefab_apply_override(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+void de_ep_write_response_prefab_apply_override(mpack_writer_t *w, uint64_t id, const de_ep_apply_result *result);
 bool de_ep_read_params_prefab_instantiate(const de_ep_request *req, de_ep_arena *a, de_ep_prefab_instantiate_params *out);
 void de_ep_write_response_prefab_instantiate(mpack_writer_t *w, uint64_t id, const de_ep_entity_result_one *result);
 bool de_ep_read_params_prefab_overrides(const de_ep_request *req, de_ep_arena *a, de_ep_entity_ref *out);
 void de_ep_write_response_prefab_overrides(mpack_writer_t *w, uint64_t id, const de_ep_override_list *result);
 bool de_ep_read_params_prefab_revert_override(const de_ep_request *req, de_ep_arena *a, de_ep_override_path_params *out);
-void de_ep_write_response_prefab_revert_override(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+void de_ep_write_response_prefab_revert_override(mpack_writer_t *w, uint64_t id, const de_ep_revert_result *result);
 bool de_ep_read_params_reflect_asset_types(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
 void de_ep_write_response_reflect_asset_types(mpack_writer_t *w, uint64_t id, const de_ep_asset_type_list *result);
 bool de_ep_read_params_reflect_cvars(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);

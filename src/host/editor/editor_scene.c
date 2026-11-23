@@ -1817,44 +1817,6 @@ static de_ep_raw base_raw(const ed_instance *inst, const ed_base *b) {
     return (de_ep_raw){(const char *)inst->bytes + b->off, b->len};
 }
 
-/* Protocol 1.18 params that the 1.17 readers skip: `target`, `revision` and `tx`. */
-typedef struct pf_extra {
-    char target[256];
-    bool has_revision;
-    u64 revision;
-    u32 tx;
-} pf_extra;
-
-static void read_extra(const de_ep_request *req, pf_extra *x) {
-    memset(x, 0, sizeof *x);
-    mpack_reader_t r;
-    mpack_reader_init_data(&r, req->params.ptr, req->params.len);
-    const u32 n = mpack_expect_map(&r);
-    for (u32 i = 0; i < n && mpack_reader_error(&r) == mpack_ok; ++i) {
-        de_ep_kv_raw kv;
-        if (!de__ed_raw_map_entry(&r, &kv))
-            break;
-        mpack_reader_t v;
-        mpack_reader_init_data(&v, kv.value.ptr, kv.value.len);
-        if (de_ep_str_eq(kv.key, "target")) {
-            mpack_expect_cstr(&v, x->target, sizeof x->target);
-            if (mpack_reader_error(&v) != mpack_ok)
-                x->target[0] = '\0';
-        } else if (de_ep_str_eq(kv.key, "revision")) {
-            x->revision = mpack_expect_u64(&v);
-            x->has_revision = mpack_reader_error(&v) == mpack_ok;
-        } else if (de_ep_str_eq(kv.key, "tx")) {
-            x->tx = mpack_expect_u32(&v);
-            if (mpack_reader_error(&v) != mpack_ok)
-                x->tx = 0;
-        }
-        (void)mpack_reader_destroy(&v);
-    }
-    /* DENG-805: close the params map, or MPACK_DEBUG read tracking breaks in destroy. */
-    mpack_done_map(&r);
-    (void)mpack_reader_destroy(&r);
-}
-
 /* {id, error: {code, message, data: {reason, revision}}} */
 static void prefab_error(mpack_writer_t *w, u64 id, de_ep_error code, const char *reason,
                          const char *fmt, ...) DE_PRINTF_FMT(5, 6);
@@ -1875,12 +1837,8 @@ static void prefab_error(mpack_writer_t *w, u64 id, de_ep_error code, const char
     mpack_write_cstr(w, "message");
     mpack_write_cstr(w, msg);
     mpack_write_cstr(w, "data");
-    mpack_start_map(w, 2);
-    mpack_write_cstr(w, "reason");
-    mpack_write_cstr(w, reason);
-    mpack_write_cstr(w, "revision");
-    mpack_write_u64(w, g_prefab.revision);
-    mpack_finish_map(w);
+    de_ep_write_prefab_error_data(
+        w, &(const de_ep_prefab_error_data){de_ep_cstr(reason), g_prefab.revision});
     mpack_finish_map(w);
     mpack_finish_map(w);
 }
@@ -1947,45 +1905,42 @@ static void on_overrides(de__editor *ed, const de_ep_request *req, de_ep_arena *
                !level_owns(a, entity, row->lv, row->levels, row->source, b->path))
             ++row->source;
     }
-    de_ep_write_result_begin(w, req->id);
-    mpack_start_map(w, 4);
-    mpack_write_cstr(w, "overrides");
-    mpack_start_array(w, n);
+    de_ep_override *out = n ? (de_ep_override *)de__ed_alloc(a, sizeof(de_ep_override) * n) : NULL;
+    if (n && out == NULL) {
+        prefab_error(w, req->id, DE_EP_ERR_BUSY, "memory", "out of scratch memory");
+        return;
+    }
     for (u32 i = 0; i < n; ++i) {
         const pf_row *row = &rows[i];
-        mpack_start_map(w, 7);
-        mpack_write_cstr(w, "path");
-        mpack_write_cstr(w, row->b->path);
-        mpack_write_cstr(w, "value");
-        mpack_write_object_bytes(w, row->cur.ptr, row->cur.len);
-        mpack_write_cstr(w, "entity");
-        mpack_write_u64(w, row->b->entity);
-        mpack_write_cstr(w, "base");
-        mpack_write_object_bytes(w, (const char *)inst->bytes + row->b->off, row->b->len);
-        mpack_write_cstr(w, "source");
-        mpack_write_cstr(w, row->source < row->levels ? row->lv[row->source].d->asset
-                                                      : inst->asset);
-        mpack_write_cstr(w, "chain");
-        mpack_start_array(w, row->levels);
-        for (u32 k = 0; k < row->levels; ++k)
-            mpack_write_cstr(w, row->lv[k].d->asset);
-        mpack_finish_array(w);
-        mpack_write_cstr(w, "ids");
-        mpack_start_array(w, row->levels);
-        for (u32 k = 0; k < row->levels; ++k)
-            mpack_write_u64(w, row->lv[k].sid);
-        mpack_finish_array(w);
-        mpack_finish_map(w);
+        de_ep_str *chain =
+            row->levels ? (de_ep_str *)de__ed_alloc(a, sizeof(de_ep_str) * row->levels) : NULL;
+        u64 *ids = row->levels ? (u64 *)de__ed_alloc(a, sizeof(u64) * row->levels) : NULL;
+        if (row->levels && (chain == NULL || ids == NULL)) {
+            prefab_error(w, req->id, DE_EP_ERR_BUSY, "memory", "out of scratch memory");
+            return;
+        }
+        for (u32 k = 0; k < row->levels; ++k) {
+            chain[k] = de_ep_cstr(row->lv[k].d->asset);
+            ids[k] = row->lv[k].sid;
+        }
+        out[i] = (de_ep_override){
+            .path = de_ep_cstr(row->b->path),
+            .value = row->cur,
+            .entity = row->b->entity,
+            .base = base_raw(inst, row->b),
+            .source = de_ep_cstr(row->source < row->levels ? row->lv[row->source].d->asset
+                                                           : inst->asset),
+            .chain = {chain, row->levels},
+            .ids = {ids, row->levels},
+        };
     }
-    mpack_finish_array(w);
-    mpack_write_cstr(w, "asset");
-    mpack_write_cstr(w, inst->asset);
-    mpack_write_cstr(w, "root");
-    mpack_write_u64(w, inst->root);
-    mpack_write_cstr(w, "revision");
-    mpack_write_u64(w, g_prefab.revision);
-    mpack_finish_map(w);
-    de_ep_write_result_end(w);
+    const de_ep_override_list res = {
+        .overrides = {out, n},
+        .asset = de_ep_cstr(inst->asset),
+        .root = inst->root,
+        .revision = g_prefab.revision,
+    };
+    de_ep_write_response_prefab_overrides(w, req->id, &res);
 }
 
 /* ---------- Prefab source files (DENG-798) ----------
@@ -2038,16 +1993,16 @@ static u64 instance_scene(u64 root) {
 }
 
 static bool reject_request(de__editor *ed, const de_ep_request *req, mpack_writer_t *w,
-                           const pf_extra *x) {
+                           const de_ep_override_path_params *q) {
     if (ed->mode != DE_EP_WORLD_MODE_EDIT) {
         prefab_error(w, req->id, DE_EP_ERR_WRONG_MODE, "play_mode",
                      "prefabs can't change during a play session");
         return true;
     }
-    if (x->has_revision && x->revision != g_prefab.revision) {
+    if (q->has_revision && q->revision != g_prefab.revision) {
         prefab_error(w, req->id, DE_EP_ERR_CONFLICT, "stale",
                      "prefab revision %llu is not the current %llu",
-                     (unsigned long long)x->revision, (unsigned long long)g_prefab.revision);
+                     (unsigned long long)q->revision, (unsigned long long)g_prefab.revision);
         return true;
     }
     return false;
@@ -2064,9 +2019,7 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
         prefab_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "params", "bad params");
         return;
     }
-    pf_extra x;
-    read_extra(req, &x);
-    if (reject_request(ed, req, w, &x))
+    if (reject_request(ed, req, w, &q))
         return;
     char *path = de__ed_cstr(a, q.path);
     bool entity = false;
@@ -2099,12 +2052,12 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
         return;
     }
     u32 t = 0;
-    if (x.target[0] != '\0') {
-        while (t < levels && strcmp(lv[t].d->asset, x.target) != 0)
+    if (q.has_target && q.target.len > 0) {
+        while (t < levels && !de_ep_str_eq(q.target, lv[t].d->asset))
             ++t;
         if (t == levels) {
             prefab_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "target",
-                         "%s is not in the prefab chain of %s", x.target, path);
+                         "%.*s is not in the prefab chain of %s", (int)q.target.len, q.target.ptr, path);
             return;
         }
     }
@@ -2257,12 +2210,14 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
     char msg[256];
     g_files.reason = NULL;
     g_files.written = 0;
-    const u32 tx = de__ed_edit_run(ed, a, x.tx, instance_scene(root), ops, no, &code, msg, sizeof msg);
+    const u32 tx = de__ed_edit_run(ed, a, q.has_tx ? q.tx : 0, instance_scene(root), ops, no, &code, msg, sizeof msg);
     if (tx == 0) {
         prefab_error(w, req->id, code, g_files.reason ? g_files.reason : "edit", "%s", msg);
         return;
     }
     de_ep_write_result_begin(w, req->id);
+    /* The 1.18 ApplyResult (tx, revision, prefabs, entities) plus `files` (DENG-798), which the
+     * schema does not list, so this one result stays hand-written. */
     mpack_start_map(w, 5);
     mpack_write_cstr(w, "files"); /* the prefab sources written (DENG-798) */
     mpack_start_array(w, g_files.written);
@@ -2295,9 +2250,7 @@ static void on_revert(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
         prefab_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "params", "bad params");
         return;
     }
-    pf_extra x;
-    read_extra(req, &x);
-    if (reject_request(ed, req, w, &x))
+    if (reject_request(ed, req, w, &q))
         return;
     char *path = de__ed_cstr(a, q.path);
     bool entity = false;
@@ -2335,19 +2288,13 @@ static void on_revert(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
     de_ep_error code = DE_EP_OK;
     char msg[256];
     const u32 tx =
-        de__ed_edit_run(ed, a, x.tx, instance_scene(inst->root), &op, 1, &code, msg, sizeof msg);
+        de__ed_edit_run(ed, a, q.has_tx ? q.tx : 0, instance_scene(inst->root), &op, 1, &code, msg, sizeof msg);
     if (tx == 0) {
         prefab_error(w, req->id, code, "edit", "%s", msg);
         return;
     }
-    de_ep_write_result_begin(w, req->id);
-    mpack_start_map(w, 2);
-    mpack_write_cstr(w, "tx");
-    mpack_write_u32(w, tx);
-    mpack_write_cstr(w, "revision");
-    mpack_write_u64(w, g_prefab.revision);
-    mpack_finish_map(w);
-    de_ep_write_result_end(w);
+    const de_ep_revert_result res = {.tx = tx, .revision = g_prefab.revision};
+    de_ep_write_response_prefab_revert_override(w, req->id, &res);
 }
 
 /* One `defs` or `bases` entry of a prefab.state value. */
