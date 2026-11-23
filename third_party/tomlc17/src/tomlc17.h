@@ -117,6 +117,8 @@ struct toml_result_t {
   bool ok;             /**< True if parsing was successful */
   toml_datum_t toptab; /**< The top-level table (valid if ok is true) */
   char errmsg[200];    /**< Error message (valid if ok is false) */
+  /* Engine extension: 1-based error line and column; 0 when unknown. */
+  int errline, errcol;
   void *__internal;    /**< Internal state, do not use */
 };
 

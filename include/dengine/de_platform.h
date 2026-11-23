@@ -1017,6 +1017,57 @@ DE_API u32 de_thread_current_id(void);
 /** Number of logical cores this process may run on. At least 1. */
 DE_API u32 de_cpu_logical_cores(void);
 
+/* ---------- Timing-critical threads (DENG-726) ----------
+ * Implementation: src/platform/thread_timing.c. */
+
+/**
+ * Settings of de_thread_set_timing_critical(). `(de_thread_timing_desc){0}` is valid: a 60 Hz
+ * loop that needs half of each period.
+ */
+typedef struct de_thread_timing_desc {
+    /** How often the thread wakes up to do its work; 0 = 1e9 / 60. At most 1 s. */
+    u64 period_ns;
+    /**
+     * CPU time per period that must run on time (the work plus the sleep spin); 0 = half the
+     * period. At most `period_ns`. The OS may clamp it (macOS: 50 us to 50 ms).
+     */
+    u64 computation_ns;
+} de_thread_timing_desc;
+
+/**
+ * Marks the calling thread as timing-critical, so that OS sleeps (de_sleep_until_ns) wake on
+ * time and the spin before a deadline is not preempted by ordinary threads under CPU contention.
+ * Opt-in: no engine thread is timing-critical unless it calls this (the host loop does so only
+ * when game.toml sets `[timing] timing_critical_thread = true`).
+ *
+ * - macOS: Mach `THREAD_TIME_CONSTRAINT_POLICY` (period, computation, constraint = period,
+ *   preemptible). No privileges are needed.
+ * - Windows: MMCSS task "Games" (`AvSetMmThreadCharacteristicsW` from avrt.dll, loaded at run
+ *   time); `computation_ns` is not used.
+ * - Linux: `SCHED_FIFO` (priority 10, reset on fork) for the thread. It needs CAP_SYS_NICE or
+ *   an RLIMIT_RTPRIO of at least 10; without it the call returns DE_ERR_UNSUPPORTED and the
+ *   thread keeps its normal scheduling. rtkit is not used.
+ *
+ * Keep the work of a timing-critical thread bounded and let it block every period: the kernels
+ * demote (macOS, Windows MMCSS) or throttle (Linux) a real-time thread that keeps the CPU, and a
+ * SCHED_FIFO thread that never blocks starves ordinary threads on its core. Calling it again
+ * replaces the settings. Not inherited by threads the caller creates.
+ *
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (`desc` NULL, `period_ns` above 1 s, or
+ *         `computation_ns` above the period); DE_ERR_UNSUPPORTED (the OS or its privileges do
+ *         not allow it: the thread is unchanged); or DE_ERR_INTERNAL.
+ */
+DE_API de_result de_thread_set_timing_critical(const de_thread_timing_desc *desc);
+
+/**
+ * Returns the calling thread to normal scheduling after de_thread_set_timing_critical(). Does
+ * nothing on a thread that is not timing-critical.
+ */
+DE_API void de_thread_clear_timing_critical(void);
+
+/** True when the calling thread is timing-critical (the last set succeeded and was not cleared). */
+DE_API bool de_thread_is_timing_critical(void);
+
 /* ---------- Synchronization ----------
  * All objects live in caller-provided storage, are not movable or copyable once initialized,
  * and must be destroyed by the caller. init/destroy are not thread-safe; everything else is.

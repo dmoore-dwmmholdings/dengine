@@ -15,8 +15,13 @@
  *
  * Debug and Dev builds with the tools (DE_HAS_COOKER) cook `.slang` sources on demand in SOURCE
  * mode through the in-process cooker and its `.decache`; Release and Shipping load cooked data
- * from packs (`de-cook cook` writes it). With the renderer (S12) the renderer registers the type
- * itself: do not call de_shader_register_type then.
+ * from packs only (DENG-789). A game's own shaders get there through de_add_game(ASSETS
+ * <assets.toml>): a Release or Shipping build cooks that manifest into `<game dir>/game.dpak`,
+ * and the host mounts every game:/ pack at engine create, so the same manifest IDs resolve.
+ *
+ * The renderer does not register the type on the engine's asset system (de_engine.assets): a
+ * game that loads its own shader assets calls de_shader_register_type there once, in init,
+ * before it loads its manifest. DE_ERR_ALREADY_EXISTS means another part of the game did so.
  *
  * Not available without a GPU module (DE_HEADLESS): the functions are not linked there.
  */

@@ -160,6 +160,50 @@ de_result de_text_layout_build(de_text_system *t, const de_text_layout_desc *d,
 de_vec2 de_text_layout_size(const de_text_layout *l) {
     return l ? l->size : (de_vec2){0};
 }
+u32 de_text_layout_lines(const de_text_layout *l, de_text_line *out, u32 capacity) {
+    if (!l)
+        return 0;
+    u32 n = l->line_count < capacity ? l->line_count : capacity;
+    if (!out || !n)
+        return l->line_count;
+    for (u32 i = 0; i < n; ++i)
+        out[i] = (de_text_line){.byte_start = UINT32_MAX,
+                                .x = INFINITY,
+                                .y = i * l->line_height,
+                                .height = l->line_height};
+    for (u32 i = 0; i < l->cluster_count; ++i) {
+        const de__layout_cluster *c = &l->clusters[i];
+        if (c->line >= n)
+            continue;
+        de_text_line *line = &out[c->line];
+        if (c->start < line->byte_start)
+            line->byte_start = c->start;
+        if (c->end > line->byte_end)
+            line->byte_end = c->end;
+        char ch = c->start < l->byte_count ? l->utf8[c->start] : 0;
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || c->x1 <= c->x0)
+            continue;
+        if (c->x0 < line->x)
+            line->x = c->x0;
+        /* width holds the right edge until the end of the pass */
+        if (c->x1 > line->width)
+            line->width = c->x1;
+    }
+    u32 next = 0;
+    for (u32 i = 0; i < n; ++i) {
+        de_text_line *line = &out[i];
+        if (line->byte_start == UINT32_MAX)
+            line->byte_start = line->byte_end = next;
+        next = line->byte_end;
+        if (isinf(line->x)) {
+            line->x = 0;
+            line->width = 0;
+        } else {
+            line->width -= line->x;
+        }
+    }
+    return l->line_count;
+}
 u32 de_text_layout_quads(const de_text_layout *l, de_glyph_quad *out, u32 max) {
     if (!l)
         return 0;

@@ -234,3 +234,34 @@ if(DE_HAS_RENDER)
             "DE_PREVIEW_SOURCE_DIR=\"${DE_ROOT_DIR}\"")
     endif()
 endif()
+
+# DENG-579: material graph to Slang code generation (tools/cook/importers/material_graph/).
+if(TARGET de_tp_slang)
+    de_add_test(NAME material_graph SOURCES test_material_graph.c LIBS de_cooker
+        LABELS unit cook shader TIMEOUT 300)
+    if(TARGET test_material_graph)
+        target_include_directories(test_material_graph PRIVATE
+            "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_material_graph PRIVATE
+            "DE_MG_SHADER_ROOT=\"${DE_ROOT_DIR}/shaders\"")
+        if(WIN32)
+            target_compile_definitions(test_material_graph PRIVATE _CRT_SECURE_NO_WARNINGS)
+        endif()
+    endif()
+endif()
+
+# DENG-770: the `material_graph` asset importer (mg_import.c) and the DMGR format, through
+# `de-cook cook` in-process (test_mg_import.c, CTest names mg_import.<test>).
+if(TARGET de_tp_slang)
+    de_add_test(NAME mg_import SOURCES test_mg_import.c
+                LIBS de_cook_cmd de_cooker de_host de_asset de_task de_platform
+                LABELS unit cook shader TIMEOUT 300)
+    if(TARGET test_mg_import)
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_mg_import_tmp")
+        target_include_directories(test_mg_import PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_mg_import PRIVATE
+            "DE_COOK_CLI_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_mg_import_tmp\""
+            "DE_COOK_PROJECT_DIR=\"${DE_ROOT_DIR}/tests/data/cook_project\""
+            "DE_COOK_BUILTIN_PROJECT=\"${CMAKE_CURRENT_SOURCE_DIR}/data/builtin_project\"")
+    endif()
+endif()

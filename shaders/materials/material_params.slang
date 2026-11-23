@@ -24,6 +24,7 @@ module material_params;
 public static const uint DE_GPU_MATERIAL_READY = 1; // the material is loaded
 public static const uint DE_GPU_MATERIAL_DOUBLE_SIDED = 2;
 public static const uint DE_GPU_MATERIAL_UNLIT = 4;
+public static const uint DE_GPU_MATERIAL_SPRITE = 8; // a DeSprite's block (atlas uv in subsurface)
 
 /// DeGpuMaterial.alpha_mode (de_cooked_alpha_mode)
 public static const uint DE_GPU_MATERIAL_ALPHA_OPAQUE = 0;

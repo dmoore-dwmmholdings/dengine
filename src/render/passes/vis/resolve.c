@@ -51,11 +51,18 @@ typedef struct rs_params {
     u32 ids, pitch, width, height, tile, tiles_x, tile_count, lists, args, model, scene, view_slot;
     u32 visible, visible_count, sampler, frame;
     u32 targets[DE__GB_COUNT];
-    u32 feedback, feedback_capacity, counters, debug_pos, debug_uv, flags, reserved;
+    u32 feedback, feedback_capacity, counters, debug_pos, debug_uv, flags, time_bits;
 } rs_params;
 DE_STATIC_ASSERT(sizeof(rs_params) == 112, "ResolveParams is 112 bytes");
 DE_STATIC_ASSERT(sizeof(rs_params) == DE__MATERIAL_MODEL_RESOLVE_PUSH,
                  "a game model's cs_resolve_model takes ResolveParams");
+
+/** The bits of a float (ResolveParams.time_bits: the shader reads them with asfloat). */
+static u32 rs_float_bits(f32 f) {
+    u32 u;
+    memcpy(&u, &f, sizeof u);
+    return u;
+}
 
 /** ResolveParams.flags */
 #define RS_DEBUG 1u
@@ -451,6 +458,7 @@ void de__vis_resolve(de_rg *g, de__vis_context *vc) {
                            .visible_count = vc->visible_capacity + vc->visible_alpha_capacity,
                            .sampler = st->sampler_bindless,
                            .frame = (u32)vc->frame_index,
+                           .time_bits = rs_float_bits(vc->time),
                            .feedback_capacity = st->feedback_capacity,
                            .flags = debug ? RS_DEBUG : 0u},
                     .rb = pv->rb,

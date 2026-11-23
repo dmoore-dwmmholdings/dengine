@@ -1,0 +1,9 @@
+# de_det v1 scenario=terrain_carve seed=0x777 ticks=8: de_world_checksum after each tick, one per line
+2d2477b2f1822633
+c8a7ebfc55fdb91b
+9bda446aea84555e
+d70ac3bf81071f8b
+faf439e78de344c2
+8981fe66442a6b8c
+cab64d792a00d4a2
+e144c52c468f956b

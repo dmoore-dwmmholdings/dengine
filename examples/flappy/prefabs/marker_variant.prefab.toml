@@ -1,0 +1,12 @@
+# DENG-813: a variant of flappy/prefab/marker. Same ids; it renames the root itself.
+[prefab]
+base = "flappy/prefab/marker"
+
+[[entity]]
+id = "0x1"
+[entity.Name]
+value = "Marker variant"
+[entity.DeTransform]
+position = [0, 0, 0]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]

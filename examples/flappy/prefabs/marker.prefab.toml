@@ -1,0 +1,18 @@
+# DENG-813: base of the editor-conformance prefab fixture: one entity with a Name, a
+# DeTransform and a DeCamera. It has no children, and DeCamera sorts before the engine's own
+# DeChildOf, DeChildren and DeGlobalTransform, so the check that removes the first component
+# picks a plain one. The game does not use it; it is listed as a prefab asset so the dide
+# prefab checks can instantiate and override it.
+[[entity]]
+id = "0x1"
+[entity.Name]
+value = "Marker"
+[entity.DeCamera]
+projection = "DE_PROJ_ORTHOGRAPHIC"
+ortho_height = 12.5
+near_z = 0.1
+exposure_ev100 = 0.0
+[entity.DeTransform]
+position = [0, 0, 0]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]

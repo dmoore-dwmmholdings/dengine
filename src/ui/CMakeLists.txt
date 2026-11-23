@@ -1,6 +1,6 @@
 # Retained CPU layout remains usable in headless configurations.
 de_add_module(NAME ui LAYER gameplay
- SOURCES ui.c ui_reflect.c layout/layout.c layout/flex.c layout/grid.c layout/anchor.c layout/measure.c style/stylesheet.c style/style_resolve.c style/tween.c style/theme.c
+ SOURCES ui.c ui_reflect.c layout/layout.c layout/flex.c layout/grid.c layout/anchor.c layout/measure.c style/stylesheet.c style/style_resolve.c style/tween.c style/theme.c style/theme_inspect.c
  DEPS text input OPTIONAL_OPTION DE_WITH_UI)
 if(TARGET de_ui)
  target_link_libraries(de_ui PRIVATE de_tp_xxhash de_tp_tomlc17)
@@ -32,7 +32,7 @@ endif()
 
 # DENG-322 world panels and internal-grid pixel UI.
 if(TARGET de_ui)
- target_sources(de_ui PRIVATE world/world_panel.c world/world_pointer.c pixel/pixel_ui.c)
+ target_sources(de_ui PRIVATE world/world_panel.c world/world_pointer.c world/world_pick.c pixel/pixel_ui.c)
 endif()
 
 # DENG-320: replay-aware keyboard/gamepad focus navigation.
