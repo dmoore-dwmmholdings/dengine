@@ -36,7 +36,7 @@ typedef void (*de__ed_reset_fn)(de__editor *ed);
 typedef bool (*de__ed_op_fn)(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o,
                              de_ep_edit_op *inv, de_ep_error *code, char *msg, size_t cap);
 
-#define DE__ED_MAX_TICKS 16u
+#define DE__ED_MAX_TICKS 24u
 #define DE__ED_MAX_CAPS  32u
 
 struct de__editor {
