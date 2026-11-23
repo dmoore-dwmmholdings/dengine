@@ -23,6 +23,7 @@ static void pecs_destroy(de_physics_world *p, void *state) {
     pecs_free(s, s->targets, s->target_cap, sizeof *s->targets);
     pecs_free(s, s->graves, s->grave_cap, sizeof *s->graves);
     pecs_free(s, s->breaks, s->break_cap, sizeof *s->breaks);
+    de__pecs_authoring_free(s);
     DE_FREE(s->alloc, s, sizeof *s);
 }
 

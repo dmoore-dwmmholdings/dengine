@@ -77,7 +77,7 @@ u8 de__pecs_kind_of(const de__pecs *s, de_entity e) {
 
 /* Byte buffer for the re-create key (in-process only, never persisted). */
 typedef struct key_buf {
-    u8 b[128];
+    u8 b[192];
     u32 n;
 } key_buf;
 
@@ -89,7 +89,30 @@ static void key_put(key_buf *k, const void *v, u32 n) {
 
 /* The fields whose change re-creates the body: the kind, DeRigidBody.type and .mass, and every
  * DeCollider field but the offset's scale (ignored). Hashed field by field (no padding bytes). */
-static u64 entry_key(u8 kind, const DeRigidBody *rb, const DeCollider *col) {
+/* DENG-766: the material a body of `col` gets (material_asset when registered). */
+static de_material_phys collider_material(const de__pecs *s, const DeCollider *col) {
+    de_material_phys m = col->material;
+    if (col->material_asset.hash != 0u)
+        (void)de_physics_material_find(s->p, col->material_asset, &m);
+    return m;
+}
+
+/* DENG-766: hash of the DeConvexHull of `e` (0 when absent). */
+static u64 hull_hash(const de__pecs *s, de_entity e) {
+    const DeConvexHull *h =
+        DE_HANDLE_VALID(s->c_hull) ? (const DeConvexHull *)de_entity_get_const(s->w, e, s->c_hull)
+                                   : NULL;
+    if (h == NULL)
+        return 0u;
+    const u32 n = h->point_count < DE_CONVEX_HULL_MAX_POINTS ? h->point_count
+                                                             : DE_CONVEX_HULL_MAX_POINTS;
+    u64 x = de_hash64(h->points, sizeof(de_vec3) * (size_t)n, 0x766ull);
+    x = de_hash64(&h->tolerance, sizeof h->tolerance, x);
+    return de_hash64(&h->point_count, sizeof h->point_count, x) | 1u;
+}
+
+static u64 entry_key(const de__pecs *s, de_entity e, u8 kind, const DeRigidBody *rb,
+                     const DeCollider *col) {
     key_buf k;
     k.n = 0;
     key_put(&k, &kind, 1);
@@ -99,12 +122,28 @@ static u64 entry_key(u8 kind, const DeRigidBody *rb, const DeCollider *col) {
         key_put(&k, &rb->mass, 4);
     }
     if (col != NULL) {
-        key_put(&k, &col->shape.id, 4);
+        const u32 shape_kind = (u32)col->shape_kind;
+        key_put(&k, &shape_kind, 4);
+        if (col->shape_kind == DE_COLLIDER_SHAPE_HANDLE) {
+            key_put(&k, &col->shape.id, 4);
+        } else {
+            key_put(&k, &col->radius, 4);
+            key_put(&k, &col->half_height, 4);
+            key_put(&k, &col->half_extents, sizeof col->half_extents);
+            if (col->shape_kind == DE_COLLIDER_SHAPE_CONVEX) {
+                const u64 h = hull_hash(s, e);
+                key_put(&k, &h, 8);
+            }
+        }
         key_put(&k, &col->offset.position, sizeof col->offset.position);
         key_put(&k, &col->offset.rotation, sizeof col->offset.rotation);
-        key_put(&k, &col->material.friction, 4);
-        key_put(&k, &col->material.restitution, 4);
-        key_put(&k, &col->material.density, 4);
+        const de_material_phys m = collider_material(s, col);
+        const u32 fc = (u32)m.friction_combine, rc = (u32)m.restitution_combine;
+        key_put(&k, &m.friction, 4);
+        key_put(&k, &m.restitution, 4);
+        key_put(&k, &m.density, 4);
+        key_put(&k, &fc, 4);
+        key_put(&k, &rc, 4);
         key_put(&k, &col->filter.layer, 4);
         key_put(&k, &col->filter.mask, 4);
         key_put(&k, &col->filter.group, 4);
@@ -147,8 +186,11 @@ void de__pecs_destroy_body(de__pecs *s, de__pecs_entry *en) {
     }
     if (DE_HANDLE_VALID(en->owned_shape))
         (void)de_shape_destroy(p, en->owned_shape);
+    if (DE_HANDLE_VALID(en->owned_base))
+        (void)de_shape_destroy(p, en->owned_base);
     en->body = (de_body){0};
     en->owned_shape = (de_shape){0};
+    en->owned_base = (de_shape){0};
 }
 
 /* Failures logged before the log goes quiet (a component that stays invalid would otherwise
@@ -181,13 +223,21 @@ static bool create_rigid(de__pecs *s, de_entity e, u8 kind, de__pecs_entry *en) 
     const de_transform *xf = (const de_transform *)de_entity_get_const(s->w, e, s->c_xform);
     if (col == NULL || (kind == DE__PECS_RIGID && rb == NULL))
         return false;
-    if (!de_shape_valid(p, col->shape)) {
+    de_shape base = col->shape, owned_base = {0};
+    if (col->shape_kind != DE_COLLIDER_SHAPE_HANDLE) {
+        owned_base = de__pecs_make_base_shape(s, e, col);
+        if (!DE_HANDLE_VALID(owned_base)) {
+            warn_failed(s, e, "body (DeCollider.shape_kind)");
+            return false;
+        }
+        base = owned_base;
+    } else if (!de_shape_valid(p, col->shape)) {
         DE_FAIL(DE_ERR_INVALID_ARGUMENT, "DeCollider.shape is not a live shape");
         warn_failed(s, e, "body");
         return false;
     }
 
-    de_shape shape = col->shape, owned = {0};
+    de_shape shape = base, owned = {0};
     const bool offset =
         col->offset.position.x != 0.0 || col->offset.position.y != 0.0 ||
         col->offset.position.z != 0.0 ||
@@ -196,11 +246,13 @@ static bool create_rigid(de__pecs *s, de_entity e, u8 kind, de__pecs_entry *en) 
         de_shape_desc sd;
         memset(&sd, 0, sizeof sd);
         sd.kind = DE_SHAPE_COMPOUND;
-        sd.children = &col->shape;
+        sd.children = &base;
         sd.child_xforms = &col->offset;
         sd.child_count = 1;
         owned = de_shape_create(p, &sd);
         if (!DE_HANDLE_VALID(owned)) {
+            if (DE_HANDLE_VALID(owned_base))
+                (void)de_shape_destroy(p, owned_base);
             warn_failed(s, e, "body (DeCollider.offset compound)");
             return false;
         }
@@ -212,7 +264,7 @@ static bool create_rigid(de__pecs *s, de_entity e, u8 kind, de__pecs_entry *en) 
     d.type = rb != NULL ? rb->type : DE_BODY_STATIC;
     d.transform = xf != NULL ? *xf : identity_transform();
     d.shape = shape;
-    d.material = col->material;
+    d.material = collider_material(s, col);
     d.filter = col->filter;
     d.flags = body_flags(rb, col);
     d.owner = e;
@@ -228,6 +280,8 @@ static bool create_rigid(de__pecs *s, de_entity e, u8 kind, de__pecs_entry *en) 
     if (!DE_HANDLE_VALID(b)) {
         if (DE_HANDLE_VALID(owned))
             (void)de_shape_destroy(p, owned);
+        if (DE_HANDLE_VALID(owned_base))
+            (void)de_shape_destroy(p, owned_base);
         warn_failed(s, e, "body");
         return false;
     }
@@ -236,10 +290,11 @@ static bool create_rigid(de__pecs *s, de_entity e, u8 kind, de__pecs_entry *en) 
     en->entity = e;
     en->body = b;
     en->owned_shape = owned;
+    en->owned_base = owned_base;
     en->kind = kind;
     en->body_type = (u8)d.type;
     en->flags = (rb != NULL && rb->no_interpolate) ? (u8)DE__PECS_NO_INTERP : (u8)0;
-    en->key = entry_key(kind, rb, col);
+    en->key = entry_key(s, e, kind, rb, col);
     if (rb != NULL && rb->body.id != b.id) {
         DeRigidBody *wr = (DeRigidBody *)de_entity_get(s->w, e, s->c_rb);
         wr->body = b;
@@ -475,7 +530,7 @@ static void handle_entity(de__pecs *s, de_entity e, u32 what, f32 dt) {
         const DeCollider *col = (const DeCollider *)de_entity_get_const(s->w, e, s->c_col);
         if (col == NULL || (en->kind == DE__PECS_RIGID && rb == NULL))
             return; /* cannot happen after validation */
-        if (entry_key(en->kind, rb, col) != en->key) {
+        if (entry_key(s, e, en->kind, rb, col) != en->key) {
             recreate(s, en);
             return;
         }
@@ -504,7 +559,7 @@ void de__pecs_sync(de__pecs *s, const de_system_ctx *ctx, f32 dt) {
     } k_passes[] = {
         {DE__PECS_Q_RB_CHANGED, CH_RB},     {DE__PECS_Q_COL_CHANGED, CH_COL},
         {DE__PECS_Q_CHAR_CHANGED, CH_CHAR}, {DE__PECS_Q_XFORM_COL, CH_XFORM},
-        {DE__PECS_Q_XFORM_CHAR, CH_XFORM},
+        {DE__PECS_Q_XFORM_CHAR, CH_XFORM},  {DE__PECS_Q_HULL_CHANGED, CH_COL},
     };
     sync_pass x;
     x.s = s;

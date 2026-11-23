@@ -240,3 +240,13 @@ if(TARGET test_physics_ragdoll)
     target_include_directories(test_physics_ragdoll PRIVATE "${DE_ROOT_DIR}/src")
     target_compile_options(test_physics_ragdoll PRIVATE ${DE_DETERMINISTIC_FLAGS})
 endif()
+
+# DENG-766: physics authoring for DIDE. physics_authoring: physmat and ragdoll TOML parsing, the
+# combine rules (and a bounce through DeCollider.material_asset), DeCollider shape_kind bodies,
+# hinge / cone-twist / fixed joint components with limits, DeRagdoll spawning from an asset,
+# reflection names.
+de_add_test(NAME physics_authoring SOURCES test_authoring.c LIBS de_physics)
+if(TARGET test_physics_authoring)
+    target_include_directories(test_physics_authoring PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_options(test_physics_authoring PRIVATE ${DE_DETERMINISTIC_FLAGS})
+endif()

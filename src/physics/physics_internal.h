@@ -78,6 +78,30 @@ static inline f64 de__maxd(f64 a, f64 b) {
     return a > b ? a : b;
 }
 
+/** DENG-766: combines a and b (both >= 0) of two materials. A DE_COMBINE_DEFAULT (or unknown)
+ *  mode takes the other material's mode; `dflt` is used when both are DEFAULT. The mode later in
+ *  the de_combine_mode list wins. */
+static inline f32 de__combine(de_combine_mode ma, de_combine_mode mb, f32 a, f32 b,
+                              de_combine_mode dflt) {
+    const u32 ua = (u32)ma > (u32)DE_COMBINE_MAXIMUM ? 0u : (u32)ma;
+    const u32 ub = (u32)mb > (u32)DE_COMBINE_MAXIMUM ? 0u : (u32)mb;
+    const u32 u = ua > ub ? ua : ub; /* DEFAULT is 0: the other mode wins */
+    switch ((de_combine_mode)(u != 0u ? u : (u32)dflt)) {
+    case DE_COMBINE_AVERAGE:
+        return (a + b) * 0.5f;
+    case DE_COMBINE_MINIMUM:
+        return a < b ? a : b;
+    case DE_COMBINE_MULTIPLY:
+        return a * b;
+    case DE_COMBINE_MAXIMUM:
+        return a > b ? a : b;
+    case DE_COMBINE_GEOMETRIC:
+    case DE_COMBINE_DEFAULT:
+    default:
+        return de_dsqrt(a * b);
+    }
+}
+
 /** The next f32 above `f` (+0 and -0 give FLT_MIN, never a denormal; +inf and NaN stay). */
 static inline f32 de__f32_next_up(f32 f) {
     if (f != f)
@@ -297,9 +321,13 @@ typedef enum de__phys_ext_id {
     DE__PHYS_EXT_CCD,            /**< DENG-219 (ccd_internal.h) */
     DE__PHYS_EXT_ECS,            /**< DENG-223 (ecs/phys_ecs.h) */
     DE__PHYS_EXT_RAGDOLL,        /**< DENG-224 (ragdoll_internal.h) */
+    DE__PHYS_EXT_ASSETS,         /**< DENG-766 (assets.c) */
     DE__PHYS_EXT_RESERVED,
     DE__PHYS_EXT_COUNT
 } de__phys_ext_id;
+
+/** DENG-766: components de_physics_attach registers, in this order (determinism contract). */
+#define DE__PHYS_COMP_COUNT 8u
 
 typedef struct de__phys_ext_vtbl {
     void (*destroy)(de_physics_world *p, void *state);
@@ -338,6 +366,8 @@ struct de_physics_world {
     de_component comp_rigid_body;
     de_component comp_collider;
     de_component comp_character;
+    /** DENG-766: DeConvexHull, DeHingeJoint, DeConeTwistJoint, DeFixedJoint, DeRagdoll. */
+    de_component comp_authoring[5];
     de_resource_id res_physics_world;
 
     /* ---- Extension slots (later tasks; see de__phys_ext_id) ---- */
@@ -394,6 +424,12 @@ void de__shapes_free_all(de_physics_world *p);
  *  *index; false (index untouched) when it has none or the world is not attached. The joints
  *  resolve entity sides with it. */
 bool de__phys_ecs_entity_body(const de_physics_world *p, de_entity e, u32 *index);
+/** ecs/attach.c (DENG-766): registers de_combine_mode and de_collider_shape once. */
+de_result de__phys_register_authoring_enums(de_type_registry *types);
+/** assets.c (DENG-766): registered ragdoll asset `name` and, when `stamp` is not NULL, its
+ *  registration stamp (changes on every re-register); NULL when not registered. */
+const de_ragdoll_asset *de__phys_ragdoll_asset(const de_physics_world *p, de_name name,
+                                               u32 *stamp);
 
 DE_EXTERN_C_END
 

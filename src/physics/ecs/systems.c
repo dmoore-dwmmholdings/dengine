@@ -3,6 +3,7 @@
  *
  * physics.step (DE_SCHEDULE_FIXED_UPDATE, DE_SYSTEM_DETERMINISTIC) runs the passes of one tick in
  * this order: validate (entity index order), sync (change queries in archetype / row order),
+ * authoring joints and ragdolls (DENG-766: removals in entity index order, then query order),
  * character moves (DeCharacter query order), the poses before the step, de_physics_step,
  * kinematic targets, write-back (entity index order), events (manifold key order, then joint
  * index order). physics.interpolate (DE_SCHEDULE_POST_UPDATE, after transform propagation) is in
@@ -48,6 +49,7 @@ void de__pecs_step_system(de_system_ctx *ctx) {
         return;
     de__pecs_validate(s);
     de__pecs_sync(s, ctx, dt);
+    de__pecs_authoring(s, ctx); /* DENG-766: joints and ragdolls of the authoring components */
 
     char_pass cp;
     cp.s = s;
@@ -73,6 +75,12 @@ de_result de__pecs_add_systems(de__pecs *s) {
         {s->c_col, DE_OPTIONAL_READ},
         {s->c_char, DE_OPTIONAL_WRITE},
         {s->c_xform, DE_OPTIONAL_WRITE},
+        /* DENG-766 */
+        {s->c_hull, DE_OPTIONAL_READ},
+        {s->c_hinge, DE_OPTIONAL_WRITE},
+        {s->c_cone, DE_OPTIONAL_WRITE},
+        {s->c_fixed, DE_OPTIONAL_WRITE},
+        {s->c_ragdoll, DE_OPTIONAL_WRITE},
     };
     const de_query_term t_rb[] = {{s->c_rb, DE_READ}};
     const de_query_term t_col[] = {{s->c_col, DE_READ}};
@@ -84,10 +92,16 @@ de_result de__pecs_add_systems(de__pecs *s) {
     const de_query_filter f_char[] = {{s->c_char, DE_CHANGED}};
     const de_query_filter f_xform_col[] = {{s->c_xform, DE_CHANGED}, {s->c_col, DE_WITH}};
     const de_query_filter f_xform_char[] = {{s->c_xform, DE_CHANGED}, {s->c_char, DE_WITH}};
+    const de_query_term t_hull[] = {{s->c_hull, DE_READ}};
+    const de_query_filter f_hull[] = {{s->c_hull, DE_CHANGED}, {s->c_col, DE_WITH}};
+    const de_query_term t_hinge[] = {{s->c_hinge, DE_READ}};
+    const de_query_term t_cone[] = {{s->c_cone, DE_READ}};
+    const de_query_term t_fixed[] = {{s->c_fixed, DE_READ}};
+    const de_query_term t_ragdoll[] = {{s->c_ragdoll, DE_READ}};
     de_query_desc q[DE__PECS_Q_COUNT];
     memset(q, 0, sizeof q);
     q[DE__PECS_Q_DECL].terms = decl_terms;
-    q[DE__PECS_Q_DECL].term_count = 4;
+    q[DE__PECS_Q_DECL].term_count = (u32)(sizeof decl_terms / sizeof decl_terms[0]);
     q[DE__PECS_Q_RB_CHANGED].terms = t_rb;
     q[DE__PECS_Q_RB_CHANGED].term_count = 1;
     q[DE__PECS_Q_RB_CHANGED].filters = f_rb;
@@ -112,6 +126,18 @@ de_result de__pecs_add_systems(de__pecs *s) {
     q[DE__PECS_Q_ALL_COL].term_count = 1;
     q[DE__PECS_Q_ALL_CHAR].terms = t_char_w;
     q[DE__PECS_Q_ALL_CHAR].term_count = 1;
+    q[DE__PECS_Q_HULL_CHANGED].terms = t_hull;
+    q[DE__PECS_Q_HULL_CHANGED].term_count = 1;
+    q[DE__PECS_Q_HULL_CHANGED].filters = f_hull;
+    q[DE__PECS_Q_HULL_CHANGED].filter_count = 2;
+    q[DE__PECS_Q_ALL_HINGE].terms = t_hinge;
+    q[DE__PECS_Q_ALL_HINGE].term_count = 1;
+    q[DE__PECS_Q_ALL_CONE].terms = t_cone;
+    q[DE__PECS_Q_ALL_CONE].term_count = 1;
+    q[DE__PECS_Q_ALL_FIXED].terms = t_fixed;
+    q[DE__PECS_Q_ALL_FIXED].term_count = 1;
+    q[DE__PECS_Q_ALL_RAGDOLL].terms = t_ragdoll;
+    q[DE__PECS_Q_ALL_RAGDOLL].term_count = 1;
 
     const de_resource_access res_w[] = {{p->res_physics_world, DE_WRITE}};
     const de_event_type events[] = {s->ev_contact, s->ev_break};

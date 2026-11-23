@@ -176,6 +176,12 @@ de_body de_body_create(de_physics_world *p, const de_body_desc *desc) {
         DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_body_create: bad friction or restitution");
         return none;
     }
+    /* DENG-766: a known combine mode. */
+    if ((u32)desc->material.friction_combine > (u32)DE_COMBINE_MAXIMUM ||
+        (u32)desc->material.restitution_combine > (u32)DE_COMBINE_MAXIMUM) {
+        DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_body_create: unknown friction or restitution combine");
+        return none;
+    }
     de__shape *s = NULL;
     if (desc->shape.id != 0) {
         s = de__shape_get(p, desc->shape);

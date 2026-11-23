@@ -35,7 +35,38 @@ static de_result ensure_type(de_type_registry *types, const de_type_desc *desc, 
     return DE_OK;
 }
 
+/* DENG-766: the de_combine_mode and de_collider_shape enums (the 2D attach shares the first). */
+de_result de__phys_register_authoring_enums(de_type_registry *types) {
+    if (!DE_HANDLE_VALID(de_type_find(types, "de_combine_mode"))) {
+        static const de_enum_value k_combine[] = {
+            {"DE_COMBINE_DEFAULT", DE_COMBINE_DEFAULT},
+            {"DE_COMBINE_AVERAGE", DE_COMBINE_AVERAGE},
+            {"DE_COMBINE_MINIMUM", DE_COMBINE_MINIMUM},
+            {"DE_COMBINE_GEOMETRIC", DE_COMBINE_GEOMETRIC},
+            {"DE_COMBINE_MULTIPLY", DE_COMBINE_MULTIPLY},
+            {"DE_COMBINE_MAXIMUM", DE_COMBINE_MAXIMUM},
+        };
+        const de_result r = de_enum_register(types, "de_combine_mode", k_combine, 6, false);
+        if (r != DE_OK)
+            return DE_FAIL_WRAP(r, "de_physics_attach: registering de_combine_mode");
+    }
+    if (!DE_HANDLE_VALID(de_type_find(types, "de_collider_shape"))) {
+        static const de_enum_value k_shape[] = {
+            {"DE_COLLIDER_SHAPE_HANDLE", DE_COLLIDER_SHAPE_HANDLE},
+            {"DE_COLLIDER_SHAPE_SPHERE", DE_COLLIDER_SHAPE_SPHERE},
+            {"DE_COLLIDER_SHAPE_CAPSULE", DE_COLLIDER_SHAPE_CAPSULE},
+            {"DE_COLLIDER_SHAPE_BOX", DE_COLLIDER_SHAPE_BOX},
+            {"DE_COLLIDER_SHAPE_CONVEX", DE_COLLIDER_SHAPE_CONVEX},
+        };
+        const de_result r = de_enum_register(types, "de_collider_shape", k_shape, 5, false);
+        if (r != DE_OK)
+            return DE_FAIL_WRAP(r, "de_physics_attach: registering de_collider_shape");
+    }
+    return DE_OK;
+}
+
 static de_result register_types(de_type_registry *types, de_type_id ids[4]) {
+    DE_TRY(de__phys_register_authoring_enums(types));
     if (!DE_HANDLE_VALID(de_type_find(types, "de_body_type"))) {
         static const de_enum_value k_body_type[] = {
             {"DE_BODY_STATIC", DE_BODY_STATIC},
@@ -57,6 +88,10 @@ static de_result register_types(de_type_registry *types, de_type_id ids[4]) {
         DE_FIELD(de_material_phys, restitution, DE_FK_F32, DE_FIELD_DEFAULT),
         DE_FIELD_EX(de_material_phys, density, DE_FK_F32, DE_FIELD_DEFAULT,
                     {0, 0, "kg/m^3", "0 = 1000 (water)", 0, 0}),
+        DE_FIELD_EX(de_material_phys, friction_combine, DE_FK_ENUM, DE_FIELD_DEFAULT,
+                    {0, 0, 0, "0 = geometric", "de_combine_mode", 0}),
+        DE_FIELD_EX(de_material_phys, restitution_combine, DE_FK_ENUM, DE_FIELD_DEFAULT,
+                    {0, 0, 0, "0 = maximum", "de_combine_mode", 0}),
     };
     static const de_field_info k_filter[] = {
         DE_FIELD(de_collision_filter, layer, DE_FK_U32, DE_FIELD_DEFAULT),
@@ -89,7 +124,7 @@ static void construct_rigid_body(void *obj) {
     rb->allow_sleep = true;
 }
 
-static de_result register_components(de_type_registry *types, de_type_id out[3]) {
+static de_result register_components(de_type_registry *types, de_type_id out[DE__PHYS_COMP_COUNT]) {
     static const de_field_info k_rigid_body[] = {
         DE_FIELD_EX(DeRigidBody, type, DE_FK_ENUM, DE_FIELD_DEFAULT,
                     {0, 0, 0, 0, "de_body_type", 0}),
@@ -121,6 +156,78 @@ static de_result register_components(de_type_registry *types, de_type_id out[3])
         DE_FIELD_EX(DeCollider, filter, DE_FK_STRUCT, DE_FIELD_DEFAULT,
                     {0, 0, 0, 0, "de_collision_filter", 0}),
         DE_FIELD(DeCollider, is_trigger, DE_FK_BOOL, DE_FIELD_DEFAULT),
+        /* DENG-766 (appended) */
+        DE_FIELD_EX(DeCollider, shape_kind, DE_FK_ENUM, DE_FIELD_DEFAULT,
+                    {0, 0, 0, "0 = the shape handle", "de_collider_shape", 0}),
+        DE_FIELD_EX(DeCollider, radius, DE_FK_F32, DE_FIELD_DEFAULT, {0, 0, "m", 0, 0, 0}),
+        DE_FIELD_EX(DeCollider, half_height, DE_FK_F32, DE_FIELD_DEFAULT, {0, 0, "m", 0, 0, 0}),
+        DE_FIELD_EX(DeCollider, half_extents, DE_FK_VEC3, DE_FIELD_DEFAULT, {0, 0, "m", 0, 0, 0}),
+        DE_FIELD_EX(DeCollider, material_asset, DE_FK_NAME, DE_FIELD_DEFAULT,
+                    {0, 0, 0, "a registered physics material; replaces material", 0, 0}),
+    };
+    static const de_field_info k_hull[] = {
+        DE_FIELD(DeConvexHull, point_count, DE_FK_U32, DE_FIELD_DEFAULT),
+        DE_FIELD_EX(DeConvexHull, tolerance, DE_FK_F32, DE_FIELD_DEFAULT,
+                    {0, 0, "m", "0 = automatic", 0, 0}),
+        DE_FIELD_EX(DeConvexHull, points, DE_FK_FIXED_ARRAY, DE_FIELD_DEFAULT,
+                    {0, 0, 0, 0, "vec3", DE_CONVEX_HULL_MAX_POINTS}),
+    };
+    static const de_field_info k_hinge[] = {
+        DE_FIELD(DeHingeJoint, target, DE_FK_ENTITY, DE_FIELD_DEFAULT),
+        DE_FIELD_EX(DeHingeJoint, frame, DE_FK_STRUCT, DE_FIELD_DEFAULT,
+                    {0, 0, 0, 0, "de_transform", 0}),
+        DE_FIELD_EX(DeHingeJoint, target_frame, DE_FK_STRUCT, DE_FIELD_DEFAULT,
+                    {0, 0, 0, 0, "de_transform", 0}),
+        DE_FIELD(DeHingeJoint, enable_limit, DE_FK_BOOL, DE_FIELD_DEFAULT),
+        DE_FIELD_EX(DeHingeJoint, limit_min, DE_FK_F32, DE_FIELD_DEFAULT,
+                    {-3.14159265f, 3.14159265f, "rad", 0, 0, 0}),
+        DE_FIELD_EX(DeHingeJoint, limit_max, DE_FK_F32, DE_FIELD_DEFAULT,
+                    {-3.14159265f, 3.14159265f, "rad", 0, 0, 0}),
+        DE_FIELD_EX(DeHingeJoint, break_force, DE_FK_F32, DE_FIELD_DEFAULT,
+                    {0, 0, "N", "0 = unbreakable", 0, 0}),
+        DE_FIELD(DeHingeJoint, collide_connected, DE_FK_BOOL, DE_FIELD_DEFAULT),
+        DE_FIELD(DeHingeJoint, joint, DE_FK_U32, DE__HANDLE_FIELD_FLAGS),
+    };
+    static const de_field_info k_cone[] = {
+        DE_FIELD(DeConeTwistJoint, target, DE_FK_ENTITY, DE_FIELD_DEFAULT),
+        DE_FIELD_EX(DeConeTwistJoint, frame, DE_FK_STRUCT, DE_FIELD_DEFAULT,
+                    {0, 0, 0, 0, "de_transform", 0}),
+        DE_FIELD_EX(DeConeTwistJoint, target_frame, DE_FK_STRUCT, DE_FIELD_DEFAULT,
+                    {0, 0, 0, 0, "de_transform", 0}),
+        DE_FIELD_EX(DeConeTwistJoint, twist_min, DE_FK_F32, DE_FIELD_DEFAULT,
+                    {-3.14159265f, 3.14159265f, "rad", 0, 0, 0}),
+        DE_FIELD_EX(DeConeTwistJoint, twist_max, DE_FK_F32, DE_FIELD_DEFAULT,
+                    {-3.14159265f, 3.14159265f, "rad", 0, 0, 0}),
+        DE_FIELD_EX(DeConeTwistJoint, swing_y, DE_FK_F32, DE_FIELD_DEFAULT,
+                    {0, 3.14159265f, "rad", 0, 0, 0}),
+        DE_FIELD_EX(DeConeTwistJoint, swing_z, DE_FK_F32, DE_FIELD_DEFAULT,
+                    {0, 3.14159265f, "rad", 0, 0, 0}),
+        DE_FIELD_EX(DeConeTwistJoint, break_force, DE_FK_F32, DE_FIELD_DEFAULT,
+                    {0, 0, "N", "0 = unbreakable", 0, 0}),
+        DE_FIELD(DeConeTwistJoint, collide_connected, DE_FK_BOOL, DE_FIELD_DEFAULT),
+        DE_FIELD(DeConeTwistJoint, joint, DE_FK_U32, DE__HANDLE_FIELD_FLAGS),
+    };
+    static const de_field_info k_fixed[] = {
+        DE_FIELD(DeFixedJoint, target, DE_FK_ENTITY, DE_FIELD_DEFAULT),
+        DE_FIELD_EX(DeFixedJoint, frame, DE_FK_STRUCT, DE_FIELD_DEFAULT,
+                    {0, 0, 0, 0, "de_transform", 0}),
+        DE_FIELD_EX(DeFixedJoint, target_frame, DE_FK_STRUCT, DE_FIELD_DEFAULT,
+                    {0, 0, 0, 0, "de_transform", 0}),
+        DE_FIELD_EX(DeFixedJoint, break_force, DE_FK_F32, DE_FIELD_DEFAULT,
+                    {0, 0, "N", "0 = unbreakable", 0, 0}),
+        DE_FIELD(DeFixedJoint, collide_connected, DE_FK_BOOL, DE_FIELD_DEFAULT),
+        DE_FIELD(DeFixedJoint, joint, DE_FK_U32, DE__HANDLE_FIELD_FLAGS),
+    };
+    static const de_field_info k_ragdoll[] = {
+        DE_FIELD_EX(DeRagdoll, asset, DE_FK_NAME, DE_FIELD_DEFAULT,
+                    {0, 0, 0, "a registered ragdoll asset", 0, 0}),
+        DE_FIELD_EX(DeRagdoll, material, DE_FK_STRUCT, DE_FIELD_DEFAULT,
+                    {0, 0, 0, 0, "de_material_phys", 0}),
+        DE_FIELD_EX(DeRagdoll, filter, DE_FK_STRUCT, DE_FIELD_DEFAULT,
+                    {0, 0, 0, 0, "de_collision_filter", 0}),
+        DE_FIELD(DeRagdoll, linear_damping, DE_FK_F32, DE_FIELD_DEFAULT),
+        DE_FIELD(DeRagdoll, angular_damping, DE_FK_F32, DE_FIELD_DEFAULT),
+        DE_FIELD(DeRagdoll, ragdoll, DE_FK_U32, DE__HANDLE_FIELD_FLAGS),
     };
     static const de_field_info k_character[] = {
         DE_FIELD_EX(DeCharacter, radius, DE_FK_F32, DE_FIELD_DEFAULT, {0, 0, "m", 0, 0, 0}),
@@ -142,6 +249,11 @@ static de_result register_components(de_type_registry *types, de_type_id out[3])
     DE_TRY(ensure_type(types, &rb_desc, &out[0]));
     DE_TRY(ensure_type(types, &DE_TYPE_DESC(DeCollider, 1, k_collider), &out[1]));
     DE_TRY(ensure_type(types, &DE_TYPE_DESC(DeCharacter, 1, k_character), &out[2]));
+    DE_TRY(ensure_type(types, &DE_TYPE_DESC(DeConvexHull, 1, k_hull), &out[3]));
+    DE_TRY(ensure_type(types, &DE_TYPE_DESC(DeHingeJoint, 1, k_hinge), &out[4]));
+    DE_TRY(ensure_type(types, &DE_TYPE_DESC(DeConeTwistJoint, 1, k_cone), &out[5]));
+    DE_TRY(ensure_type(types, &DE_TYPE_DESC(DeFixedJoint, 1, k_fixed), &out[6]));
+    DE_TRY(ensure_type(types, &DE_TYPE_DESC(DeRagdoll, 1, k_ragdoll), &out[7]));
     return DE_OK;
 }
 
@@ -210,6 +322,11 @@ static de_result attach_systems(de_physics_world *p, de_world *w, de_type_regist
     s->c_rb = p->comp_rigid_body;
     s->c_col = p->comp_collider;
     s->c_char = p->comp_character;
+    s->c_hull = p->comp_authoring[0];
+    s->c_hinge = p->comp_authoring[1];
+    s->c_cone = p->comp_authoring[2];
+    s->c_fixed = p->comp_authoring[3];
+    s->c_ragdoll = p->comp_authoring[4];
     s->c_xform = bi.transform;
     s->c_global = bi.global_transform;
     s->c_child_of = bi.child_of;
@@ -234,13 +351,13 @@ de_result de_physics_attach(de_physics_world *p, de_world *w, de_type_registry *
     if (prev != NULL && prev->w != w)
         return DE_FAIL(DE_ERR_ALREADY_EXISTS,
                        "de_physics_attach: the physics world is attached to another ECS world");
-    de_type_id field_types[4], comp_types[3];
+    de_type_id field_types[4], comp_types[DE__PHYS_COMP_COUNT];
     DE_TRY(register_types(types, field_types));
     DE_TRY(register_components(types, comp_types));
 
     /* Registration order is part of the determinism contract (component ids): fixed here. */
-    de_component comps[3];
-    for (u32 i = 0; i < 3; ++i) {
+    de_component comps[DE__PHYS_COMP_COUNT];
+    for (u32 i = 0; i < DE__PHYS_COMP_COUNT; ++i) {
         comps[i] = de_component_register(w, comp_types[i], DE_COMP_SNAPSHOT);
         if (!DE_HANDLE_VALID(comps[i]))
             return DE_FAIL_WRAP(last_error_or(DE_ERR_INVALID_ARGUMENT),
@@ -256,6 +373,8 @@ de_result de_physics_attach(de_physics_world *p, de_world *w, de_type_registry *
     p->comp_rigid_body = comps[0];
     p->comp_collider = comps[1];
     p->comp_character = comps[2];
+    for (u32 i = 0; i < DE__PHYS_COMP_COUNT - 3u; ++i)
+        p->comp_authoring[i] = comps[3u + i];
     p->res_physics_world = res;
     return attach_systems(p, w, types);
 }
