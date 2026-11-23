@@ -2101,8 +2101,6 @@ static void on_overrides(de__editor *ed, const de_ep_request *req, de_ep_arena *
 
 static struct {
     const char *reason; /* why the last prefab.state failed, for prefab_error */
-    u32 written;
-    char assets[ED_FILES_MAX][256];
 } g_files;
 
 const char *de__ed_prefab_fail_reason(void) {
@@ -2138,20 +2136,25 @@ static u64 instance_scene(u64 root) {
     return de__ed_scene_member(root, &scene, &sid) ? scene : ED_GAME_SCENE;
 }
 
-static bool reject_request(de__editor *ed, const de_ep_request *req, mpack_writer_t *w,
-                           const de_ep_override_path_params *q) {
+static bool reject_state(de__editor *ed, u64 id, mpack_writer_t *w, bool has_revision,
+                         u64 revision) {
     if (ed->mode != DE_EP_WORLD_MODE_EDIT) {
-        prefab_error(w, req->id, DE_EP_ERR_WRONG_MODE, "play_mode",
+        prefab_error(w, id, DE_EP_ERR_WRONG_MODE, "play_mode",
                      "prefabs can't change during a play session");
         return true;
     }
-    if (q->has_revision && q->revision != g_prefab.revision) {
-        prefab_error(w, req->id, DE_EP_ERR_CONFLICT, "stale",
-                     "prefab revision %llu is not the current %llu",
-                     (unsigned long long)q->revision, (unsigned long long)g_prefab.revision);
+    if (has_revision && revision != g_prefab.revision) {
+        prefab_error(w, id, DE_EP_ERR_CONFLICT, "stale",
+                     "prefab revision %llu is not the current %llu", (unsigned long long)revision,
+                     (unsigned long long)g_prefab.revision);
         return true;
     }
     return false;
+}
+
+static bool reject_request(de__editor *ed, const de_ep_request *req, mpack_writer_t *w,
+                           const de_ep_override_path_params *q) {
+    return reject_state(ed, req->id, w, q->has_revision, q->revision);
 }
 
 /* prefab.applyOverride: the instance's value becomes the value of `target` (default: the
@@ -2355,37 +2358,27 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
     de_ep_error code = DE_EP_OK;
     char msg[256];
     g_files.reason = NULL;
-    g_files.written = 0;
     const u32 tx = de__ed_edit_run(ed, a, q.has_tx ? q.tx : 0, instance_scene(root), ops, no, &code, msg, sizeof msg);
     if (tx == 0) {
         prefab_error(w, req->id, code, g_files.reason ? g_files.reason : "edit", "%s", msg);
         return;
     }
-    de_ep_write_result_begin(w, req->id);
-    /* The 1.18 ApplyResult (tx, revision, prefabs, entities) plus `files` (DENG-798), which the
-     * schema does not list, so this one result stays hand-written. */
-    mpack_start_map(w, 5);
-    mpack_write_cstr(w, "files"); /* the prefab sources written (DENG-798) */
-    mpack_start_array(w, g_files.written);
-    for (u32 i = 0; i < g_files.written; ++i)
-        mpack_write_cstr(w, g_files.assets[i]);
-    mpack_finish_array(w);
-    mpack_write_cstr(w, "tx");
-    mpack_write_u32(w, tx);
-    mpack_write_cstr(w, "revision");
-    mpack_write_u64(w, g_prefab.revision);
-    mpack_write_cstr(w, "prefabs");
-    mpack_start_array(w, nd);
-    for (u32 i = 0; i < nd; ++i)
-        mpack_write_cstr(w, names[i]);
-    mpack_finish_array(w);
-    mpack_write_cstr(w, "entities");
-    mpack_start_array(w, nb);
-    for (u32 i = 0; i < nb; ++i)
-        mpack_write_u64(w, ents[i]);
-    mpack_finish_array(w);
-    mpack_finish_map(w);
-    de_ep_write_result_end(w);
+    /* `files` (protocol 1.19) is the source path of each entry of `prefabs`, in the same order:
+     * the manifest's, relative to the asset root ("prefabs/crate.prefab.toml"). */
+    de_ep_str pnames[ED_PLAN_MAX], fnames[ED_PLAN_MAX];
+    for (u32 i = 0; i < nd; ++i) {
+        const char *src = de__ed_asset_source_path(ed, names[i]);
+        pnames[i] = de_ep_cstr(names[i]);
+        fnames[i] = de_ep_cstr(src != NULL ? src : names[i]);
+    }
+    const de_ep_apply_result res = {
+        .tx = tx,
+        .revision = g_prefab.revision,
+        .prefabs = {pnames, nd},
+        .entities = {ents, nb},
+        .files = {fnames, nd},
+    };
+    de_ep_write_response_prefab_apply_override(w, req->id, &res);
 }
 
 /* prefab.revertOverride: an undoable `set` back to the instance's base value. */
@@ -2655,7 +2648,6 @@ bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_
     u32 nd = 0, nb = 0, ns = 0;
     bool replay = false;
     g_files.reason = NULL;
-    g_files.written = 0;
     mpack_reader_t r;
     mpack_reader_init_data(&r, value.ptr, value.len);
     const u32 keys = mpack_expect_map(&r);
@@ -2786,9 +2778,6 @@ bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_
             continue;
         if (ed->e->assets != NULL)
             (void)de__asset_reload_queue(ed->e->assets, de_asset_id_from(files[i].asset));
-        if (g_files.written < ED_FILES_MAX)
-            snprintf(g_files.assets[g_files.written++], sizeof g_files.assets[0], "%s",
-                     files[i].asset);
     }
     files_release(files, nf);
     bool ok = true;
@@ -2810,6 +2799,41 @@ bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_
 
 /* scene.dirty arrives from edits; keep our flag in step. */
 void de__ed_scene_mark_dirty(u64 scene);
+/* prefab.unpack (DENG-801): the instance becomes plain entities and its record goes. One undoable
+ * transaction; undo puts the record back with its overrides. The prefab itself does not change,
+ * so the revision stays. */
+static void on_unpack(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
+    de_ep_prefab_unpack_params q;
+    memset(&q, 0, sizeof q);
+    if (!de_ep_read_params_prefab_unpack(req, a, &q)) {
+        prefab_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "params", "bad params");
+        return;
+    }
+    if (reject_state(ed, req->id, w, q.has_revision, q.revision))
+        return;
+    /* Only an instance root: an entity inside the instance is not one. */
+    if (instance_rooted(q.entity) == NULL) {
+        prefab_error(w, req->id, DE_EP_ERR_NOT_FOUND, "not_instance",
+                     "%llu is not a prefab instance root", (unsigned long long)q.entity);
+        return;
+    }
+    de_ep_edit_op op;
+    memset(&op, 0, sizeof op);
+    op.op = de_ep_cstr("prefab.unpack");
+    op.has_entity = true;
+    op.entity = q.entity;
+    de_ep_error code = DE_EP_OK;
+    char msg[256];
+    const u32 tx = de__ed_edit_run(ed, a, q.has_tx ? q.tx : 0, instance_scene(q.entity), &op, 1,
+                                   &code, msg, sizeof msg);
+    if (tx == 0) {
+        prefab_error(w, req->id, code, "edit", "%s", msg);
+        return;
+    }
+    const de_ep_unpack_result res = {.tx = tx, .revision = g_prefab.revision, .root = q.entity};
+    de_ep_write_response_prefab_unpack(w, req->id, &res);
+}
+
 void de__ed_scene_mark_dirty(u64 scene) {
     ed_scene *s = scene_find(scene);
     if (s != NULL)
@@ -2835,4 +2859,5 @@ void de__ed_scene_register(de__editor *ed) {
     de__ed_on(ed, DE_EP_METHOD_PREFAB_OVERRIDES, on_overrides);
     de__ed_on(ed, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, on_apply);
     de__ed_on(ed, DE_EP_METHOD_PREFAB_REVERT_OVERRIDE, on_revert);
+    de__ed_on(ed, DE_EP_METHOD_PREFAB_UNPACK, on_unpack);
 }

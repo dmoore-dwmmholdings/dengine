@@ -1,6 +1,7 @@
 /* editor_edit.c: transactional edits with inverses, undo and redo (DENG-626).
  *
- * Ops: spawn, despawn, add, remove, set, reparent, instantiate, uninstantiate. They run between
+ * Ops: spawn, despawn, add, remove, set, reparent, instantiate, uninstantiate, prefab.unpack (and its
+ * inverse prefab.pack, DENG-801). They run between
  * frames (the service's frame-begin hook), so they use the world's immediate structural calls.
  * Each applied op is kept with its inverse as EditOp MessagePack bytes; undo applies the inverses
  * in reverse, redo the ops again, and each replayed op's own inverse replaces its counterpart, so
@@ -548,6 +549,83 @@ static bool remove_instance(de__editor *ed, de_ep_arena *a, de_entity root, de_e
     return true;
 }
 
+/* `prefab.unpack` (DENG-801): the instance record goes; the entities stay, now plain. Its inverse
+ * `prefab.pack` carries the record exactly (asset, base values, prefab-local ids), so undo puts
+ * the instance, and with it every override, back. Overrides are not stored: they are the
+ * difference between the live values and the base values. */
+static bool unpack_instance(de__editor *ed, de_ep_arena *a, de_entity root, de_ep_edit_op *inv,
+                            ed_fail *f) {
+    const char *asset = de__ed_prefab_instance_asset(root.bits);
+    if (asset == NULL)
+        return fail(f, DE_EP_ERR_INVALID_PARAMS, "%llu is not a prefab instance root",
+                    (unsigned long long)root.bits);
+    char *copy = de__ed_cstr(a, de_ep_cstr(asset));
+    if (copy == NULL)
+        return fail(f, DE_EP_ERR_BUSY, "out of scratch memory");
+    mpack_writer_t mw;
+    de__ed_raw_begin(a, &mw);
+    mpack_start_map(&mw, 3);
+    mpack_write_cstr(&mw, "asset");
+    mpack_write_cstr(&mw, copy);
+    mpack_write_cstr(&mw, "base");
+    de__ed_prefab_instance_write_base(root.bits, &mw);
+    mpack_write_cstr(&mw, "local");
+    de__ed_prefab_instance_write_local(root.bits, &mw);
+    mpack_finish_map(&mw);
+    const de_ep_raw value = de__ed_raw_end(a, &mw);
+    if (value.ptr == NULL)
+        return fail(f, DE_EP_ERR_INTERNAL, "could not capture the instance record");
+    inv->op = de_ep_cstr("prefab.pack");
+    inv->has_entity = true;
+    inv->entity = root.bits;
+    inv->has_value = true;
+    inv->value = value;
+    de__ed_prefab_instance_drop(root.bits);
+    de__ed_world_touch(ed);
+    return true;
+}
+
+/* `prefab.pack`: puts the instance record that `prefab.unpack` captured back on `root`. */
+static bool pack_instance(de__editor *ed, de_ep_raw value, de_entity root, de_ep_edit_op *inv,
+                          ed_fail *f) {
+    if (de__ed_prefab_instance_asset(root.bits) != NULL)
+        return fail(f, DE_EP_ERR_CONFLICT, "%llu is already a prefab instance",
+                    (unsigned long long)root.bits);
+    char asset[256] = "";
+    const char *base = NULL, *local = NULL;
+    size_t base_len = 0, local_len = 0;
+    mpack_reader_t r;
+    mpack_reader_init_data(&r, value.ptr, value.len);
+    const u32 keys = mpack_expect_map_max(&r, 8);
+    for (u32 k = 0; k < keys && mpack_reader_error(&r) == mpack_ok; ++k) {
+        char key[16];
+        mpack_expect_cstr(&r, key, sizeof key);
+        if (strcmp(key, "asset") == 0) {
+            mpack_expect_cstr(&r, asset, sizeof asset);
+        } else if (strcmp(key, "base") == 0 || strcmp(key, "local") == 0) {
+            const bool is_base = key[0] == 'b';
+            const char *begin = r.data;
+            mpack_discard(&r);
+            if (mpack_reader_error(&r) == mpack_ok) {
+                *(is_base ? &base : &local) = begin;
+                *(is_base ? &base_len : &local_len) = (size_t)(r.data - begin);
+            }
+        } else {
+            mpack_discard(&r);
+        }
+    }
+    mpack_done_map(&r);
+    if (mpack_reader_destroy(&r) != mpack_ok || asset[0] == '\0' || base == NULL)
+        return fail(f, DE_EP_ERR_INVALID_PARAMS, "prefab.pack value is not an instance record");
+    if (!de__ed_prefab_instance_restore(root.bits, asset, base, base_len, local, local_len))
+        return fail(f, DE_EP_ERR_INTERNAL, "could not restore the instance record");
+    inv->op = de_ep_cstr("prefab.unpack");
+    inv->has_entity = true;
+    inv->entity = root.bits;
+    de__ed_world_touch(ed);
+    return true;
+}
+
 static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_ep_edit_op *inv,
                      u64 *spawned, ed_fail *f) {
     de_world *w = W(ed);
@@ -634,6 +712,15 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
 
     if (de_ep_str_eq(o->op, "uninstantiate"))
         return remove_instance(ed, a, e, inv, f);
+
+    if (de_ep_str_eq(o->op, "prefab.unpack"))
+        return unpack_instance(ed, a, e, inv, f);
+
+    if (de_ep_str_eq(o->op, "prefab.pack")) {
+        if (!o->has_value)
+            return fail(f, DE_EP_ERR_INVALID_PARAMS, "prefab.pack needs value");
+        return pack_instance(ed, o->value, e, inv, f);
+    }
 
     if (de_ep_str_eq(o->op, "despawn")) {
         inv->op = de_ep_cstr("spawn");

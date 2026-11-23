@@ -294,6 +294,11 @@ bool de__ed_asset_source_vpath(de__editor *ed, const char *id, char *out, size_t
     return ma != NULL && source_vpath(ed, ma, out, cap);
 }
 
+const char *de__ed_asset_source_path(de__editor *ed, const char *id) {
+    const de__manifest_asset *ma = id != NULL ? find_asset(ed, de_ep_cstr(id)) : NULL;
+    return ma != NULL ? ma->source : NULL;
+}
+
 static void on_thumbnail(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
                          mpack_writer_t *w) {
     DE__ED_PARAMS(asset_thumbnail, de_ep_asset_thumbnail_params, q);

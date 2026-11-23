@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.18"
-#define DE_EP_SCHEMA_HASH "bbb34c8b69b9e8f8"
+#define DE_EP_PROTOCOL_VERSION "1.19"
+#define DE_EP_SCHEMA_HASH "88e385a14291c414"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -240,6 +240,7 @@ typedef struct de_ep_pick_rect_params de_ep_pick_rect_params;
 typedef struct de_ep_pick_result de_ep_pick_result;
 typedef struct de_ep_prefab_error_data de_ep_prefab_error_data;
 typedef struct de_ep_prefab_instantiate_params de_ep_prefab_instantiate_params;
+typedef struct de_ep_prefab_unpack_params de_ep_prefab_unpack_params;
 typedef struct de_ep_query_params de_ep_query_params;
 typedef struct de_ep_query_result de_ep_query_result;
 typedef struct de_ep_reflect_changed de_ep_reflect_changed;
@@ -313,6 +314,7 @@ typedef struct de_ep_ui_theme_var de_ep_ui_theme_var;
 typedef struct de_ep_ui_theme_vars de_ep_ui_theme_vars;
 typedef struct de_ep_ui_theme_vars_params de_ep_ui_theme_vars_params;
 typedef struct de_ep_ui_themes de_ep_ui_themes;
+typedef struct de_ep_unpack_result de_ep_unpack_result;
 typedef struct de_ep_unsubscribe_params de_ep_unsubscribe_params;
 typedef struct de_ep_view_camera_params de_ep_view_camera_params;
 typedef struct de_ep_view_create_params de_ep_view_create_params;
@@ -653,6 +655,7 @@ struct de_ep_apply_result {
     uint64_t revision; /* the prefab revision after the change */
     de_ep_list_str prefabs; /* the prefab definitions written */
     de_ep_list_u64 entities; /* the instance entities whose base changed */
+    de_ep_list_str files; /* the .prefab.toml asset paths written, one per entry in prefabs, in the same order (protocol 1.19, DIDE-383) */
 };
 
 struct de_ep_archetype {
@@ -1452,7 +1455,7 @@ struct de_ep_pick_result {
     de_ep_list_ui_pick_hit ui_stack; /* ui.editor (protocol 1.15): every UI node under the point, topmost first; absent when there is none */
 };
 
-/* The error data of prefab.overrides, prefab.applyOverride and prefab.revertOverride. reason by code: not_found not_instance, no_field; invalid_params path, target, params; conflict stale, not_override; wrong_mode play_mode; unsupported no_definition, outside_prefab (an entity value refers outside the target prefab); busy memory, too_large. Edit errors pass through with reason edit. */
+/* The error data of prefab.overrides, prefab.applyOverride, prefab.revertOverride and prefab.unpack. reason by code: not_found not_instance, no_field; invalid_params path, target, params; conflict stale, not_override; wrong_mode play_mode; unsupported no_definition, outside_prefab (an entity value refers outside the target prefab); busy memory, too_large. Edit errors pass through with reason edit. */
 struct de_ep_prefab_error_data {
     de_ep_str reason;
     uint64_t revision; /* the current prefab revision */
@@ -1463,6 +1466,15 @@ struct de_ep_prefab_instantiate_params {
     uint64_t scene;
     bool has_parent;
     uint64_t parent;
+};
+
+/* The params of prefab.unpack. */
+struct de_ep_prefab_unpack_params {
+    uint64_t entity; /* the instance root; any other entity is NOT_FOUND reason not_instance */
+    bool has_revision;
+    uint64_t revision; /* optimistic check against the prefab revision; a mismatch is CONFLICT reason stale */
+    bool has_tx;
+    uint32_t tx; /* join this open edit transaction instead of opening and committing one */
 };
 
 struct de_ep_query_params {
@@ -1985,6 +1997,13 @@ struct de_ep_ui_themes {
     de_ep_list_ui_theme_info themes; /* sorted by name (byte order) */
 };
 
+/* The result of prefab.unpack. */
+struct de_ep_unpack_result {
+    uint32_t tx; /* the edit transaction that holds the unpack; one undo step */
+    uint64_t revision; /* the prefab revision (an unpack does not change it) */
+    uint64_t root; /* the unpacked root entity, now a plain entity */
+};
+
 struct de_ep_unsubscribe_params {
     uint32_t subscription;
 };
@@ -2366,6 +2385,8 @@ void de_ep_write_prefab_error_data(mpack_writer_t *w, const de_ep_prefab_error_d
 void de_ep_read_prefab_error_data(mpack_reader_t *r, de_ep_arena *a, de_ep_prefab_error_data *out);
 void de_ep_write_prefab_instantiate_params(mpack_writer_t *w, const de_ep_prefab_instantiate_params *v);
 void de_ep_read_prefab_instantiate_params(mpack_reader_t *r, de_ep_arena *a, de_ep_prefab_instantiate_params *out);
+void de_ep_write_prefab_unpack_params(mpack_writer_t *w, const de_ep_prefab_unpack_params *v);
+void de_ep_read_prefab_unpack_params(mpack_reader_t *r, de_ep_arena *a, de_ep_prefab_unpack_params *out);
 void de_ep_write_query_params(mpack_writer_t *w, const de_ep_query_params *v);
 void de_ep_read_query_params(mpack_reader_t *r, de_ep_arena *a, de_ep_query_params *out);
 void de_ep_write_query_result(mpack_writer_t *w, const de_ep_query_result *v);
@@ -2512,6 +2533,8 @@ void de_ep_write_ui_theme_vars_params(mpack_writer_t *w, const de_ep_ui_theme_va
 void de_ep_read_ui_theme_vars_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_theme_vars_params *out);
 void de_ep_write_ui_themes(mpack_writer_t *w, const de_ep_ui_themes *v);
 void de_ep_read_ui_themes(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_themes *out);
+void de_ep_write_unpack_result(mpack_writer_t *w, const de_ep_unpack_result *v);
+void de_ep_read_unpack_result(mpack_reader_t *r, de_ep_arena *a, de_ep_unpack_result *out);
 void de_ep_write_unsubscribe_params(mpack_writer_t *w, const de_ep_unsubscribe_params *v);
 void de_ep_read_unsubscribe_params(mpack_reader_t *r, de_ep_arena *a, de_ep_unsubscribe_params *out);
 void de_ep_write_view_camera_params(mpack_writer_t *w, const de_ep_view_camera_params *v);
@@ -2612,6 +2635,7 @@ typedef enum de_ep_method {
     DE_EP_METHOD_PREFAB_INSTANTIATE,
     DE_EP_METHOD_PREFAB_OVERRIDES,
     DE_EP_METHOD_PREFAB_REVERT_OVERRIDE,
+    DE_EP_METHOD_PREFAB_UNPACK,
     DE_EP_METHOD_REFLECT_ASSET_TYPES,
     DE_EP_METHOD_REFLECT_CVARS,
     DE_EP_METHOD_REFLECT_DEBUG_OUTPUTS,
@@ -2827,6 +2851,8 @@ bool de_ep_read_params_prefab_overrides(const de_ep_request *req, de_ep_arena *a
 void de_ep_write_response_prefab_overrides(mpack_writer_t *w, uint64_t id, const de_ep_override_list *result);
 bool de_ep_read_params_prefab_revert_override(const de_ep_request *req, de_ep_arena *a, de_ep_override_path_params *out);
 void de_ep_write_response_prefab_revert_override(mpack_writer_t *w, uint64_t id, const de_ep_revert_result *result);
+bool de_ep_read_params_prefab_unpack(const de_ep_request *req, de_ep_arena *a, de_ep_prefab_unpack_params *out);
+void de_ep_write_response_prefab_unpack(mpack_writer_t *w, uint64_t id, const de_ep_unpack_result *result);
 bool de_ep_read_params_reflect_asset_types(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
 void de_ep_write_response_reflect_asset_types(mpack_writer_t *w, uint64_t id, const de_ep_asset_type_list *result);
 bool de_ep_read_params_reflect_cvars(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
