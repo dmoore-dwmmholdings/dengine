@@ -338,6 +338,10 @@ void de__ed_terrain_register(de__editor *ed);
 /* DENG-581: foliage.info, foliage.instances, foliage.type and the foliage.* edit ops
  * (editor_foliage.c, render builds only); capability world.foliage (protocol 1.22). */
 void de__ed_foliage_register(de__editor *ed);
+struct de_foliage_store;
+/** DENG-823: loads the instances of DeFoliage layer `layer` from its DeFoliagePage entities into
+ * `st` (initialised, empty). False when the pages are not a valid cell table or out of memory. */
+bool de__ed_foliage_load(de__editor *ed, de_entity layer, struct de_foliage_store *st);
 /* DENG-821: physics.loadAsset and the mouse spring physics.drag.* (editor_physics.c, physics
  * builds only); capabilities physics.authoring and physics.mouseSpring (protocol 1.23). */
 void de__ed_physics_register(de__editor *ed);

@@ -1,7 +1,9 @@
 # src/world/foliage: module `foliage` (target de_foliage), layer gameplay.
 # The CPU foliage model (palette types, paint and erase strokes, seeded scatter rules, instances per
-# 16 m cell) behind the DIDE editor IPC world.foliage, protocol 1.22 (DENG-581). DeFoliage is a
-# render component. The module is DETERMINISTIC: all math is de_dmath.
+# 16 m cell) behind the DIDE editor IPC world.foliage, protocol 1.22 (DENG-581). The instance store
+# is a growable, sorted cell table (DENG-823); the editor keeps it on DeFoliagePage entities, and
+# DeFoliage (the palette and rules) and DeFoliagePage are render components. The module is
+# DETERMINISTIC: all math is de_dmath.
 de_add_module(
     NAME foliage
     LAYER gameplay

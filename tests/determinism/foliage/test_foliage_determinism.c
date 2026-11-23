@@ -4,6 +4,7 @@
  * for an intended change of the model. */
 #include "de_det_harness.h"
 #include "de_test.h"
+#include "dengine/de_memory.h"
 #include "world/foliage/foliage.h"
 #include "world/terrain/terrain.h"
 
@@ -69,8 +70,9 @@ static u64 mix(u64 h, const void *p, size_t n) {
     return h;
 }
 
-/* Field by field: the structs' padding bytes are not part of the model. */
-static u64 hash_of(const DeFoliage *fo) {
+/* Field by field: the structs' padding bytes are not part of the model. DENG-823: the same bytes as before the paged store (cells in z, x order, then every instance in
+ * cell order), so the golden did not change. */
+static u64 hash_of(const de_foliage_store *fo) {
     u64 h = 0xcbf29ce484222325ull;
     h = mix(h, &fo->cell_count, sizeof fo->cell_count);
     h = mix(h, &fo->instance_count, sizeof fo->instance_count);
@@ -79,15 +81,17 @@ static u64 hash_of(const DeFoliage *fo) {
         h = mix(h, &fo->cells[c].z, 4);
         h = mix(h, &fo->cells[c].count, 4);
     }
-    for (u32 i = 0; i < fo->instance_count; ++i) {
-        const de_foliage_instance *in = &fo->instances[i];
-        h = mix(h, &in->x, 4);
-        h = mix(h, &in->y, 4);
-        h = mix(h, &in->z, 4);
-        h = mix(h, &in->yaw, 4);
-        h = mix(h, &in->scale, 4);
-        h = mix(h, &in->rule, 4);
-        h = mix(h, &in->type, 1);
+    for (u32 c = 0; c < fo->cell_count; ++c) {
+        for (u32 i = 0; i < fo->cells[c].count; ++i) {
+            const de_foliage_instance *in = &fo->cells[c].inst[i];
+            h = mix(h, &in->x, 4);
+            h = mix(h, &in->y, 4);
+            h = mix(h, &in->z, 4);
+            h = mix(h, &in->yaw, 4);
+            h = mix(h, &in->scale, 4);
+            h = mix(h, &in->rule, 4);
+            h = mix(h, &in->type, 1);
+        }
     }
     return h;
 }
@@ -125,6 +129,8 @@ static void run(u64 *out) {
     init_terrain();
     static DeFoliage fo;
     memset(&fo, 0, sizeof fo);
+    de_foliage_store st;
+    de__foliage_store_init(&st, de_heap_allocator());
     const de_foliage_env env = {NULL, type_of, surface_of};
     const de_foliage_surface surfaces[2] = {{&g_terrain, 0.0, 0.0, 0.0}, {NULL, 0.0, 1.5, 0.0}};
     static const f32 falloff[] = {1.0f, 0.7f, 0.2f, 0.0f};
@@ -145,8 +151,8 @@ static void run(u64 *out) {
                                      .has_density = k >= 2,
                                      .density = 1.5f,
                                      .seed = (u32)SEED + k};
-        ASSERT_EQ(de__foliage_paint(&fo, &env, &s, surfaces, 2, msg, sizeof msg), DE_FOLIAGE_OK);
-        out[step++] = hash_of(&fo);
+        ASSERT_EQ(de__foliage_paint(&st, &env, &s, surfaces, 2, msg, sizeof msg), DE_FOLIAGE_OK);
+        out[step++] = hash_of(&st);
     }
     /* Erases: partial with a type, then any type. */
     for (u32 k = 0; k < 2; ++k) {
@@ -158,8 +164,8 @@ static void run(u64 *out) {
                                      .radius = 3.0f,
                                      .strength = k == 0 ? 0.5f : 1.0f,
                                      .seed = (u32)SEED};
-        ASSERT_EQ(de__foliage_erase(&fo, &s, msg, sizeof msg), DE_FOLIAGE_OK);
-        out[step++] = hash_of(&fo);
+        ASSERT_EQ(de__foliage_erase(&st, &s, msg, sizeof msg), DE_FOLIAGE_OK);
+        out[step++] = hash_of(&st);
     }
     /* Scatter rules on the terrain; re-running them; clearing one. */
     for (u32 r = 0; r < 2; ++r) {
@@ -179,17 +185,18 @@ static void run(u64 *out) {
         rule->area_min = (de_vec2){2.0f, 2.0f};
         rule->area_max = (de_vec2){30.0f, 30.0f};
     }
-    ASSERT_EQ(de__foliage_scatter(&fo, &env, NULL, 0, false, msg, sizeof msg), DE_FOLIAGE_OK);
-    out[step++] = hash_of(&fo);
+    ASSERT_EQ(de__foliage_scatter(&st, fo.rules, &env, NULL, 0, false, msg, sizeof msg), DE_FOLIAGE_OK);
+    out[step++] = hash_of(&st);
     const u32 one = 1u;
-    ASSERT_EQ(de__foliage_scatter(&fo, &env, &one, 1, false, msg, sizeof msg), DE_FOLIAGE_OK);
-    out[step++] = hash_of(&fo);
+    ASSERT_EQ(de__foliage_scatter(&st, fo.rules, &env, &one, 1, false, msg, sizeof msg), DE_FOLIAGE_OK);
+    out[step++] = hash_of(&st);
     const u32 two = 2u;
-    ASSERT_EQ(de__foliage_scatter(&fo, &env, &two, 1, true, msg, sizeof msg), DE_FOLIAGE_OK);
-    out[step++] = hash_of(&fo);
-    ASSERT_EQ(de__foliage_scatter(&fo, &env, NULL, 0, false, msg, sizeof msg), DE_FOLIAGE_OK);
-    out[step++] = hash_of(&fo);
-    ASSERT_TRUE(de__foliage_valid(&fo));
+    ASSERT_EQ(de__foliage_scatter(&st, fo.rules, &env, &two, 1, true, msg, sizeof msg), DE_FOLIAGE_OK);
+    out[step++] = hash_of(&st);
+    ASSERT_EQ(de__foliage_scatter(&st, fo.rules, &env, NULL, 0, false, msg, sizeof msg), DE_FOLIAGE_OK);
+    out[step++] = hash_of(&st);
+    ASSERT_TRUE(de__foliage_valid(&st));
+    de__foliage_store_free(&st);
     ASSERT_EQ(step, STEPS);
 }
 

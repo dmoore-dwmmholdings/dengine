@@ -342,7 +342,8 @@ static void run_category(de_system_ctx *ctx, de__rw_kind k) {
     de_query_each(ctx->world, ctx->queries[2], inst ? inst_changed_xform : light_changed_xform, &x);
     if (inst) {
         de__sprite_extract(rw, ctx->world, ctx->queries[3]);
-        x.failed += de__rw_foliage_extract(rw, ctx->world, ctx->queries[4], ctx->queries[5]);
+        x.failed += de__rw_foliage_extract(rw, ctx->world, ctx->queries[4], ctx->queries[5],
+                                           ctx->queries[6]);
     }
     if (x.failed > 0)
         DE_ERROR(rw->log, "render world: out of memory: %u %s not extracted in frame %llu",
@@ -375,15 +376,18 @@ static de_system add_category_system(de__render_world *rw, de_world *w, const ch
     const de_query_filter changed_global = {global, DE_CHANGED};
     const de_query_term sprite_terms[2] = {{global, DE_READ}, {rw->ids.sprite, DE_READ}};
     const de_query_term foliage_terms[1] = {{rw->ids.foliage, DE_READ}};
-    const de_query_filter changed_foliage = {rw->ids.foliage, DE_CHANGED};
-    const de_query_desc queries[6] = {
+    const de_query_term page_terms[1] = {{rw->ids.foliage_page, DE_READ}};
+    const de_query_filter changed_page = {rw->ids.foliage_page, DE_CHANGED};
+    const de_query_desc queries[7] = {
         {.terms = terms, .term_count = 2},
         {.terms = terms, .term_count = 2, .filters = &changed_comp, .filter_count = 1},
         {.terms = terms, .term_count = 2, .filters = &changed_global, .filter_count = 1},
         {.terms = sprite_terms, .term_count = 2},
-        /* DENG-822: DeFoliage instances (foliage_extract.c). */
+        /* DENG-822, DENG-823: DeFoliage layers and their DeFoliagePage instances
+         * (foliage_extract.c). */
         {.terms = foliage_terms, .term_count = 1},
-        {.terms = foliage_terms, .term_count = 1, .filters = &changed_foliage, .filter_count = 1},
+        {.terms = page_terms, .term_count = 1},
+        {.terms = page_terms, .term_count = 1, .filters = &changed_page, .filter_count = 1},
     };
     const char *const after[1] = {SYS_VIEWS};
     return de_system_add(
@@ -392,7 +396,7 @@ static de_system add_category_system(de__render_world *rw, de_world *w, const ch
                              .fn = fn,
                              .user = rw,
                              .queries = queries,
-                             .query_count = comp.id == rw->ids.mesh_renderer.id ? 6u : 3u,
+                             .query_count = comp.id == rw->ids.mesh_renderer.id ? 7u : 3u,
                              .after = after,
                              .after_count = 1});
 }

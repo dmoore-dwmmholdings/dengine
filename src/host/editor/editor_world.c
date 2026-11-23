@@ -85,6 +85,13 @@ static bool arch_has(const ecs_archetype *a, u32 comp) {
     return false;
 }
 
+/* DENG-823: foliage pages (DeFoliagePage, editor_foliage.c) belong to their layer; the IDE reads
+ * them through foliage.info and foliage.instances, so world queries and deltas leave them out. */
+static bool arch_internal(de__editor *ed, const ecs_archetype *a) {
+    const u32 page = de__ed_component(ed, de_ep_cstr("DeFoliagePage")).id;
+    return page != 0 && arch_has(a, page);
+}
+
 static u32 row_rev(const ecs_archetype *a, const ecs_chunk *ch, u32 row) {
     u32 rev = 0;
     for (u32 c = 0; c < a->column_count; ++c) {
@@ -318,7 +325,7 @@ static void on_query(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
                 ok = arch_has(arch, with[i]);
             for (u32 i = 0; i < without_count && ok; ++i)
                 ok = !arch_has(arch, without[i]);
-            if (!ok)
+            if (!ok || arch_internal(ed, arch))
                 continue;
             for (u32 ci = 0; ci < arch->chunks.count; ++ci) {
                 const ecs_chunk *ch = ecs_table_chunk(arch, ci);
@@ -764,7 +771,7 @@ static void sub_delta(de__editor *ed, ed_world_sub *s, u32 since) {
         bool ok = true;
         for (u32 i = 0; i < with_count && ok; ++i)
             ok = arch_has(arch, with[i]);
-        if (!ok)
+        if (!ok || arch_internal(ed, arch))
             continue;
         for (u32 ci = 0; ci < arch->chunks.count; ++ci) {
             const ecs_chunk *ch = ecs_table_chunk(arch, ci);

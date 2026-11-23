@@ -943,16 +943,18 @@ typedef struct DeTerrain {
     u8 order[DE_TERRAIN_LAYERS]; /**< layer slots in blend order, bottom first */
     de_terrain_rule rules[DE_TERRAIN_RULES];
 } DeTerrain;
-/** DeFoliage's storage (DENG-581, DIDE protocol 1.22 world.foliage): DE_FOLIAGE_TYPES palette
- * slots, DE_FOLIAGE_RULES scatter rules, and up to DE_FOLIAGE_INSTANCES instances in up to
- * DE_FOLIAGE_CELLS cells of DE_FOLIAGE_CELL_SIZE metres. The storage is inline and bounded (about
- * 12 KB), so DeFoliage goes on its own entity, not on the DeTerrain entity (one row must fit a
- * 16 KiB chunk). */
-#define DE_FOLIAGE_TYPES      8u
-#define DE_FOLIAGE_RULES      8u
-#define DE_FOLIAGE_CELLS      32u
-#define DE_FOLIAGE_INSTANCES  384u
-#define DE_FOLIAGE_CELL_SIZE  16.0f
+/** DeFoliage (DENG-581, DIDE protocol 1.22 world.foliage): DE_FOLIAGE_TYPES palette slots and
+ * DE_FOLIAGE_RULES scatter rules on the layer entity. DENG-823: the instances are paged. Each
+ * DE_FOLIAGE_CELL_SIZE-metre cell keeps its instances on one or more page entities
+ * (DeFoliagePage, up to DE_FOLIAGE_PAGE_INSTANCES each), so a layer has no fixed limit but
+ * DE_FOLIAGE_CELL_INSTANCES per cell and DE_FOLIAGE_LAYER_INSTANCES per layer, every row fits a
+ * 16 KiB chunk, and a cell can stream in and out on its own. */
+#define DE_FOLIAGE_TYPES           8u
+#define DE_FOLIAGE_RULES           8u
+#define DE_FOLIAGE_PAGE_INSTANCES  512u
+#define DE_FOLIAGE_CELL_INSTANCES  16384u   /**< 64 per square metre; 32 pages */
+#define DE_FOLIAGE_LAYER_INSTANCES 1048576u /**< 28 MB of instances */
+#define DE_FOLIAGE_CELL_SIZE       16.0f
 /** A procedural scatter rule (reflected as "de_foliage_rule"). Id 0 is an empty slot. A range with
  * max <= min is unbounded. */
 typedef struct de_foliage_rule {
@@ -970,13 +972,6 @@ typedef struct de_foliage_rule {
     u32 seed;
     de_vec2 area_min, area_max; /**< world x and z, metres */
 } de_foliage_rule;
-/** A foliage cell (reflected as "de_foliage_cell"): cell (x, z) covers
- * [x * DE_FOLIAGE_CELL_SIZE, (x + 1) * DE_FOLIAGE_CELL_SIZE) along x and the same along z. */
-typedef struct de_foliage_cell {
-    i32 x, z;
-    u32 count;    /**< instances, stored after those of the cells before it */
-    u64 revision; /**< entity revision of the cell's last change */
-} de_foliage_cell;
 /** A foliage instance (reflected as "de_foliage_instance"). */
 typedef struct de_foliage_instance {
     f32 x, y, z;
@@ -988,16 +983,25 @@ typedef struct de_foliage_instance {
      * instance is tilted from +y to it after its yaw); 0, 0: upright. In the struct's padding. */
     i8 nx, nz;
 } de_foliage_instance;
-/** A foliage layer: a palette of foliageType assets (.foliage.toml), scatter rules, and instances
- * kept per cell. Cells are sorted by z, then x; the instances are contiguous per cell, in cell
- * order. Edit it with the foliage.* edit ops (DIDE world.foliage). */
+/** A foliage layer: a palette of foliageType assets (.foliage.toml) and scatter rules. Its
+ * instances are on DeFoliagePage entities whose `layer` is this entity. Edit it with the foliage.*
+ * edit ops (DIDE world.foliage). */
 typedef struct DeFoliage {
     de_blob types[DE_FOLIAGE_TYPES]; /**< foliageType assets; instances name them by slot */
     de_foliage_rule rules[DE_FOLIAGE_RULES];
-    u32 cell_count, instance_count;
-    de_foliage_cell cells[DE_FOLIAGE_CELLS];
-    de_foliage_instance instances[DE_FOLIAGE_INSTANCES];
 } DeFoliage;
+/** DENG-823: one page of the instances of foliage cell (x, z) of `layer`. Cell (x, z) covers
+ * [x * DE_FOLIAGE_CELL_SIZE, (x + 1) * DE_FOLIAGE_CELL_SIZE) along x and the same along z. A cell
+ * with n instances has pages 0 .. ceil(n / DE_FOLIAGE_PAGE_INSTANCES) - 1, each full but the last,
+ * in instance order. A page whose layer is not alive is not drawn. About 14 KB. */
+typedef struct DeFoliagePage {
+    de_entity layer; /**< the DeFoliage entity */
+    i32 x, z;        /**< the cell */
+    u32 page;        /**< index within the cell */
+    u32 count;       /**< instances used, 1 .. DE_FOLIAGE_PAGE_INSTANCES */
+    u64 revision;    /**< entity revision of the cell's last edit (foliage.info) */
+    de_foliage_instance instances[DE_FOLIAGE_PAGE_INSTANCES];
+} DeFoliagePage;
 /** The kind of a water body (DeWater.kind; reflected as "de_water_kind": ocean, river, lake). */
 typedef enum de_water_kind {
     DE_WATER_OCEAN = 0,

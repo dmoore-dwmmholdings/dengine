@@ -13,8 +13,6 @@
 #include <string.h>
 
 #define CELL      DE_FOLIAGE_CELL_SIZE
-#define MAX_INST  DE_FOLIAGE_INSTANCES
-#define MAX_CELLS DE_FOLIAGE_CELLS
 
 static de_foliage_error fail(de_foliage_error e, char *msg, size_t cap, const char *fmt, ...) {
     if (msg != NULL && cap > 0) {
@@ -239,54 +237,166 @@ static i32 cell_coord(f32 v) {
 
 /* ---- Storage ------------------------------------------------------------------------------- */
 
+#define MAX_CELL  DE_FOLIAGE_CELL_INSTANCES
+#define MAX_LAYER DE_FOLIAGE_LAYER_INSTANCES
+
+void de__foliage_store_init(de_foliage_store *st, const de_allocator *alloc) {
+    memset(st, 0, sizeof *st);
+    st->alloc = alloc != NULL ? alloc : de_heap_allocator();
+}
+
+void de__foliage_store_free(de_foliage_store *st) {
+    for (u32 i = 0; i < st->cell_count; ++i)
+        DE_FREE(st->alloc, st->cells[i].inst, sizeof(de_foliage_instance) * st->cells[i].cap);
+    DE_FREE(st->alloc, st->cells, sizeof(de_foliage_cell) * st->cell_cap);
+    const de_allocator *a = st->alloc;
+    de__foliage_store_init(st, a);
+}
+
 /* The index of cell (x, z) in the sorted table, or where it would go (`*found` false). */
-static u32 cell_find(const DeFoliage *fo, i32 x, i32 z, bool *found) {
-    u32 i = 0;
-    for (; i < fo->cell_count; ++i) {
-        const de_foliage_cell *c = &fo->cells[i];
-        if (c->z > z || (c->z == z && c->x >= x))
-            break;
+static u32 cell_find(const de_foliage_store *st, i32 x, i32 z, bool *found) {
+    u32 lo = 0, hi = st->cell_count;
+    while (lo < hi) {
+        const u32 mid = lo + (hi - lo) / 2u;
+        const de_foliage_cell *c = &st->cells[mid];
+        if (c->z < z || (c->z == z && c->x < x))
+            lo = mid + 1u;
+        else
+            hi = mid;
     }
-    *found = i < fo->cell_count && fo->cells[i].x == x && fo->cells[i].z == z;
-    return i;
+    *found = lo < st->cell_count && st->cells[lo].x == x && st->cells[lo].z == z;
+    return lo;
 }
 
-static u32 cell_start(const DeFoliage *fo, u32 ci) {
-    u32 at = 0;
-    for (u32 i = 0; i < ci; ++i)
-        at += fo->cells[i].count;
-    return at;
+de_foliage_cell *de__foliage_store_cell(const de_foliage_store *st, i32 x, i32 z) {
+    bool found;
+    const u32 ci = cell_find(st, x, z, &found);
+    return found ? &st->cells[ci] : NULL;
 }
 
-bool de__foliage_valid(const DeFoliage *fo) {
-    if (fo->cell_count > MAX_CELLS || fo->instance_count > MAX_INST)
+/* Inserts empty cell (x, z) at `ci`. False when out of memory. */
+static bool cell_insert(de_foliage_store *st, u32 ci, i32 x, i32 z) {
+    if (st->cell_count == st->cell_cap) {
+        const u32 cap = st->cell_cap ? st->cell_cap * 2u : 16u;
+        de_foliage_cell *n = (de_foliage_cell *)DE_REALLOC(
+            st->alloc, st->cells, sizeof *n * st->cell_cap, sizeof *n * cap,
+            DE_ALIGNOF(de_foliage_cell), DE_MEM_GENERAL);
+        if (n == NULL)
+            return false;
+        st->cells = n;
+        st->cell_cap = cap;
+    }
+    memmove(&st->cells[ci + 1], &st->cells[ci], (st->cell_count - ci) * sizeof st->cells[0]);
+    st->cells[ci] = (de_foliage_cell){x, z, 0, 0, 0, NULL};
+    st->cell_count++;
+    return true;
+}
+
+static bool cell_reserve(de_foliage_store *st, de_foliage_cell *c, u32 n) {
+    if (n <= c->cap)
+        return true;
+    u32 cap = c->cap ? c->cap : 16u;
+    while (cap < n)
+        cap *= 2u;
+    de_foliage_instance *p = (de_foliage_instance *)DE_REALLOC(
+        st->alloc, c->inst, sizeof *p * c->cap, sizeof *p * cap, DE_ALIGNOF(de_foliage_instance),
+        DE_MEM_GENERAL);
+    if (p == NULL)
+        return false;
+    c->inst = p;
+    c->cap = cap;
+    return true;
+}
+
+static void cell_drop(de_foliage_store *st, u32 ci) {
+    DE_FREE(st->alloc, st->cells[ci].inst, sizeof(de_foliage_instance) * st->cells[ci].cap);
+    memmove(&st->cells[ci], &st->cells[ci + 1], (st->cell_count - ci - 1) * sizeof st->cells[0]);
+    st->cell_count--;
+}
+
+/* The cell (x, z) with room for `more` instances, made when missing; NULL when full or out of
+ * memory (a cell made empty is dropped again). */
+static de_foliage_cell *cell_for(de_foliage_store *st, i32 x, i32 z, u32 more) {
+    if (more > MAX_LAYER - st->instance_count)
+        return NULL;
+    bool found;
+    const u32 ci = cell_find(st, x, z, &found);
+    if (!found && !cell_insert(st, ci, x, z))
+        return NULL;
+    de_foliage_cell *c = &st->cells[ci];
+    if (more > MAX_CELL - c->count || !cell_reserve(st, c, c->count + more)) {
+        if (c->count == 0)
+            cell_drop(st, ci);
+        return NULL;
+    }
+    return c;
+}
+
+static void inst_copy(de_foliage_instance *dst, const de_foliage_instance *in) {
+    memset(dst, 0, sizeof *dst);
+    dst->x = in->x;
+    dst->y = in->y;
+    dst->z = in->z;
+    dst->yaw = in->yaw;
+    dst->scale = in->scale;
+    dst->rule = in->rule;
+    dst->type = in->type;
+    dst->nx = in->nx;
+    dst->nz = in->nz;
+}
+
+bool de__foliage_store_append(de_foliage_store *st, i32 x, i32 z, u64 revision,
+                              const de_foliage_instance *inst, u32 n) {
+    if (n == 0)
+        return true;
+    de_foliage_cell *c = cell_for(st, x, z, n);
+    if (c == NULL)
+        return false;
+    for (u32 k = 0; k < n; ++k)
+        inst_copy(&c->inst[c->count + k], &inst[k]);
+    c->count += n;
+    if (revision > c->revision)
+        c->revision = revision;
+    st->instance_count += n;
+    return true;
+}
+
+bool de__foliage_store_copy(de_foliage_store *dst, const de_foliage_store *src) {
+    de__foliage_store_free(dst);
+    for (u32 i = 0; i < src->cell_count; ++i) {
+        const de_foliage_cell *c = &src->cells[i];
+        if (!de__foliage_store_append(dst, c->x, c->z, c->revision, c->inst, c->count)) {
+            de__foliage_store_free(dst);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool de__foliage_valid(const de_foliage_store *st) {
+    if (st->instance_count > MAX_LAYER || st->cell_count > st->cell_cap)
         return false;
     u32 total = 0;
-    for (u32 i = 0; i < fo->cell_count; ++i) {
-        const de_foliage_cell *c = &fo->cells[i];
-        if (c->count == 0)
+    for (u32 i = 0; i < st->cell_count; ++i) {
+        const de_foliage_cell *c = &st->cells[i];
+        if (c->count == 0 || c->count > c->cap || c->count > MAX_CELL || c->inst == NULL)
             return false;
         if (i > 0) {
-            const de_foliage_cell *p = &fo->cells[i - 1];
+            const de_foliage_cell *p = &st->cells[i - 1];
             if (p->z > c->z || (p->z == c->z && p->x >= c->x))
                 return false;
         }
         total += c->count;
-        if (total > MAX_INST)
+        if (total > MAX_LAYER)
             return false;
     }
-    return total == fo->instance_count;
+    return total == st->instance_count;
 }
 
-const de_foliage_instance *de__foliage_cell(const DeFoliage *fo, i32 x, i32 z, u32 *n) {
-    bool found;
-    const u32 ci = cell_find(fo, x, z, &found);
-    if (!found) {
-        *n = 0;
-        return NULL;
-    }
-    *n = fo->cells[ci].count;
-    return &fo->instances[cell_start(fo, ci)];
+const de_foliage_instance *de__foliage_cell(const de_foliage_store *st, i32 x, i32 z, u32 *n) {
+    const de_foliage_cell *c = de__foliage_store_cell(st, x, z);
+    *n = c != NULL ? c->count : 0;
+    return c != NULL ? c->inst : NULL;
 }
 
 static bool inst_equal(const de_foliage_instance *a, const de_foliage_instance *b) {
@@ -295,7 +405,7 @@ static bool inst_equal(const de_foliage_instance *a, const de_foliage_instance *
            f32_bits(a->scale) == f32_bits(b->scale) && a->rule == b->rule && a->type == b->type;
 }
 
-bool de__foliage_cell_equal(const DeFoliage *a, const DeFoliage *b, i32 x, i32 z) {
+bool de__foliage_cell_equal(const de_foliage_store *a, const de_foliage_store *b, i32 x, i32 z) {
     u32 na, nb;
     const de_foliage_instance *ia = de__foliage_cell(a, x, z, &na);
     const de_foliage_instance *ib = de__foliage_cell(b, x, z, &nb);
@@ -307,121 +417,82 @@ bool de__foliage_cell_equal(const DeFoliage *a, const DeFoliage *b, i32 x, i32 z
     return true;
 }
 
-static void cell_drop(DeFoliage *fo, u32 ci) {
-    memmove(&fo->cells[ci], &fo->cells[ci + 1],
-            (fo->cell_count - ci - 1) * sizeof fo->cells[0]);
-    fo->cell_count--;
-    memset(&fo->cells[fo->cell_count], 0, sizeof fo->cells[0]);
+/* Removes instance `k` of cell `ci`; drops the cell when it empties. */
+static void inst_remove(de_foliage_store *st, u32 ci, u32 k) {
+    de_foliage_cell *c = &st->cells[ci];
+    memmove(&c->inst[k], &c->inst[k + 1], (c->count - k - 1) * sizeof c->inst[0]);
+    c->count--;
+    st->instance_count--;
+    if (c->count == 0)
+        cell_drop(st, ci);
 }
 
-/* Removes instance `at` (global index) of cell `ci`; drops the cell when it empties. */
-static void inst_remove(DeFoliage *fo, u32 ci, u32 at) {
-    memmove(&fo->instances[at], &fo->instances[at + 1],
-            (fo->instance_count - at - 1) * sizeof fo->instances[0]);
-    fo->instance_count--;
-    memset(&fo->instances[fo->instance_count], 0, sizeof fo->instances[0]);
-    if (--fo->cells[ci].count == 0)
-        cell_drop(fo, ci);
-}
-
-/* Whether one more instance fits in cell (x, z). */
-static bool cell_room(const DeFoliage *fo, i32 x, i32 z) {
-    if (fo->instance_count >= MAX_INST)
+/* Appends `in` to its cell; false (nothing placed) when there is no room. */
+static bool place(de_foliage_store *st, const de_foliage_instance *in) {
+    de_foliage_cell *c = cell_for(st, cell_coord(in->x), cell_coord(in->z), 1);
+    if (c == NULL)
         return false;
-    bool found;
-    (void)cell_find(fo, x, z, &found);
-    return found || fo->cell_count < MAX_CELLS;
-}
-
-/* Appends `in` to its cell (room checked by the caller). */
-static void place(DeFoliage *fo, const de_foliage_instance *in) {
-    const i32 x = cell_coord(in->x), z = cell_coord(in->z);
-    bool found;
-    const u32 ci = cell_find(fo, x, z, &found);
-    if (!found) {
-        memmove(&fo->cells[ci + 1], &fo->cells[ci], (fo->cell_count - ci) * sizeof fo->cells[0]);
-        fo->cells[ci] = (de_foliage_cell){x, z, 0, 0};
-        fo->cell_count++;
-    }
-    const u32 at = cell_start(fo, ci) + fo->cells[ci].count;
-    memmove(&fo->instances[at + 1], &fo->instances[at],
-            (fo->instance_count - at) * sizeof fo->instances[0]);
-    de_foliage_instance *dst = &fo->instances[at];
-    memset(dst, 0, sizeof *dst);
-    dst->x = in->x;
-    dst->y = in->y;
-    dst->z = in->z;
-    dst->yaw = in->yaw;
-    dst->scale = in->scale;
-    dst->rule = in->rule;
-    dst->type = in->type;
-    dst->nx = in->nx;
-    dst->nz = in->nz;
-    fo->instance_count++;
-    fo->cells[ci].count++;
-}
-
-bool de__foliage_set_cell(DeFoliage *fo, i32 x, i32 z, const de_foliage_instance *inst, u32 n) {
-    bool found;
-    u32 ci = cell_find(fo, x, z, &found);
-    const u32 old = found ? fo->cells[ci].count : 0;
-    if (fo->instance_count - old + n > MAX_INST)
-        return false;
-    if (!found && n > 0 && fo->cell_count >= MAX_CELLS)
-        return false;
-    for (u32 k = old; k > 0; --k)
-        inst_remove(fo, ci, cell_start(fo, ci) + k - 1);
-    for (u32 k = 0; k < n; ++k) {
-        de_foliage_instance i = inst[k];
-        /* Kept in cell (x, z) whatever its position says, as the restore data has it. */
-        ci = cell_find(fo, x, z, &found);
-        if (!found) {
-            memmove(&fo->cells[ci + 1], &fo->cells[ci],
-                    (fo->cell_count - ci) * sizeof fo->cells[0]);
-            fo->cells[ci] = (de_foliage_cell){x, z, 0, 0};
-            fo->cell_count++;
-        }
-        const u32 at = cell_start(fo, ci) + fo->cells[ci].count;
-        memmove(&fo->instances[at + 1], &fo->instances[at],
-                (fo->instance_count - at) * sizeof fo->instances[0]);
-        memset(&fo->instances[at], 0, sizeof fo->instances[at]);
-        fo->instances[at].x = i.x;
-        fo->instances[at].y = i.y;
-        fo->instances[at].z = i.z;
-        fo->instances[at].yaw = i.yaw;
-        fo->instances[at].scale = i.scale;
-        fo->instances[at].rule = i.rule;
-        fo->instances[at].type = i.type;
-        fo->instances[at].nx = i.nx;
-        fo->instances[at].nz = i.nz;
-        fo->instance_count++;
-        fo->cells[ci].count++;
-    }
+    inst_copy(&c->inst[c->count++], in);
+    st->instance_count++;
     return true;
 }
 
-/* Whether an instance of `type` at (x, z) keeps `spacing` from every other one of that type, and
- * the layer has room for it. */
-static bool room(const DeFoliage *fo, f32 x, f32 z, u32 type, f32 spacing) {
-    const i32 cx = cell_coord(x), cz = cell_coord(z);
-    if (!cell_room(fo, cx, cz))
+bool de__foliage_set_cell(de_foliage_store *st, i32 x, i32 z, const de_foliage_instance *inst,
+                          u32 n) {
+    bool found;
+    u32 ci = cell_find(st, x, z, &found);
+    const u32 old = found ? st->cells[ci].count : 0;
+    if (n > MAX_CELL || st->instance_count - old + n > MAX_LAYER)
         return false;
+    if (n == 0) {
+        if (found) {
+            st->instance_count -= old;
+            cell_drop(st, ci);
+        }
+        return true;
+    }
+    if (!found && !cell_insert(st, ci, x, z))
+        return false;
+    de_foliage_cell *c = &st->cells[ci];
+    if (!cell_reserve(st, c, n)) {
+        if (!found)
+            cell_drop(st, ci);
+        return false;
+    }
+    /* Kept in cell (x, z) whatever their positions say, as the restore data has them. */
+    for (u32 k = 0; k < n; ++k)
+        inst_copy(&c->inst[k], &inst[k]);
+    c->count = n;
+    st->instance_count = st->instance_count - old + n;
+    return true;
+}
+
+/* Whether an instance of `type` at (x, z) keeps `spacing` from every other one of that type.
+ * Only the cells within `reach` of the candidate's cell count (as in the mock); of those, the ones
+ * whose span misses [x - spacing, x + spacing] (and the same along z, with a margin for rounding)
+ * hold nothing closer, so they are not read. */
+static bool room(const de_foliage_store *st, f32 x, f32 z, u32 type, f32 spacing) {
+    const i32 cx = cell_coord(x), cz = cell_coord(z);
     const i32 reach = (i32)de_dceil(spacing / CELL);
+    const f32 margin = spacing + 0.01f;
+    const i32 x0 = cell_coord(x - margin) > cx - reach ? cell_coord(x - margin) : cx - reach;
+    const i32 x1 = cell_coord(x + margin) < cx + reach ? cell_coord(x + margin) : cx + reach;
+    const i32 z0 = cell_coord(z - margin) > cz - reach ? cell_coord(z - margin) : cz - reach;
+    const i32 z1 = cell_coord(z + margin) < cz + reach ? cell_coord(z + margin) : cz + reach;
     const f32 s2 = spacing * spacing;
-    u32 at = 0;
-    for (u32 ci = 0; ci < fo->cell_count; ++ci) {
-        const de_foliage_cell *c = &fo->cells[ci];
-        const u32 begin = at;
-        at += c->count;
-        if (c->x < cx - reach || c->x > cx + reach || c->z < cz - reach || c->z > cz + reach)
-            continue;
-        for (u32 k = begin; k < at; ++k) {
-            const de_foliage_instance *i = &fo->instances[k];
-            if (i->type != type)
+    for (i32 gz = z0; gz <= z1; ++gz) {
+        for (i32 gx = x0; gx <= x1; ++gx) {
+            const de_foliage_cell *c = de__foliage_store_cell(st, gx, gz);
+            if (c == NULL)
                 continue;
-            const f32 dx = i->x - x, dz = i->z - z;
-            if (dx * dx + dz * dz < s2)
-                return false;
+            for (u32 k = 0; k < c->count; ++k) {
+                const de_foliage_instance *i = &c->inst[k];
+                if (i->type != type)
+                    continue;
+                const f32 dx = i->x - x, dz = i->z - z;
+                if (dx * dx + dz * dz < s2)
+                    return false;
+            }
         }
     }
     return true;
@@ -545,7 +616,7 @@ static de_foliage_error type_of(const de_foliage_env *env, u32 slot, de_foliage_
     return env->type_of(env->user, slot, out, msg, cap);
 }
 
-de_foliage_error de__foliage_paint(DeFoliage *fo, const de_foliage_env *env,
+de_foliage_error de__foliage_paint(de_foliage_store *st, const de_foliage_env *env,
                                    const de_foliage_stroke *s, const de_foliage_surface *surfaces,
                                    u32 surface_count, char *msg, size_t cap) {
     if (!s->has_type)
@@ -590,7 +661,7 @@ de_foliage_error de__foliage_paint(DeFoliage *fo, const de_foliage_env *env,
                 !within(h.y, ft.height[0], ft.height[1]))
                 continue;
             const f32 spacing = maxf(ft.min_spacing, 0.5f / de_dsqrt(maxf(density * w, 1e-6f)));
-            if (!room(fo, x, z, index, spacing))
+            if (!room(st, x, z, index, spacing))
                 continue;
             de_foliage_instance in = {x, h.y, z,
                                       lerpf(ft.rotation[0], ft.rotation[1], yaw),
@@ -598,24 +669,22 @@ de_foliage_error de__foliage_paint(DeFoliage *fo, const de_foliage_env *env,
                                       (u8)index, 0, 0};
             if (ft.align_to_normal)
                 surface_normal(h.src, x, z, &in.nx, &in.nz);
-            place(fo, &in);
+            (void)place(st, &in); /* no room: skipped */
         }
     }
     return DE_FOLIAGE_OK;
 }
 
-de_foliage_error de__foliage_erase(DeFoliage *fo, const de_foliage_stroke *s, char *msg,
+de_foliage_error de__foliage_erase(de_foliage_store *st, const de_foliage_stroke *s, char *msg,
                                    size_t cap) {
     const de_foliage_error e = dabs_check(s, msg, cap);
     if (e != DE_FOLIAGE_OK)
         return e;
     const u64 seed = (u64)s->seed;
     const u32 dab_count = s->point_count / 4;
-    u32 at = fo->instance_count;
-    for (u32 ci = fo->cell_count; ci-- > 0;) {
-        const u32 begin = at - fo->cells[ci].count;
-        for (u32 k = at; k-- > begin;) {
-            const de_foliage_instance *i = &fo->instances[k];
+    for (u32 ci = st->cell_count; ci-- > 0;) {
+        for (u32 k = st->cells[ci].count; k-- > 0;) {
+            const de_foliage_instance *i = &st->cells[ci].inst[k];
             if (s->has_type && s->type != i->type)
                 continue;
             f32 w = 0.0f;
@@ -627,34 +696,31 @@ de_foliage_error de__foliage_erase(DeFoliage *fo, const de_foliage_stroke *s, ch
             }
             rng r = rng_new(seed ^ ((u64)f32_bits(i->x) << 32) ^ (u64)f32_bits(i->z));
             if (rng_next(&r) < w)
-                inst_remove(fo, ci, k);
+                inst_remove(st, ci, k); /* drops the cell at its last instance (k == 0) */
         }
-        at = begin;
     }
     return DE_FOLIAGE_OK;
 }
 
-static void remove_rule(DeFoliage *fo, u32 id) {
-    u32 at = fo->instance_count;
-    for (u32 ci = fo->cell_count; ci-- > 0;) {
-        const u32 begin = at - fo->cells[ci].count;
-        for (u32 k = at; k-- > begin;)
-            if (fo->instances[k].rule == id)
-                inst_remove(fo, ci, k);
-        at = begin;
-    }
+static void remove_rule(de_foliage_store *st, u32 id) {
+    for (u32 ci = st->cell_count; ci-- > 0;)
+        for (u32 k = st->cells[ci].count; k-- > 0;)
+            if (st->cells[ci].inst[k].rule == id)
+                inst_remove(st, ci, k);
 }
 
-de_foliage_error de__foliage_scatter(DeFoliage *fo, const de_foliage_env *env, const u32 *ids,
-                                     u32 id_count, bool clear, char *msg, size_t cap) {
+de_foliage_error de__foliage_scatter(de_foliage_store *st,
+                                     const de_foliage_rule rules[DE_FOLIAGE_RULES],
+                                     const de_foliage_env *env, const u32 *ids, u32 id_count,
+                                     bool clear, char *msg, size_t cap) {
     de_foliage_rule chosen[64];
     u32 n = 0;
     if (ids != NULL) {
         for (u32 k = 0; k < id_count; ++k) {
             const de_foliage_rule *found = NULL;
             for (u32 r = 0; r < DE_FOLIAGE_RULES && found == NULL; ++r)
-                if (fo->rules[r].id != 0 && fo->rules[r].id == ids[k])
-                    found = &fo->rules[r];
+                if (rules[r].id != 0 && rules[r].id == ids[k])
+                    found = &rules[r];
             if (found == NULL)
                 return fail(DE_FOLIAGE_INVALID, msg, cap, "no scatter rule %u", ids[k]);
             if (n < sizeof chosen / sizeof chosen[0])
@@ -662,11 +728,11 @@ de_foliage_error de__foliage_scatter(DeFoliage *fo, const de_foliage_env *env, c
         }
     } else {
         for (u32 r = 0; r < DE_FOLIAGE_RULES; ++r)
-            if (fo->rules[r].id != 0 && fo->rules[r].enabled)
-                chosen[n++] = fo->rules[r];
+            if (rules[r].id != 0 && rules[r].enabled)
+                chosen[n++] = rules[r];
     }
     for (u32 k = 0; k < n; ++k)
-        remove_rule(fo, chosen[k].id);
+        remove_rule(st, chosen[k].id);
     if (clear)
         return DE_FOLIAGE_OK;
     for (u32 k = 0; k < n; ++k) {
@@ -715,7 +781,7 @@ de_foliage_error de__foliage_scatter(DeFoliage *fo, const de_foliage_env *env, c
                 !within(h.slope, ft.slope[0], ft.slope[1]) ||
                 !within(h.y, ft.height[0], ft.height[1]))
                 continue;
-            if (!room(fo, x, z, r->type, ft.min_spacing))
+            if (!room(st, x, z, r->type, ft.min_spacing))
                 continue;
             de_foliage_instance in = {x, h.y, z,
                                       lerpf(ft.rotation[0], ft.rotation[1], yaw),
@@ -723,19 +789,20 @@ de_foliage_error de__foliage_scatter(DeFoliage *fo, const de_foliage_env *env, c
                                       r->type, 0, 0};
             if (ft.align_to_normal)
                 surface_normal(&surf, x, z, &in.nx, &in.nz);
-            place(fo, &in);
+            (void)place(st, &in); /* no room: skipped */
         }
     }
     return DE_FOLIAGE_OK;
 }
 
-void de__foliage_realign(DeFoliage *fo, const de_foliage_env *env,
+void de__foliage_realign(de_foliage_store *st, const de_foliage_env *env,
                          const de_foliage_surface *surfaces, u32 surface_count) {
     /* Per palette slot: 0 not read yet, 1 upright, 2 aligned. */
     u8 align[DE_FOLIAGE_TYPES] = {0};
     char msg[8];
-    for (u32 k = 0; k < fo->instance_count && k < DE_FOLIAGE_INSTANCES; ++k) {
-        de_foliage_instance *in = &fo->instances[k];
+    for (u32 k = 0, ci = 0; ci < st->cell_count; k = 0, ++ci) {
+      for (; k < st->cells[ci].count; ++k) {
+        de_foliage_instance *in = &st->cells[ci].inst[k];
         if (in->nx != 0 || in->nz != 0 || in->type >= DE_FOLIAGE_TYPES)
             continue;
         if (align[in->type] == 0) {
@@ -762,5 +829,6 @@ void de__foliage_realign(DeFoliage *fo, const de_foliage_env *env,
         }
         if (best != NULL)
             surface_normal(best, in->x, in->z, &in->nx, &in->nz);
+      }
     }
 }

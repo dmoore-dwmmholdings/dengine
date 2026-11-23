@@ -1,8 +1,10 @@
 /* DENG-581: foliage.info, foliage.instances, foliage.type and the foliage.* edit ops (paint,
  * erase, scatter, restore) of the DIDE world.foliage capability (protocol 1.22), through the real
  * handlers, the edit transactions and the generated protocol readers and writers. The cases are
- * the DIDE mock engine's (mock-engine/src/foliage.rs), at a scale that fits the bounded layer
- * (DE_FOLIAGE_INSTANCES). The two foliage types are the mock's fixtures, in data/foliage. */
+ * the DIDE mock engine's (mock-engine/src/foliage.rs). The two foliage types are the mock's
+ * fixtures, in data/foliage. DENG-823: the instances live on DeFoliagePage entities; the tests read
+ * them back through de__ed_foliage_load, and DIDE-R167 AC1 (a 100 m brush at 4/m^2) is stored,
+ * undone and redone. */
 #include "de_test.h"
 #if !defined(DE_SHIPPING)
 #include "host/editor/editor_internal.h"
@@ -19,7 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define STORAGE  (2u << 20)
+#define STORAGE  (8u << 20) /* the editor arena (ED_ARENA_CAP) */
 #define RESPONSE (512u << 10)
 
 void de__ed_session_shutdown(void);
@@ -119,15 +121,68 @@ static DeFoliage *layer(foliage_fx *f) {
     ASSERT_TRUE(fo != NULL);
     return fo;
 }
-/* A copy of the layer's instances, in storage order. */
+/* The layer's instances, loaded from its pages (the store must be freed). */
+static void store_of(foliage_fx *f, de_foliage_store *st) {
+    de__foliage_store_init(st, de_heap_allocator());
+    ASSERT_TRUE(de__ed_foliage_load(&f->ed, f->layer, st));
+}
+static u32 count_of(foliage_fx *f) {
+    de_foliage_store st;
+    store_of(f, &st);
+    const u32 n = st.instance_count;
+    de__foliage_store_free(&st);
+    return n;
+}
+static u32 cells_of(foliage_fx *f) {
+    de_foliage_store st;
+    store_of(f, &st);
+    const u32 n = st.cell_count;
+    de__foliage_store_free(&st);
+    return n;
+}
+/* The DeFoliagePage entities of the layer. */
+typedef struct page_set {
+    de_entity e[4096];
+    u32 n;
+    u64 layer;
+} page_set;
+static void page_chunk(const de_query_chunk *c, void *user) {
+    page_set *ps = (page_set *)user;
+    const DeFoliagePage *p = (const DeFoliagePage *)c->columns[0];
+    for (u32 r = 0; r < c->count; ++r)
+        if (p[r].layer.bits == ps->layer && ps->n < 4096u)
+            ps->e[ps->n++] = c->entities[r];
+}
+static de_component page_comp(foliage_fx *f) {
+    const de_component pc = de_component_find(f->engine.world, "DeFoliagePage");
+    ASSERT_TRUE(DE_HANDLE_VALID(pc));
+    return pc;
+}
+static void pages_of(foliage_fx *f, page_set *ps) {
+    ps->n = 0;
+    ps->layer = f->layer.bits;
+    const de_query_term terms[1] = {{page_comp(f), DE_READ}};
+    const de_query_desc qd = {terms, 1, NULL, 0};
+    const de_query q = de_query_create(f->engine.world, &qd);
+    de_query_each(f->engine.world, q, page_chunk, ps);
+    de_query_destroy(f->engine.world, q);
+}
+/* A copy of the layer's instances, in cell order. */
+#define INST_MAX 65536u
 typedef struct inst_list {
     u32 n;
-    de_foliage_instance i[DE_FOLIAGE_INSTANCES];
+    de_foliage_instance i[INST_MAX];
 } inst_list;
 static void instances_of(foliage_fx *f, inst_list *out) {
-    const DeFoliage *fo = layer(f);
-    out->n = fo->instance_count;
-    memcpy(out->i, fo->instances, sizeof(de_foliage_instance) * fo->instance_count);
+    de_foliage_store st;
+    store_of(f, &st);
+    ASSERT_TRUE(st.instance_count <= INST_MAX);
+    out->n = 0;
+    for (u32 c = 0; c < st.cell_count; ++c) {
+        memcpy(&out->i[out->n], st.cells[c].inst, sizeof(de_foliage_instance) * st.cells[c].count);
+        out->n += st.cells[c].count;
+    }
+    de__foliage_store_free(&st);
 }
 static bool same(const inst_list *a, const inst_list *b) {
     return a->n == b->n && memcmp(a->i, b->i, sizeof(de_foliage_instance) * a->n) == 0;
@@ -302,7 +357,7 @@ static de_ep_edit_op scatter_op(foliage_fx *f, const u32 *rules, u32 n, bool all
                            .has_value = true,
                            .value = {g_value, size}};
 }
-/* The mock's rule, over a 12 m square (the mock's 30 m one does not fit the bounded layer). */
+/* The mock's rule, over a 12 m square, to keep the cases small. */
 static void set_rule(foliage_fx *f, u32 slot, u32 id, de_entity terrain) {
     de_foliage_rule *r = &layer(f)->rules[slot];
     r->id = id;
@@ -335,7 +390,7 @@ TEST_F(editor_foliage, capability_and_info_shape, foliage_fx) {
     EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_map_cstr(r, "cellSize")), 16.0f, 1e-6f);
     EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(r, "maxTypes")), 8u);
     EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(r, "maxRules")), 8u);
-    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(r, "maxPerCell")), DE_FOLIAGE_INSTANCES);
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(r, "maxPerCell")), DE_FOLIAGE_CELL_INSTANCES);
     EXPECT_TRUE(str_is(mpack_node_map_cstr(r, "typeSuffix"), ".foliage.toml"));
     EXPECT_EQ(mpack_node_u64(mpack_node_map_cstr(r, "count")), 0u);
     EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(r, "cells")), 0u);
@@ -399,8 +454,8 @@ TEST_F(editor_foliage, paint_places_on_the_surface_and_undo_redo_restore_it, fol
     EXPECT_EQ(rev, mpack_node_u64(mpack_node_map_cstr(r, "revision")));
 
     ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
-    EXPECT_EQ(layer(f)->instance_count, 0u);
-    EXPECT_EQ(layer(f)->cell_count, 0u);
+    EXPECT_EQ(count_of(f), 0u);
+    EXPECT_EQ(cells_of(f), 0u);
     ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
     instances_of(f, &now);
     EXPECT_TRUE(same(&now, &after));
@@ -413,9 +468,14 @@ TEST_F(editor_foliage, painting_again_keeps_spacing_and_the_same_seed_is_determi
     ASSERT_EQ(paint(f, &s), 0);
     instances_of(f, &a);
     /* The same stroke on an empty layer gives the same bytes. */
+    static page_set ps;
+    pages_of(f, &ps);
+    for (u32 i = 0; i < ps.n; ++i)
+        de_entity_despawn(f->engine.world, ps.e[i]);
     *layer(f) = (DeFoliage){.types = {layer(f)->types[0], layer(f)->types[1]}};
     for (u32 i = 0; i < DE_FOLIAGE_RULES; ++i)
         layer(f)->rules[i].layer = -1;
+    ASSERT_EQ(count_of(f), 0u);
     ASSERT_EQ(paint(f, &s), 0);
     instances_of(f, &b);
     EXPECT_TRUE(same(&a, &b));
@@ -456,7 +516,7 @@ TEST_F(editor_foliage, erase_at_full_strength_clears_the_brush_and_keeps_other_t
     s.has_type = false;
     const de_ep_edit_op all = stroke_op(f, "foliage.erase", &s);
     ASSERT_EQ(edit(f, &all, NULL), 0);
-    EXPECT_EQ(layer(f)->instance_count, 0u);
+    EXPECT_EQ(count_of(f), 0u);
 }
 
 /* ---- Scatter ---- */
@@ -465,7 +525,7 @@ TEST_F(editor_foliage, scatter_reruns_deterministically_keeps_painted_and_clears
     set_rule(f, 0, 1, f->terrain);
     const de_ep_foliage_stroke s = stroke(f, 1, 40.0f, 40.0f, 1.0f);
     ASSERT_EQ(paint(f, &s), 0);
-    const u32 painted = layer(f)->instance_count;
+    const u32 painted = count_of(f);
     EXPECT_TRUE(painted > 0u);
     de_ep_edit_op op = scatter_op(f, NULL, 0, true, false);
     u32 tx = 0;
@@ -532,7 +592,7 @@ TEST_F(editor_foliage, bad_ops_are_refused, foliage_fx) {
     s = stroke(f, 0, 0.0f, 0.0f, 1.0f);
     g_surface[0] = 0x7777; /* a dead surface */
     EXPECT_EQ(paint(f, &s), DE_EP_ERR_NOT_FOUND);
-    EXPECT_EQ(layer(f)->instance_count, 0u);
+    EXPECT_EQ(count_of(f), 0u);
 
     /* An entity without DeFoliage, a missing value, bad restore data and an unknown op. */
     s = stroke(f, 0, 0.0f, 0.0f, 1.0f);
@@ -558,11 +618,15 @@ TEST_F(editor_foliage, instances_report_ten_floats_each_and_filter_by_type, foli
     static const i32 c00[2] = {0, 0}, c55[2] = {5, 5};
     mpack_node_t r = result(cell_instances(f, c00, 2, -1));
     const size_t n = mpack_node_array_length(mpack_node_map_cstr(r, "types"));
-    EXPECT_EQ(n, layer(f)->instance_count);
+    EXPECT_EQ(n, count_of(f));
     EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(r, "rules")), n);
     const mpack_node_t xf = mpack_node_map_cstr(r, "transforms");
     ASSERT_EQ(mpack_node_array_length(xf), n * 10);
-    EXPECT_EQ(mpack_node_u64(mpack_node_map_cstr(r, "revision")), layer(f)->cells[0].revision);
+    de_foliage_store st;
+    store_of(f, &st);
+    ASSERT_EQ(st.cell_count, 1u);
+    EXPECT_EQ(mpack_node_u64(mpack_node_map_cstr(r, "revision")), st.cells[0].revision);
+    de__foliage_store_free(&st);
     /* Position, a unit quaternion about +y, uniform scale. */
     f32 norm = 0;
     for (u32 k = 3; k < 7; ++k) {
@@ -619,7 +683,7 @@ TEST_F(editor_foliage, align_to_normal_tilts_on_the_terrain_and_survives_undo, f
     EXPECT_FLOAT_EQ(up.z, 0.0f, 0.01f);
     /* Undo, then redo through the restore data (no normals): the normals come back. */
     ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
-    EXPECT_EQ(layer(f)->instance_count, 0u);
+    EXPECT_EQ(count_of(f), 0u);
     ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
     instances_of(f, &now);
     ASSERT_TRUE(same(&now, &after));
@@ -642,45 +706,97 @@ TEST_F(editor_foliage, align_to_normal_tilts_on_the_terrain_and_survives_undo, f
     EXPECT_TRUE(pines > 0u);
 }
 
-/* The layer round-trips through a scene snapshot: the hidden cells and instances are reflected
- * (DE_FIELD_SNAPSHOT), so a saved and reloaded layer keeps its foliage. */
-/* Persistence: the layer goes through the scene text format and back with every cell, instance
- * and palette slot, and the queries report the same on the copy. */
-TEST_F(editor_foliage, the_layer_round_trips_through_the_text_format, foliage_fx) {
-    de_ep_foliage_stroke s = stroke(f, 0, 4.0f, 4.0f, 1.0f);
-    ASSERT_EQ(paint(f, &s), 0);
-    s = stroke(f, 1, 20.0f, 4.0f, 1.0f);
-    ASSERT_EQ(paint(f, &s), 0);
-    const DeFoliage *src = layer(f);
-    ASSERT_GT(src->instance_count, 0u);
-    ASSERT_GT(src->cell_count, 1u);
-
-    const de_type_id t = de_type_find(f->engine.types, DE_FOLIAGE_COMPONENT);
+/* Persistence: the palette (DeFoliage) and every page (DeFoliagePage, hidden but serialized) go
+ * through the scene text format and back unchanged. */
+static void text_round_trip(foliage_fx *f, const char *name, const void *src, void *dst) {
+    const de_type_id t = de_type_find(f->engine.types, name);
     ASSERT_TRUE(DE_HANDLE_VALID(t));
     const de_ser_options opt = {DE_SER_TEXT, DE_FIELD_SERIALIZE, NULL};
     de_mem_writer mw;
     de_mem_writer_init(&mw, NULL);
     de_writer w = de_writer_from_mem(&mw);
     ASSERT_EQ(de_serialize_object(f->engine.types, t, src, &opt, &w), DE_OK);
-
-    const de_entity other = spawn_at(f, 0, 0, 0);
-    DeFoliage *o = (DeFoliage *)de_entity_add(f->engine.world, other, f->comp);
-    ASSERT_TRUE(o != NULL);
-    src = layer(f); /* the add may move component storage */
     de_mem_reader mr;
     de_mem_reader_init(&mr, mw.data, mw.size);
     de_reader rd = de_reader_from_mem(&mr);
-    ASSERT_EQ(de_deserialize_object(f->engine.types, t, o, &opt, &rd), DE_OK);
+    ASSERT_EQ(de_deserialize_object(f->engine.types, t, dst, &opt, &rd), DE_OK);
     de_mem_writer_free(&mw);
+}
 
-    EXPECT_TRUE(de__foliage_valid(o));
-    EXPECT_EQ(o->cell_count, src->cell_count);
-    EXPECT_EQ(o->instance_count, src->instance_count);
-    for (u32 k = 0; k < DE_FOLIAGE_TYPES; ++k)
-        EXPECT_EQ(o->types[k].id, src->types[k].id);
-    for (u32 c = 0; c < src->cell_count; ++c)
-        EXPECT_TRUE(de__foliage_cell_equal(src, o, src->cells[c].x, src->cells[c].z));
-    EXPECT_MEMEQ(o->instances, src->instances, sizeof src->instances);
+TEST_F(editor_foliage, the_layer_round_trips_through_the_text_format, foliage_fx) {
+    de_ep_foliage_stroke s = stroke(f, 0, 4.0f, 4.0f, 1.0f);
+    ASSERT_EQ(paint(f, &s), 0);
+    s = stroke(f, 1, 20.0f, 4.0f, 1.0f);
+    ASSERT_EQ(paint(f, &s), 0);
+    ASSERT_GT(count_of(f), 0u);
+    ASSERT_GT(cells_of(f), 1u);
+
+    static DeFoliage o;
+    memset(&o, 0, sizeof o);
+    text_round_trip(f, DE_FOLIAGE_COMPONENT, layer(f), &o);
+    EXPECT_MEMEQ(o.types, layer(f)->types, sizeof o.types);
+
+    static page_set ps;
+    pages_of(f, &ps);
+    ASSERT_GT(ps.n, 1u);
+    static DeFoliagePage copy;
+    for (u32 i = 0; i < ps.n; ++i) {
+        const DeFoliagePage *pg =
+            (const DeFoliagePage *)de_entity_get_const(f->engine.world, ps.e[i], page_comp(f));
+        ASSERT_TRUE(pg != NULL);
+        memset(&copy, 0, sizeof copy);
+        text_round_trip(f, "DeFoliagePage", pg, &copy);
+        EXPECT_EQ(copy.layer.bits, pg->layer.bits);
+        EXPECT_EQ(copy.x, pg->x);
+        EXPECT_EQ(copy.z, pg->z);
+        EXPECT_EQ(copy.page, pg->page);
+        EXPECT_EQ(copy.count, pg->count);
+        EXPECT_EQ(copy.revision, pg->revision);
+        EXPECT_MEMEQ(copy.instances, pg->instances, sizeof pg->instances);
+    }
+}
+
+/* ---- DIDE-R167 AC1: a large brush ---- */
+
+/* A 100 m brush (radius 50 m) at 4 instances per m^2 is stored in full: far more than the old
+ * 384-instance, 32-cell layer, over many cells and pages; info agrees; undo and redo round-trip. */
+TEST_F(editor_foliage, a_100m_brush_at_4_per_m2_is_stored_in_full, foliage_fx) {
+    de_ep_foliage_stroke s = stroke(f, 0, 0.0f, 0.0f, 1.0f);
+    s.radius = 50.0f;
+    s.density = 4.0f;
+    const de_ep_edit_op op = stroke_op(f, "foliage.paint", &s);
+    u32 tx = 0;
+    ASSERT_EQ(edit(f, &op, &tx), 0);
+    static inst_list after, now;
+    instances_of(f, &after);
+    /* pi * 50^2 * 4 = 31416 candidates; the spacing rule (0.25 m at 4/m^2) rejects about a
+     * quarter of them, so about 22500 are placed: 58 times the old 384-instance layer. */
+    EXPECT_GT(after.n, 20000u);
+    EXPECT_TRUE(after.n <= 31416u + 64u);
+    for (u32 k = 0; k < after.n; ++k) {
+        const f32 x = after.i[k].x, z = after.i[k].z;
+        EXPECT_TRUE(x * x + z * z <= 50.0f * 50.0f + 1e-2f);
+        EXPECT_FLOAT_EQ(after.i[k].y, 2.0f, 1e-6f);
+    }
+    const u32 cells = cells_of(f);
+    EXPECT_GT(cells, 32u); /* the 100 m brush spans about 7 x 7 cells of 16 m */
+    static page_set ps;
+    pages_of(f, &ps);
+    EXPECT_GE(ps.n, cells);
+    EXPECT_GE(ps.n, (after.n + DE_FOLIAGE_PAGE_INSTANCES - 1u) / DE_FOLIAGE_PAGE_INSTANCES);
+
+    mpack_node_t r = result(info(f));
+    EXPECT_EQ(mpack_node_u64(mpack_node_map_cstr(r, "count")), after.n);
+    EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(r, "cells")), cells);
+
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+    EXPECT_EQ(count_of(f), 0u);
+    pages_of(f, &ps);
+    EXPECT_EQ(ps.n, 0u);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
+    instances_of(f, &now);
+    EXPECT_TRUE(now.n == after.n &&
+                memcmp(now.i, after.i, sizeof(de_foliage_instance) * after.n) == 0);
 }
 
 #endif /* !DE_SHIPPING */

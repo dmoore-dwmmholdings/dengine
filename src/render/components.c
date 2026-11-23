@@ -537,12 +537,6 @@ static de_result reg_foliage(de_world *w, de_component *out) {
         DE_FIELD_EX(de_foliage_rule, area_max, DE_FK_VEC2, AUTHORED,
                     {0, 0, "m", "World x and z", 0, 0}),
     };
-    static const de_field_info k_cell[] = {
-        DE_FIELD(de_foliage_cell, x, DE_FK_I32, AUTHORED),
-        DE_FIELD(de_foliage_cell, z, DE_FK_I32, AUTHORED),
-        DE_FIELD(de_foliage_cell, count, DE_FK_U32, AUTHORED),
-        DE_FIELD(de_foliage_cell, revision, DE_FK_U64, AUTHORED),
-    };
     static const de_field_info k_inst[] = {
         DE_FIELD(de_foliage_instance, x, DE_FK_F32, AUTHORED),
         DE_FIELD(de_foliage_instance, y, DE_FK_F32, AUTHORED),
@@ -557,27 +551,43 @@ static de_result reg_foliage(de_world *w, de_component *out) {
     };
     de_type_id t;
     de_type_desc rule = DE_TYPE_DESC(de_foliage_rule, 1, k_rule);
-    de_type_desc cell = DE_TYPE_DESC(de_foliage_cell, 1, k_cell);
     de_type_desc inst = DE_TYPE_DESC(de_foliage_instance, 1, k_inst);
     DE_TRY(ensure_type(de_world_types(w), &rule, &t));
-    DE_TRY(ensure_type(de_world_types(w), &cell, &t));
     DE_TRY(ensure_type(de_world_types(w), &inst, &t));
-#define HIDDEN (AUTHORED | DE_FIELD_EDITOR_HIDDEN)
     static const de_field_info k_fields[] = {
         DE_FIELD_EX(DeFoliage, types, DE_FK_FIXED_ARRAY, ASSET_REF,
                     {0, 0, 0, "Foliage type assets; instances name them by index", "asset",
                      DE_FOLIAGE_TYPES}),
         DE_FIELD_EX(DeFoliage, rules, DE_FK_FIXED_ARRAY, AUTHORED,
                     {0, 0, 0, "Scatter rules", "de_foliage_rule", DE_FOLIAGE_RULES}),
-        DE_FIELD(DeFoliage, cell_count, DE_FK_U32, HIDDEN),
-        DE_FIELD(DeFoliage, instance_count, DE_FK_U32, HIDDEN),
-        DE_FIELD_EX(DeFoliage, cells, DE_FK_FIXED_ARRAY, HIDDEN,
-                    {0, 0, 0, 0, "de_foliage_cell", DE_FOLIAGE_CELLS}),
-        DE_FIELD_EX(DeFoliage, instances, DE_FK_FIXED_ARRAY, HIDDEN,
-                    {0, 0, 0, 0, "de_foliage_instance", DE_FOLIAGE_INSTANCES}),
+    };
+    /* Version 2 (DENG-823): the instances moved to DeFoliagePage entities. */
+    return register_component(w, DE_TYPE_DESC(DeFoliage, 2, k_fields), construct_foliage, out);
+}
+
+/* ---- DeFoliagePage ---------------------------------------------------------------------- */
+
+DE_STATIC_ASSERT(sizeof(DeFoliagePage) <= 15u * 1024u, "a DeFoliagePage fits a 16 KiB chunk");
+
+static void construct_foliage_page(void *obj) { memset(obj, 0, sizeof(DeFoliagePage)); }
+
+static de_result reg_foliage_page(de_world *w, de_component *out) {
+    /* reg_foliage registered de_foliage_instance; components register in table order. */
+#define HIDDEN (AUTHORED | DE_FIELD_EDITOR_HIDDEN)
+    static const de_field_info k_fields[] = {
+        DE_FIELD_EX(DeFoliagePage, layer, DE_FK_ENTITY, HIDDEN,
+                    {0, 0, 0, "The DeFoliage layer that owns the page", 0, 0}),
+        DE_FIELD(DeFoliagePage, x, DE_FK_I32, HIDDEN),
+        DE_FIELD(DeFoliagePage, z, DE_FK_I32, HIDDEN),
+        DE_FIELD(DeFoliagePage, page, DE_FK_U32, HIDDEN),
+        DE_FIELD(DeFoliagePage, count, DE_FK_U32, HIDDEN),
+        DE_FIELD(DeFoliagePage, revision, DE_FK_U64, HIDDEN),
+        DE_FIELD_EX(DeFoliagePage, instances, DE_FK_FIXED_ARRAY, HIDDEN,
+                    {0, 0, 0, 0, "de_foliage_instance", DE_FOLIAGE_PAGE_INSTANCES}),
     };
 #undef HIDDEN
-    return register_component(w, DE_TYPE_DESC(DeFoliage, 1, k_fields), construct_foliage, out);
+    return register_component(w, DE_TYPE_DESC(DeFoliagePage, 1, k_fields), construct_foliage_page,
+                              out);
 }
 
 /* ---- DeWater ----------------------------------------------------------------------------- */
@@ -723,6 +733,7 @@ static const struct {
     {reg_reflection_probe, offsetof(DeRenderComponents, reflection_probe)},
     {reg_irradiance_volume, offsetof(DeRenderComponents, irradiance_volume)},
     {reg_foliage, offsetof(DeRenderComponents, foliage)},
+    {reg_foliage_page, offsetof(DeRenderComponents, foliage_page)},
 };
 
 /* The resource type: component ids only, no reflected fields (never serialized). */

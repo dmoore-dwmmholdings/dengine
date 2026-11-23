@@ -2,7 +2,10 @@
  * (DENG-581; DIDE protocol 1.22, capability world.foliage).
  *
  * A foliage layer is an entity with DeFoliage (a render component): a palette of foliageType
- * assets (.foliage.toml), scatter rules, and instances kept per 16 m cell. The IDE reads it with
+ * assets (.foliage.toml) and scatter rules. Its instances are kept per 16 m cell on DeFoliagePage
+ * entities (DENG-823): a cell of n instances has pages 0 .. ceil(n / 512) - 1, each naming the layer.
+ * The pages join the layer's scene (so a save keeps them) but the IDE never lists them. The IDE
+ * reads a layer with
  * the three methods and changes it with four edit ops inside an edit transaction, so undo and redo
  * work as for every other edit:
  *
@@ -16,7 +19,9 @@
  * src/world/foliage; this file reads the protocol, the type assets and the undo data.
  *
  * A paint surface is a terrain (DeTerrain), or any other entity as a horizontal plane at its world
- * height. Storage is bounded (DE_FOLIAGE_INSTANCES per layer, which is also max_per_cell).
+ * height. A cell holds at most DE_FOLIAGE_CELL_INSTANCES (max_per_cell), a layer at most
+ * DE_FOLIAGE_LAYER_INSTANCES. Each op loads the layer's pages into a de_foliage_store, runs the
+ * model on a copy, and writes back only the cells that changed.
  */
 #if defined(_WIN32)
 #define _CRT_SECURE_NO_WARNINGS /* snprintf */
@@ -29,6 +34,7 @@
 #include <dengine/de_render.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define MAX_SURFACES 16u
@@ -56,18 +62,187 @@ static const DeFoliage *foliage_get(de__editor *ed, u64 bits) {
     return (const DeFoliage *)de_entity_get_const(w, e, c);
 }
 
-/* The layer of `bits`, or answers the request with an error and returns NULL. */
+/* ---------- Pages ---------- */
+
+/* One DeFoliagePage of a layer. */
+typedef struct page_ref {
+    u64 bits;
+    i32 x, z;
+    u32 page;
+} page_ref;
+
+/* The pages of one layer, sorted by z, x, then page. */
+typedef struct page_list {
+    page_ref *v;
+    u32 n, cap;
+    u64 layer;
+    bool oom;
+} page_list;
+
+static void pages_free(page_list *l) {
+    DE_FREE(de_heap_allocator(), l->v, sizeof(page_ref) * l->cap);
+    memset(l, 0, sizeof *l);
+}
+
+static void page_chunk(const de_query_chunk *ch, void *user) {
+    page_list *l = (page_list *)user;
+    const DeFoliagePage *p = (const DeFoliagePage *)ch->columns[0];
+    for (u32 r = 0; r < ch->count && !l->oom; ++r) {
+        if (p[r].layer.bits != l->layer)
+            continue;
+        if (l->n == l->cap) {
+            const u32 cap = l->cap ? l->cap * 2u : 64u;
+            page_ref *v = (page_ref *)DE_REALLOC(de_heap_allocator(), l->v,
+                                                 sizeof *v * l->cap, sizeof *v * cap,
+                                                 DE_ALIGNOF(page_ref), DE_MEM_GENERAL);
+            if (v == NULL) {
+                l->oom = true;
+                return;
+            }
+            l->v = v;
+            l->cap = cap;
+        }
+        l->v[l->n++] = (page_ref){ch->entities[r].bits, p[r].x, p[r].z, p[r].page};
+    }
+}
+
+static int cmp_xz(i32 ax, i32 az, i32 bx, i32 bz) {
+    if (az != bz)
+        return az < bz ? -1 : 1;
+    return ax < bx ? -1 : ax > bx ? 1 : 0;
+}
+
+static int cmp_page(const void *pa, const void *pb) {
+    const page_ref *a = (const page_ref *)pa, *b = (const page_ref *)pb;
+    const int c = cmp_xz(a->x, a->z, b->x, b->z);
+    if (c != 0)
+        return c;
+    if (a->page != b->page)
+        return a->page < b->page ? -1 : 1;
+    return a->bits < b->bits ? -1 : a->bits > b->bits ? 1 : 0;
+}
+
+/* The first page of cell (x, z) in `l`, or where it would go. */
+static u32 pages_find(const page_list *l, i32 x, i32 z) {
+    u32 lo = 0, hi = l->n;
+    while (lo < hi) {
+        const u32 mid = lo + (hi - lo) / 2u;
+        if (cmp_xz(l->v[mid].x, l->v[mid].z, x, z) < 0)
+            lo = mid + 1u;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+typedef enum load_rc { LOAD_OK, LOAD_BAD, LOAD_OOM } load_rc;
+
+/* Loads the pages of `layer` into `l` and `st` (both empty). LOAD_BAD: the pages are not the
+ * pages of a valid cell table (a missing or doubled page, a page not full before the last, too
+ * many instances). */
+static load_rc layer_load(de__editor *ed, u64 layer, page_list *l, de_foliage_store *st) {
+    memset(l, 0, sizeof *l);
+    l->layer = layer;
+    de_world *w = world_of(ed);
+    const de_component pc = comp_id(w, DE_FOLIAGE_PAGE_COMPONENT);
+    if (w == NULL || !DE_HANDLE_VALID(pc))
+        return LOAD_OK;
+    const de_query_term terms[1] = {{pc, DE_READ}};
+    const de_query_desc qd = {terms, 1, NULL, 0};
+    const de_query q = de_query_create(w, &qd);
+    de_query_each(w, q, page_chunk, l);
+    de_query_destroy(w, q);
+    if (l->oom)
+        return LOAD_OOM;
+    if (l->n > 1)
+        qsort(l->v, l->n, sizeof l->v[0], cmp_page);
+    for (u32 i = 0; i < l->n;) {
+        u32 j = i;
+        while (j < l->n && l->v[j].x == l->v[i].x && l->v[j].z == l->v[i].z)
+            ++j;
+        for (u32 k = i; k < j; ++k) {
+            const DeFoliagePage *p =
+                (const DeFoliagePage *)de_entity_get_const(w, (de_entity){l->v[k].bits}, pc);
+            if (p == NULL || p->page != k - i || p->count == 0 ||
+                p->count > DE_FOLIAGE_PAGE_INSTANCES ||
+                (k + 1 < j && p->count != DE_FOLIAGE_PAGE_INSTANCES))
+                return LOAD_BAD;
+            if (!de__foliage_store_append(st, p->x, p->z, p->revision, p->instances, p->count))
+                return LOAD_BAD;
+        }
+        i = j;
+    }
+    return de__foliage_valid(st) ? LOAD_OK : LOAD_BAD;
+}
+
+/* Writes cell (x, z) of `st` to the layer's pages: the cell's pages in `l` are reused in order,
+ * missing ones spawned into the layer's scene, surplus ones despawned. False when out of memory. */
+static bool cell_write(de__editor *ed, de_entity layer, const page_list *l,
+                       const de_foliage_store *st, i32 x, i32 z, u64 rev) {
+    de_world *w = world_of(ed);
+    const de_component pc = comp_id(w, DE_FOLIAGE_PAGE_COMPONENT);
+    u32 n = 0;
+    const de_foliage_instance *in = de__foliage_cell(st, x, z, &n);
+    const u32 first = pages_find(l, x, z);
+    u32 have = 0;
+    while (first + have < l->n && l->v[first + have].x == x && l->v[first + have].z == z)
+        ++have;
+    const u32 need = (n + DE_FOLIAGE_PAGE_INSTANCES - 1u) / DE_FOLIAGE_PAGE_INSTANCES;
+    for (u32 p = 0; p < need; ++p) {
+        DeFoliagePage *pg;
+        if (p < have) {
+            pg = (DeFoliagePage *)de_entity_get(w, (de_entity){l->v[first + p].bits}, pc);
+        } else {
+            const de_entity e = de_entity_spawn(w);
+            pg = e.bits != 0 ? (DeFoliagePage *)de_entity_add(w, e, pc) : NULL;
+            if (pg == NULL) {
+                if (e.bits != 0)
+                    de_entity_despawn(w, e);
+                return false;
+            }
+            de__ed_scene_adopt(ed, e, 0, layer);
+        }
+        if (pg == NULL)
+            return false;
+        const u32 at = p * DE_FOLIAGE_PAGE_INSTANCES;
+        const u32 count = n - at < DE_FOLIAGE_PAGE_INSTANCES ? n - at : DE_FOLIAGE_PAGE_INSTANCES;
+        memset(pg, 0, sizeof *pg);
+        pg->layer = layer;
+        pg->x = x;
+        pg->z = z;
+        pg->page = p;
+        pg->count = count;
+        pg->revision = rev;
+        memcpy(pg->instances, &in[at], sizeof in[0] * count);
+    }
+    for (u32 p = need; p < have; ++p) {
+        de__ed_scene_member_drop(l->v[first + p].bits);
+        de_entity_despawn(w, (de_entity){l->v[first + p].bits});
+    }
+    return true;
+}
+
+/* The layer of `bits` with its instances in `st`, or answers the request with an error and
+ * returns NULL (`st` then empty). */
 static const DeFoliage *foliage_of(de__editor *ed, mpack_writer_t *w, u64 id, u64 bits,
-                                   const char *method) {
+                                   const char *method, de_foliage_store *st) {
+    de__foliage_store_init(st, NULL);
     const DeFoliage *fo = foliage_get(ed, bits);
     if (fo == NULL) {
         de__ed_error(w, id, DE_EP_ERR_NOT_FOUND, "%s: entity %llu has no " DE_FOLIAGE_COMPONENT,
                      method, (unsigned long long)bits);
         return NULL;
     }
-    if (!de__foliage_valid(fo)) {
-        de__ed_error(w, id, DE_EP_ERR_INVALID_PARAMS, "%s: the foliage cell table is inconsistent",
-                     method);
+    page_list l;
+    const load_rc rc = layer_load(ed, bits, &l, st);
+    pages_free(&l);
+    if (rc != LOAD_OK) {
+        de__foliage_store_free(st);
+        if (rc == LOAD_OOM)
+            de__ed_error(w, id, DE_EP_ERR_BUSY, "%s: out of memory", method);
+        else
+            de__ed_error(w, id, DE_EP_ERR_INVALID_PARAMS,
+                         "%s: the foliage cell table is inconsistent", method);
         return NULL;
     }
     return fo;
@@ -146,17 +321,24 @@ static de_ep_error code_of(de_foliage_error e) {
 static void foliage_info(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
                          mpack_writer_t *w) {
     DE__ED_PARAMS(foliage_info, de_ep_foliage_params, q);
-    const DeFoliage *fo = foliage_of(ed, w, req->id, q.entity, "foliage.info");
-    if (fo == NULL)
+    de_foliage_store st;
+    if (foliage_of(ed, w, req->id, q.entity, "foliage.info", &st) == NULL)
         return;
-    static de_ep_foliage_cell cells[DE_FOLIAGE_CELLS];
-    static i32 xz[DE_FOLIAGE_CELLS][2];
-    for (u32 i = 0; i < fo->cell_count; ++i) {
-        xz[i][0] = fo->cells[i].x;
-        xz[i][1] = fo->cells[i].z;
-        cells[i].cell = (de_ep_list_i32){xz[i], 2};
-        cells[i].count = fo->cells[i].count;
-        cells[i].revision = fo->cells[i].revision;
+    const u32 nc = st.cell_count;
+    de_ep_foliage_cell *cells =
+        nc ? (de_ep_foliage_cell *)de__ed_alloc(a, sizeof(de_ep_foliage_cell) * nc) : NULL;
+    i32 *xz = nc ? (i32 *)de__ed_alloc(a, sizeof(i32) * 2u * nc) : NULL;
+    if (nc > 0 && (cells == NULL || xz == NULL)) {
+        de__foliage_store_free(&st);
+        de__ed_error(w, req->id, DE_EP_ERR_BUSY, "foliage.info: out of scratch memory");
+        return;
+    }
+    for (u32 i = 0; i < nc; ++i) {
+        xz[2 * i] = st.cells[i].x;
+        xz[2 * i + 1] = st.cells[i].z;
+        cells[i].cell = (de_ep_list_i32){&xz[2 * i], 2};
+        cells[i].count = st.cells[i].count;
+        cells[i].revision = st.cells[i].revision;
     }
     de_ep_foliage_info r;
     memset(&r, 0, sizeof r);
@@ -165,12 +347,13 @@ static void foliage_info(de__editor *ed, const de_ep_request *req, de_ep_arena *
     r.cell_size = DE_FOLIAGE_CELL_SIZE;
     r.max_types = DE_FOLIAGE_TYPES;
     r.max_rules = DE_FOLIAGE_RULES;
-    r.max_per_cell = DE_FOLIAGE_INSTANCES;
+    r.max_per_cell = DE_FOLIAGE_CELL_INSTANCES;
     r.type_suffix = de_ep_cstr(DE_FOLIAGE_SUFFIX);
-    r.count = fo->instance_count;
-    r.cells = (de_ep_list_foliage_cell){cells, fo->cell_count};
+    r.count = st.instance_count;
+    r.cells = (de_ep_list_foliage_cell){cells, nc};
     r.revision = de__ed_entity_rev(ed, (de_entity){q.entity});
     de_ep_write_response_foliage_info(w, req->id, &r);
+    de__foliage_store_free(&st);
 }
 
 static void foliage_instances(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
@@ -180,36 +363,41 @@ static void foliage_instances(de__editor *ed, const de_ep_request *req, de_ep_ar
         de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "foliage.instances: cell needs [x, z]");
         return;
     }
-    const DeFoliage *fo = foliage_of(ed, w, req->id, q.entity, "foliage.instances");
-    if (fo == NULL)
+    de_foliage_store st;
+    if (foliage_of(ed, w, req->id, q.entity, "foliage.instances", &st) == NULL)
         return;
     static i32 xz[2];
-    static u32 types[DE_FOLIAGE_INSTANCES], rules[DE_FOLIAGE_INSTANCES];
-    static f32 xf[DE_FOLIAGE_INSTANCES * 10];
     xz[0] = q.cell.items[0];
     xz[1] = q.cell.items[1];
-    u32 n = 0, k = 0;
-    const de_foliage_instance *in = de__foliage_cell(fo, xz[0], xz[1], &n);
-    u64 rev = 0;
-    for (u32 i = 0; i < fo->cell_count; ++i)
-        if (fo->cells[i].x == xz[0] && fo->cells[i].z == xz[1])
-            rev = fo->cells[i].revision;
+    const de_foliage_cell *cell = de__foliage_store_cell(&st, xz[0], xz[1]);
+    const u32 n = cell != NULL ? cell->count : 0;
+    u32 *types = n ? (u32 *)de__ed_alloc(a, sizeof(u32) * n) : NULL;
+    u32 *rules = n ? (u32 *)de__ed_alloc(a, sizeof(u32) * n) : NULL;
+    f32 *xf = n ? (f32 *)de__ed_alloc(a, sizeof(f32) * 10u * n) : NULL;
+    if (n > 0 && (types == NULL || rules == NULL || xf == NULL)) {
+        de__foliage_store_free(&st);
+        de__ed_error(w, req->id, DE_EP_ERR_BUSY, "foliage.instances: out of scratch memory");
+        return;
+    }
+    u32 k = 0;
     for (u32 i = 0; i < n; ++i) {
-        if (q.has_type && in[i].type != q.type)
+        const de_foliage_instance *in = &cell->inst[i];
+        if (q.has_type && in->type != q.type)
             continue;
-        types[k] = in[i].type;
-        rules[k] = in[i].rule;
-        de__foliage_transform(&in[i], &xf[k * 10]);
+        types[k] = in->type;
+        rules[k] = in->rule;
+        de__foliage_transform(in, &xf[k * 10]);
         ++k;
     }
     de_ep_foliage_instances r;
     memset(&r, 0, sizeof r);
     r.cell = (de_ep_list_i32){xz, 2};
-    r.revision = rev;
+    r.revision = cell != NULL ? cell->revision : 0;
     r.types = (de_ep_list_u32){types, k};
     r.rules = (de_ep_list_u32){rules, k};
     r.transforms = (de_ep_list_f32){xf, k * 10};
     de_ep_write_response_foliage_instances(w, req->id, &r);
+    de__foliage_store_free(&st);
 }
 
 static void foliage_type(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
@@ -286,9 +474,8 @@ static bool int_at(mpack_node_t list, size_t i, i32 *out) {
     return true;
 }
 
-/* Applies a foliage.restore value to `fo`. 0: done; 1: bad data; 2: no room. */
-static int restore(DeFoliage *fo, de_ep_raw value) {
-    static de_foliage_instance inst[DE_FOLIAGE_INSTANCES];
+/* Applies a foliage.restore value to `st`. 0: done; 1: bad data; 2: no room. */
+static int restore(de_foliage_store *st, de_ep_raw value) {
     mpack_tree_t tree;
     mpack_tree_init_data(&tree, value.ptr, value.len);
     mpack_tree_parse(&tree);
@@ -300,6 +487,8 @@ static int restore(DeFoliage *fo, de_ep_raw value) {
     if (rc == 0 && mpack_node_type(cells) != mpack_type_array)
         rc = 1;
     const size_t cell_count = rc == 0 ? mpack_node_array_length(cells) : 0;
+    de_foliage_instance *inst = NULL;
+    size_t inst_cap = 0;
     for (size_t k = 0; rc == 0 && k < cell_count; ++k) {
         const mpack_node_t c = mpack_node_array_at(cells, k);
         if (mpack_node_type(c) != mpack_type_map) {
@@ -317,9 +506,20 @@ static int restore(DeFoliage *fo, de_ep_raw value) {
             break;
         }
         const size_t n = mpack_node_array_length(list) / DE_FOLIAGE_STRIDE;
-        if (n > DE_FOLIAGE_INSTANCES) {
+        if (n > DE_FOLIAGE_CELL_INSTANCES) {
             rc = 2;
             break;
+        }
+        if (n > inst_cap) {
+            de_foliage_instance *p = (de_foliage_instance *)DE_REALLOC(
+                de_heap_allocator(), inst, sizeof *inst * inst_cap, sizeof *inst * n,
+                DE_ALIGNOF(de_foliage_instance), DE_MEM_GENERAL);
+            if (p == NULL) {
+                rc = 2;
+                break;
+            }
+            inst = p;
+            inst_cap = n;
         }
         for (size_t i = 0; rc == 0 && i < n; ++i) {
             f64 v[DE_FOLIAGE_STRIDE];
@@ -340,17 +540,18 @@ static int restore(DeFoliage *fo, de_ep_raw value) {
             inst[i].type = (u8)v[5];
             inst[i].rule = (u32)v[6];
         }
-        if (rc == 0 && !de__foliage_set_cell(fo, x, z, inst, (u32)n))
+        if (rc == 0 && !de__foliage_set_cell(st, x, z, inst, (u32)n))
             rc = 2;
     }
+    DE_FREE(de_heap_allocator(), inst, sizeof *inst * inst_cap);
     if (mpack_tree_destroy(&tree) != mpack_ok && rc == 0)
         rc = 1;
     return rc;
 }
 
-static void write_cell(mpack_writer_t *mw, const DeFoliage *fo, i32 x, i32 z) {
+static void write_cell(mpack_writer_t *mw, const de_foliage_store *st, i32 x, i32 z) {
     u32 n = 0;
-    const de_foliage_instance *in = de__foliage_cell(fo, x, z, &n);
+    const de_foliage_instance *in = de__foliage_cell(st, x, z, &n);
     mpack_start_map(mw, 2);
     mpack_write_cstr(mw, "cell");
     mpack_start_array(mw, 2);
@@ -372,45 +573,51 @@ static void write_cell(mpack_writer_t *mw, const DeFoliage *fo, i32 x, i32 z) {
     mpack_finish_map(mw);
 }
 
-/* The cells of `a` and `b` together, sorted by z then x: `out` gets at most 2 * DE_FOLIAGE_CELLS. */
-static u32 cell_union(const DeFoliage *a, const DeFoliage *b, i32 out[][2]) {
-    u32 i = 0, j = 0, n = 0;
+/* The cells of `a` and `b` that differ, sorted by z then x, in `out` (heap; `*n` of them). False
+ * when out of memory. */
+static bool changed_cells(const de_foliage_store *a, const de_foliage_store *b, i32 (**out)[2],
+                          u32 *n) {
+    const u32 cap = a->cell_count + b->cell_count;
+    *n = 0;
+    *out = NULL;
+    if (cap == 0)
+        return true;
+    i32(*keys)[2] = (i32(*)[2])DE_ALLOC(de_heap_allocator(), sizeof(i32[2]) * cap,
+                                        DE_ALIGNOF(i32), DE_MEM_GENERAL);
+    if (keys == NULL)
+        return false;
+    u32 i = 0, j = 0;
     while (i < a->cell_count || j < b->cell_count) {
         const de_foliage_cell *ca = i < a->cell_count ? &a->cells[i] : NULL;
         const de_foliage_cell *cb = j < b->cell_count ? &b->cells[j] : NULL;
-        const de_foliage_cell *pick;
-        if (cb == NULL || (ca != NULL && (ca->z < cb->z || (ca->z == cb->z && ca->x <= cb->x))))
-            pick = ca;
-        else
-            pick = cb;
-        out[n][0] = pick->x;
-        out[n][1] = pick->z;
-        ++n;
-        if (ca != NULL && ca->x == pick->x && ca->z == pick->z)
+        const de_foliage_cell *pick =
+            cb == NULL || (ca != NULL && cmp_xz(ca->x, ca->z, cb->x, cb->z) <= 0) ? ca : cb;
+        const i32 x = pick->x, z = pick->z;
+        if (ca != NULL && ca->x == x && ca->z == z)
             ++i;
-        if (cb != NULL && cb->x == pick->x && cb->z == pick->z)
+        if (cb != NULL && cb->x == x && cb->z == z)
             ++j;
+        if (!de__foliage_cell_equal(a, b, x, z)) {
+            keys[*n][0] = x;
+            keys[*n][1] = z;
+            ++*n;
+        }
     }
-    return n;
+    *out = keys;
+    return true;
 }
 
-/* The foliage.restore value that turns `after` back into `before`: the cells that differ, as
- * `before` has them. Empty when it does not fit the arena. */
-static de_ep_raw restore_from(de_ep_arena *a, const DeFoliage *before, const DeFoliage *after) {
-    i32 keys[2 * DE_FOLIAGE_CELLS][2];
-    const u32 nk = cell_union(before, after, keys);
-    u32 changed = 0;
-    for (u32 k = 0; k < nk; ++k)
-        if (!de__foliage_cell_equal(before, after, keys[k][0], keys[k][1]))
-            ++changed;
+/* The foliage.restore value that turns `after` back into `before`: the `n` changed cells `keys`,
+ * as `before` has them. Empty when it does not fit the arena. */
+static de_ep_raw restore_from(de_ep_arena *a, const de_foliage_store *before, i32 (*keys)[2],
+                              u32 n) {
     mpack_writer_t mw;
     de__ed_raw_begin(a, &mw);
     mpack_start_map(&mw, 1);
     mpack_write_cstr(&mw, "cells");
-    mpack_start_array(&mw, changed);
-    for (u32 k = 0; k < nk; ++k)
-        if (!de__foliage_cell_equal(before, after, keys[k][0], keys[k][1]))
-            write_cell(&mw, before, keys[k][0], keys[k][1]);
+    mpack_start_array(&mw, n);
+    for (u32 k = 0; k < n; ++k)
+        write_cell(&mw, before, keys[k][0], keys[k][1]);
     mpack_finish_array(&mw);
     mpack_finish_map(&mw);
     return de__ed_raw_end(a, &mw);
@@ -455,7 +662,7 @@ static bool model_ok(de_foliage_error e, op_fail *f) {
     return false;
 }
 
-static bool op_paint(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, DeFoliage *fo,
+static bool op_paint(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_foliage_store *st,
                      const env_ctx *ctx, op_fail *f) {
     de_ep_foliage_stroke p;
     if (!read_stroke(a, o, &p, f))
@@ -474,19 +681,19 @@ static bool op_paint(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, DeF
     (void)ed;
     const de_foliage_env env = {(void *)ctx, env_type, env_surface};
     const de_foliage_stroke s = stroke_of(&p);
-    return model_ok(de__foliage_paint(fo, &env, &s, surfaces, ns, f->msg, f->cap), f);
+    return model_ok(de__foliage_paint(st, &env, &s, surfaces, ns, f->msg, f->cap), f);
 }
 
-static bool op_erase(de_ep_arena *a, const de_ep_edit_op *o, DeFoliage *fo, op_fail *f) {
+static bool op_erase(de_ep_arena *a, const de_ep_edit_op *o, de_foliage_store *st, op_fail *f) {
     de_ep_foliage_stroke p;
     if (!read_stroke(a, o, &p, f))
         return false;
     const de_foliage_stroke s = stroke_of(&p);
-    return model_ok(de__foliage_erase(fo, &s, f->msg, f->cap), f);
+    return model_ok(de__foliage_erase(st, &s, f->msg, f->cap), f);
 }
 
-static bool op_scatter(de_ep_arena *a, const de_ep_edit_op *o, DeFoliage *fo, const env_ctx *ctx,
-                       op_fail *f) {
+static bool op_scatter(de_ep_arena *a, const de_ep_edit_op *o, de_foliage_store *st,
+                       const env_ctx *ctx, op_fail *f) {
     de_ep_foliage_scatter p;
     memset(&p, 0, sizeof p);
     if (o->has_value) {
@@ -499,8 +706,9 @@ static bool op_scatter(de_ep_arena *a, const de_ep_edit_op *o, DeFoliage *fo, co
     static const u32 none = 0;
     const u32 *ids = p.has_rules ? (p.rules.count > 0 ? p.rules.items : &none) : NULL;
     const de_foliage_env env = {(void *)ctx, env_type, env_surface};
-    return model_ok(de__foliage_scatter(fo, &env, ids, p.has_rules ? p.rules.count : 0,
-                                        p.has_clear && p.clear, f->msg, f->cap),
+    return model_ok(de__foliage_scatter(st, ctx->fo->rules, &env, ids,
+                                        p.has_rules ? p.rules.count : 0, p.has_clear && p.clear,
+                                        f->msg, f->cap),
                     f);
 }
 
@@ -518,7 +726,7 @@ static void terrain_chunk(const de_query_chunk *ch, void *user) {
 
 /* DENG-822: the undo data has no normals, so a restore gives the restored alignToNormal instances
  * the normal of the terrain they stand on again. */
-static void realign(de__editor *ed, DeFoliage *fo, const env_ctx *ctx) {
+static void realign(de__editor *ed, de_foliage_store *st, const env_ctx *ctx) {
     de_world *w = world_of(ed);
     const de_component tc = comp_id(w, DE_TERRAIN_COMPONENT);
     if (w == NULL || !DE_HANDLE_VALID(tc))
@@ -537,7 +745,7 @@ static void realign(de__editor *ed, DeFoliage *fo, const env_ctx *ctx) {
             surfaces[n].terrain != NULL)
             n++;
     const de_foliage_env env = {(void *)ctx, env_type, env_surface};
-    de__foliage_realign(fo, &env, surfaces, n);
+    de__foliage_realign(st, &env, surfaces, n);
 }
 
 static bool foliage_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_ep_edit_op *inv,
@@ -549,19 +757,33 @@ static bool foliage_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, d
     de_world *w = world_of(ed);
     const de_component c = comp_id(w, DE_FOLIAGE_COMPONENT);
     const de_entity e = {o->entity};
-    DeFoliage *live = DE_HANDLE_VALID(c) && de_entity_alive(w, e)
-                          ? (DeFoliage *)de_entity_get(w, e, c)
-                          : NULL;
+    const DeFoliage *live = DE_HANDLE_VALID(c) && de_entity_alive(w, e)
+                                ? (const DeFoliage *)de_entity_get_const(w, e, c)
+                                : NULL;
     if (live == NULL)
         return op_error(&f, DE_EP_ERR_NOT_FOUND, "%llu has no " DE_FOLIAGE_COMPONENT,
                         (unsigned long long)o->entity);
-    if (!de__foliage_valid(live))
-        return op_error(&f, DE_EP_ERR_INVALID_PARAMS, "%.*s: the foliage cell table is inconsistent",
-                        (int)o->op.len, o->op.ptr);
-    static DeFoliage after; /* main thread only; about 12 KB */
-    after = *live;
+    page_list pages;
+    de_foliage_store before, after;
+    de__foliage_store_init(&before, NULL);
+    de__foliage_store_init(&after, NULL);
+    i32(*keys)[2] = NULL;
+    u32 nk = 0;
+    bool ok = false;
+    const load_rc lr = layer_load(ed, o->entity, &pages, &before);
+    if (lr != LOAD_OK) {
+        if (lr == LOAD_OOM)
+            op_error(&f, DE_EP_ERR_BUSY, "%.*s: out of memory", (int)o->op.len, o->op.ptr);
+        else
+            op_error(&f, DE_EP_ERR_INVALID_PARAMS, "%.*s: the foliage cell table is inconsistent",
+                     (int)o->op.len, o->op.ptr);
+        goto done;
+    }
+    if (!de__foliage_store_copy(&after, &before)) {
+        op_error(&f, DE_EP_ERR_BUSY, "%.*s: out of memory", (int)o->op.len, o->op.ptr);
+        goto done;
+    }
     const env_ctx ctx = {ed, live};
-    bool ok;
     if (de_ep_str_eq(o->op, "foliage.paint"))
         ok = op_paint(ed, a, o, &after, &ctx, &f);
     else if (de_ep_str_eq(o->op, "foliage.erase"))
@@ -569,8 +791,10 @@ static bool foliage_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, d
     else if (de_ep_str_eq(o->op, "foliage.scatter"))
         ok = op_scatter(a, o, &after, &ctx, &f);
     else if (de_ep_str_eq(o->op, "foliage.restore")) {
-        if (!o->has_value)
-            return op_error(&f, DE_EP_ERR_INVALID_PARAMS, "foliage.restore needs value");
+        if (!o->has_value) {
+            op_error(&f, DE_EP_ERR_INVALID_PARAMS, "foliage.restore needs value");
+            goto done;
+        }
         const int rc = restore(&after, o->value);
         if (rc == 0)
             realign(ed, &after, &ctx);
@@ -578,35 +802,55 @@ static bool foliage_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, d
              op_error(&f, DE_EP_ERR_INVALID_PARAMS, rc == 1 ? "foliage.restore: bad cell data"
                                                              : "foliage.restore: the layer is full");
     } else {
-        return op_error(&f, DE_EP_ERR_INVALID_PARAMS, "unknown op `%.*s`", (int)o->op.len,
-                        o->op.ptr);
+        op_error(&f, DE_EP_ERR_INVALID_PARAMS, "unknown op `%.*s`", (int)o->op.len, o->op.ptr);
     }
     if (!ok)
-        return false;
-    const de_ep_raw undo = restore_from(a, live, &after);
-    if (undo.len == 0)
-        return op_error(&f, DE_EP_ERR_BUSY, "%.*s: out of scratch memory", (int)o->op.len,
-                        o->op.ptr);
-    bool changed[DE_FOLIAGE_CELLS];
-    for (u32 i = 0; i < after.cell_count; ++i)
-        changed[i] = !de__foliage_cell_equal(live, &after, after.cells[i].x, after.cells[i].z);
-    *live = after;
+        goto done;
+    ok = false;
+    if (!changed_cells(&before, &after, &keys, &nk)) {
+        op_error(&f, DE_EP_ERR_BUSY, "%.*s: out of memory", (int)o->op.len, o->op.ptr);
+        goto done;
+    }
+    const de_ep_raw undo = restore_from(a, &before, keys, nk);
+    if (undo.len == 0) {
+        op_error(&f, DE_EP_ERR_BUSY, "%.*s: out of scratch memory", (int)o->op.len, o->op.ptr);
+        goto done;
+    }
+    /* The layer is marked changed, so its revision moves; the changed cells take it. */
     de_entity_mark_changed(w, e, c);
     const u64 rev = de__ed_entity_rev(ed, e);
-    for (u32 i = 0; i < live->cell_count; ++i)
-        if (changed[i])
-            live->cells[i].revision = rev;
+    for (u32 k = 0; k < nk; ++k) {
+        if (!cell_write(ed, e, &pages, &after, keys[k][0], keys[k][1], rev)) {
+            op_error(&f, DE_EP_ERR_BUSY, "%.*s: out of memory writing foliage pages",
+                     (int)o->op.len, o->op.ptr);
+            goto done;
+        }
+    }
     memset(inv, 0, sizeof *inv);
     inv->op = de_ep_cstr("foliage.restore");
     inv->has_entity = true;
     inv->entity = o->entity;
     inv->has_value = true;
     inv->value = undo;
-    return true;
+    ok = true;
+done:
+    DE_FREE(de_heap_allocator(), keys, sizeof(i32[2]) * (before.cell_count + after.cell_count));
+    pages_free(&pages);
+    de__foliage_store_free(&before);
+    de__foliage_store_free(&after);
+    return ok;
+}
+
+bool de__ed_foliage_load(de__editor *ed, de_entity layer, de_foliage_store *st) {
+    page_list l;
+    const load_rc rc = layer_load(ed, layer.bits, &l, st);
+    pages_free(&l);
+    return rc == LOAD_OK;
 }
 
 void de__ed_foliage_register(de__editor *ed) {
     (void)comp_id(world_of(ed), DE_FOLIAGE_COMPONENT); /* listed by reflection from the start */
+    (void)comp_id(world_of(ed), DE_FOLIAGE_PAGE_COMPONENT);
     ed->foliage_op = foliage_op;
     de__ed_on(ed, DE_EP_METHOD_FOLIAGE_INFO, foliage_info);
     de__ed_on(ed, DE_EP_METHOD_FOLIAGE_INSTANCES, foliage_instances);
