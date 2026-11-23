@@ -1022,16 +1022,36 @@ static void on_begin(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
 
 /* Applies `ops` to open transaction `t`, all or nothing: on a failure what this call applied is
  * undone and `f` is set. */
+/* DENG-824: applies an op the editor adds to an edit (foliage page upkeep) as a pair of its own.
+ * A failure is not the edit's: the op is dropped. */
+static void tx_extra(de__editor *ed, de_ep_arena *a, ed_tx *t, de_ep_edit_op *op) {
+    de_ep_edit_op inv;
+    u64 spawned = 0;
+    ed_fail f2 = {DE_EP_OK, "", NULL};
+    if (!op->has_scene) {
+        op->has_scene = true;
+        op->scene = t->scene;
+    }
+    if (!apply_op(ed, a, op, &inv, &spawned, &f2)) {
+        DE_WARN(ed->log, "editor: %.*s skipped: %s", (int)op->op.len, op->op.ptr, f2.msg);
+        return;
+    }
+    tx_push(t, blob_of_op(ed, op), blob_of_op(ed, &inv));
+}
+
 static bool tx_apply(de__editor *ed, de_ep_arena *a, ed_tx *t, const de_ep_edit_op *ops, u32 n,
                      ed_fail *f) {
     const u32 first = t->count, first_assigned = t->assigned_count;
     for (u32 i = 0; i < n; ++i) {
-        de_ep_edit_op inv, applied = ops[i];
+        de_ep_edit_op inv, applied = ops[i], extra;
         u64 spawned = 0;
         if (!applied.has_scene) {
             applied.has_scene = true;
             applied.scene = t->scene;
         }
+        /* A layer that goes empties its pages first, so an undo brings them back after it. */
+        if (ed->foliage != NULL && ed->foliage->before(ed, a, &applied, &extra))
+            tx_extra(ed, a, t, &extra);
         if (!apply_op(ed, a, &applied, &inv, &spawned, f)) {
             for (u32 k = t->count; k > first; --k) {
                 de_ep_edit_op undo, ignored;
@@ -1052,6 +1072,10 @@ static bool tx_apply(de__editor *ed, de_ep_arena *a, ed_tx *t, const de_ep_edit_
             tx_assign(t, spawned);
         }
         tx_push(t, blob_of_op(ed, &applied), blob_of_op(ed, &inv));
+        /* A copied layer (DIDE Duplicate) gets pages of its own. */
+        if (spawned != 0 && ed->foliage != NULL &&
+            ed->foliage->after_spawn(ed, a, spawned, &extra))
+            tx_extra(ed, a, t, &extra);
     }
     return true;
 }

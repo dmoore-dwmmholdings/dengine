@@ -55,7 +55,7 @@ static const struct {
     {"DeParticleSystem", 4, offsetof(DeRenderComponents, particle_system)},
     {"DeTerrain", 9, offsetof(DeRenderComponents, terrain)},
     {"DeWater", 12, offsetof(DeRenderComponents, water)},
-    {"DeFoliage", 2, offsetof(DeRenderComponents, foliage)},
+    {"DeFoliage", 3, offsetof(DeRenderComponents, foliage)},
     {"DeFoliagePage", 7, offsetof(DeRenderComponents, foliage_page)},
 };
 #define COMP_COUNT ((u32)(sizeof k_comps / sizeof k_comps[0]))
@@ -645,9 +645,11 @@ TEST_F(render_components, asset_ref_flags, cfx) {
                 (fs[i].kind == DE_FK_FIXED_ARRAY && strcmp(fs[i].attrs.nested_type, "asset") == 0);
             EXPECT_EQ(is_asset, (fs[i].flags & DE_FIELD_ASSET_REF) != 0);
             seen_assets += is_asset;
+            /* DeFoliage.source is the editor's page bookkeeping (DENG-824), not authored. */
             const bool runtime =
-                strcmp(k_comps[c].name, "DeCamera") == 0 &&
-                (strcmp(fs[i].name, "view") == 0 || strcmp(fs[i].name, "tonemapper") == 0);
+                (strcmp(k_comps[c].name, "DeCamera") == 0 &&
+                 (strcmp(fs[i].name, "view") == 0 || strcmp(fs[i].name, "tonemapper") == 0)) ||
+                (strcmp(k_comps[c].name, "DeFoliage") == 0 && strcmp(fs[i].name, "source") == 0);
             /* DeTerrain's grids are authored through terrain.* edits, not the inspector. */
             const bool grid = strcmp(k_comps[c].name, "DeTerrain") == 0 &&
                               (strcmp(fs[i].name, "heights") == 0 ||

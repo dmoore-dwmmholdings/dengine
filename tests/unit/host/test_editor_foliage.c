@@ -194,10 +194,10 @@ static u32 count_where(const inst_list *l, int type, int rule) {
     return n;
 }
 
-/* Calls `m` with the `size` bytes in f->params and returns the parsed reply. */
-static mpack_node_t call(foliage_fx *f, de_ep_method m, size_t size) {
+/* Calls `m` with the `size` bytes at `params` and returns the parsed reply. */
+static mpack_node_t call_with(foliage_fx *f, de_ep_method m, const char *params, size_t size) {
     const de_ep_request req = {
-        .id = 581, .method = de_ep_cstr(de_ep_method_name(m)), .params = {f->params, size}};
+        .id = 581, .method = de_ep_cstr(de_ep_method_name(m)), .params = {params, size}};
     ASSERT_TRUE(f->ed.handlers[m] != NULL);
     de_ep_arena a = {f->storage, STORAGE, 0};
     mpack_writer_t w;
@@ -214,6 +214,9 @@ static mpack_node_t call(foliage_fx *f, de_ep_method m, size_t size) {
     mpack_node_t root = mpack_tree_root(&f->tree);
     ASSERT_EQ(mpack_node_u64(mpack_node_map_cstr(root, "id")), 581u);
     return root;
+}
+static mpack_node_t call(foliage_fx *f, de_ep_method m, size_t size) {
+    return call_with(f, m, f->params, size);
 }
 #define CALL(f, m, writer, p)                                                                      \
     do {                                                                                           \
@@ -797,6 +800,292 @@ TEST_F(editor_foliage, a_100m_brush_at_4_per_m2_is_stored_in_full, foliage_fx) {
     instances_of(f, &now);
     EXPECT_TRUE(now.n == after.n &&
                 memcmp(now.i, after.i, sizeof(de_foliage_instance) * after.n) == 0);
+}
+
+/* ---- DENG-824: page upkeep ---- */
+
+/* The DeFoliage entities other than `not`, first one. */
+typedef struct layer_find {
+    u64 not_bits, found;
+} layer_find;
+static void layer_chunk(const de_query_chunk *c, void *user) {
+    layer_find *lf = (layer_find *)user;
+    for (u32 r = 0; r < c->count && lf->found == 0; ++r)
+        if (c->entities[r].bits != lf->not_bits)
+            lf->found = c->entities[r].bits;
+}
+static de_entity other_layer(foliage_fx *f, de_entity not_e) {
+    layer_find lf = {not_e.bits, 0};
+    const de_query_term terms[1] = {{f->comp, DE_READ}};
+    const de_query_desc qd = {terms, 1, NULL, 0};
+    const de_query q = de_query_create(f->engine.world, &qd);
+    de_query_each(f->engine.world, q, layer_chunk, &lf);
+    de_query_destroy(f->engine.world, q);
+    return (de_entity){lf.found};
+}
+static u32 page_count(foliage_fx *f, de_entity layer_e) {
+    static page_set ps;
+    const de_entity keep = f->layer;
+    f->layer = layer_e;
+    pages_of(f, &ps);
+    f->layer = keep;
+    return ps.n;
+}
+
+/* A write that cannot spawn every page it needs changes nothing: the pages are spawned before
+ * any page is written, and the ones made are despawned again. */
+TEST_F(editor_foliage, a_page_write_that_runs_out_of_pages_changes_nothing, foliage_fx) {
+    de_ep_foliage_stroke s = stroke(f, 0, 4.0f, 4.0f, 1.0f);
+    ASSERT_EQ(paint(f, &s), 0);
+    static inst_list before, now;
+    instances_of(f, &before);
+    const u32 pages_before = page_count(f, f->layer);
+    ASSERT_GT(pages_before, 0u);
+    s = stroke(f, 1, 0.0f, 0.0f, 1.0f);
+    s.radius = 40.0f;
+    s.density = 2.0f;
+    const de_ep_edit_op op = stroke_op(f, "foliage.paint", &s);
+    f->ed.foliage_fail_spawn = 3; /* the third new page fails */
+    EXPECT_EQ(edit(f, &op, NULL), DE_EP_ERR_BUSY);
+    instances_of(f, &now);
+    EXPECT_TRUE(same(&now, &before));
+    EXPECT_EQ(page_count(f, f->layer), pages_before);
+    /* Nothing else of the layer moved either: no DeFoliagePage is left without its data. */
+    static page_set all;
+    all.n = 0;
+    all.layer = 0;
+    const de_query_term terms[1] = {{page_comp(f), DE_READ}};
+    const de_query_desc qd = {terms, 1, NULL, 0};
+    const de_query q = de_query_create(f->engine.world, &qd);
+    de_query_each(f->engine.world, q, page_chunk, &all);
+    de_query_destroy(f->engine.world, q);
+    EXPECT_EQ(all.n, 0u); /* every page names the layer */
+    f->ed.foliage_fail_spawn = 0;
+    EXPECT_EQ(edit(f, &op, NULL), 0);
+    EXPECT_GT(count_of(f), before.n);
+}
+
+static de_ep_edit_op entity_op(const char *name, de_entity e) {
+    de_ep_edit_op op;
+    memset(&op, 0, sizeof op);
+    op.op = de_ep_cstr(name);
+    op.has_entity = true;
+    op.entity = e.bits;
+    return op;
+}
+
+/* Despawning a layer despawns its pages in the same edit; undo brings both back, redo removes
+ * them again. */
+TEST_F(editor_foliage, despawning_a_layer_takes_its_pages_and_undo_restores_them, foliage_fx) {
+    de_ep_foliage_stroke s = stroke(f, 0, 4.0f, 4.0f, 1.0f);
+    ASSERT_EQ(paint(f, &s), 0);
+    s = stroke(f, 1, 20.0f, 4.0f, 1.0f);
+    ASSERT_EQ(paint(f, &s), 0);
+    static inst_list before, now;
+    instances_of(f, &before);
+    const u32 pages = page_count(f, f->layer);
+    ASSERT_GT(pages, 1u);
+    const de_ep_edit_op op = entity_op("despawn", f->layer);
+    u32 tx = 0;
+    ASSERT_EQ(edit(f, &op, &tx), 0);
+    EXPECT_FALSE(de_entity_alive(f->engine.world, f->layer));
+    EXPECT_EQ(page_count(f, f->layer), 0u);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+    ASSERT_TRUE(de_entity_alive(f->engine.world, f->layer));
+    EXPECT_EQ(page_count(f, f->layer), pages);
+    instances_of(f, &now);
+    EXPECT_TRUE(same(&now, &before));
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
+    EXPECT_FALSE(de_entity_alive(f->engine.world, f->layer));
+    EXPECT_EQ(page_count(f, f->layer), 0u);
+}
+
+/* Removing DeFoliage from the entity does the same. */
+TEST_F(editor_foliage, removing_the_component_takes_the_pages_and_undo_restores_them, foliage_fx) {
+    de_ep_foliage_stroke s = stroke(f, 0, 4.0f, 4.0f, 1.0f);
+    ASSERT_EQ(paint(f, &s), 0);
+    static inst_list before, now;
+    instances_of(f, &before);
+    const u32 pages = page_count(f, f->layer);
+    de_ep_edit_op op = entity_op("remove", f->layer);
+    op.has_component = true;
+    op.component = de_ep_cstr(DE_FOLIAGE_COMPONENT);
+    u32 tx = 0;
+    ASSERT_EQ(edit(f, &op, &tx), 0);
+    EXPECT_FALSE(de_entity_has(f->engine.world, f->layer, f->comp));
+    EXPECT_EQ(page_count(f, f->layer), 0u);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+    EXPECT_EQ(page_count(f, f->layer), pages);
+    instances_of(f, &now);
+    EXPECT_TRUE(same(&now, &before));
+}
+
+/* DIDE Duplicate spawns a copy with the original's DeFoliage row, whose `source` names the
+ * original: the copy gets pages of its own with the same instances, and the original keeps its
+ * pages. Undo removes the copy and its pages; redo brings both back. */
+TEST_F(editor_foliage, a_duplicated_layer_gets_its_own_copy_of_the_pages, foliage_fx) {
+    de_ep_foliage_stroke s = stroke(f, 0, 4.0f, 4.0f, 1.0f);
+    ASSERT_EQ(paint(f, &s), 0);
+    s = stroke(f, 1, 20.0f, 4.0f, 1.0f);
+    ASSERT_EQ(paint(f, &s), 0);
+    static inst_list orig, copy, now;
+    instances_of(f, &orig);
+    const u32 pages = page_count(f, f->layer);
+    EXPECT_EQ(layer(f)->source, f->layer.bits);
+    /* The row as DIDE reads it (world.entity). */
+    static unsigned char scratch[64u << 10];
+    de_ep_arena a = {scratch, sizeof scratch, 0};
+    de_ep_str name = de_ep_cstr(DE_FOLIAGE_COMPONENT);
+    const de_ep_list_str only = {&name, 1};
+    de_ep_entity_row row;
+    ASSERT_TRUE(de__ed_entity_row(&f->ed, &a, f->layer, &only, NULL, &row));
+    ASSERT_EQ(row.components.count, 1u);
+    de_ep_kv_raw kv = {name, row.components.items[0].value};
+    de_ep_edit_op op;
+    memset(&op, 0, sizeof op);
+    op.op = de_ep_cstr("spawn");
+    op.has_components = true;
+    op.components.items = &kv;
+    op.components.count = 1;
+    u32 tx = 0;
+    ASSERT_EQ(edit(f, &op, &tx), 0);
+    const de_entity dup = other_layer(f, f->layer);
+    ASSERT_TRUE(dup.bits != 0);
+    const DeFoliage *dfo = (const DeFoliage *)de_entity_get_const(f->engine.world, dup, f->comp);
+    ASSERT_TRUE(dfo != NULL);
+    EXPECT_EQ(dfo->source, dup.bits);
+    EXPECT_EQ(page_count(f, dup), pages);
+    EXPECT_EQ(page_count(f, f->layer), pages);
+    const de_entity keep = f->layer;
+    f->layer = dup;
+    instances_of(f, &copy);
+    f->layer = keep;
+    EXPECT_TRUE(same(&copy, &orig));
+    instances_of(f, &now);
+    EXPECT_TRUE(same(&now, &orig));
+    /* An edit of the copy leaves the original alone. */
+    f->layer = dup;
+    s = stroke(f, 0, 40.0f, 40.0f, 1.0f);
+    const de_ep_edit_op p2 = stroke_op(f, "foliage.paint", &s);
+    f->layer = keep;
+    ASSERT_EQ(edit(f, &p2, NULL), 0);
+    instances_of(f, &now);
+    EXPECT_TRUE(same(&now, &orig));
+    ASSERT_GT(page_count(f, dup), pages);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx + 1u), 0);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+    EXPECT_FALSE(de_entity_alive(f->engine.world, dup));
+    EXPECT_EQ(page_count(f, dup), 0u);
+    EXPECT_EQ(page_count(f, f->layer), pages);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
+    EXPECT_EQ(page_count(f, dup), pages);
+}
+
+/* scene.reloadFromText; the reply code. */
+static int reload_text(foliage_fx *f, const char *text) {
+    static char p[288u << 10];
+    mpack_writer_t w;
+    mpack_writer_init(&w, p, sizeof p);
+    const de_ep_scene_reload_params q = {1, de_ep_cstr(text)};
+    de_ep_write_scene_reload_params(&w, &q);
+    const size_t n = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    return code_of(call_with(f, DE_EP_METHOD_SCENE_RELOAD_FROM_TEXT, p, n));
+}
+
+/* A version 1 scene kept the instances inline in DeFoliage (cells and instances, with
+ * cell_count and instance_count); loading it puts them on pages. */
+TEST_F(editor_foliage, a_version_1_layer_loads_onto_pages, foliage_fx) {
+    de__ed_scene_register(&f->ed);
+    static const char k_v1[] =
+        "[entity.0x0000000000000a01]\n"
+        "[entity.0x0000000000000a01.DeFoliage]\n"
+        "cell_count = 2\n"
+        "instance_count = 3\n"
+        "cells = [{x = 0, z = 0, count = 2, revision = 5}, {x = 1, z = 0, count = 1, revision = 6},"
+        " {x = 0, z = 0, count = 0, revision = 0}]\n"
+        "instances = [{x = 1.5, y = 2.0, z = 3.0, yaw = 10.0, scale = 1.25, rule = 0, type = 1,"
+        " nx = 0, nz = 0},\n"
+        " {x = 4, y = 2, z = 5, yaw = 20, scale = 1, rule = 7, type = 0, nx = 12, nz = -3},\n"
+        " {x = 17.5, y = 2.0, z = 1.0, yaw = 0.0, scale = 0.9, rule = 0, type = 0, nx = 0,"
+        " nz = 0},\n"
+        " {x = 0, y = 0, z = 0, yaw = 0, scale = 0, rule = 0, type = 0, nx = 0, nz = 0}]\n";
+    ASSERT_EQ(reload_text(f, k_v1), 0);
+    const de_entity lay = other_layer(f, DE_ENTITY_NULL);
+    ASSERT_TRUE(lay.bits != 0);
+    f->layer = lay;
+    EXPECT_EQ(layer(f)->source, lay.bits);
+    de_foliage_store st;
+    store_of(f, &st);
+    ASSERT_EQ(st.cell_count, 2u);
+    ASSERT_EQ(st.instance_count, 3u);
+    EXPECT_EQ(st.cells[0].x, 0);
+    EXPECT_EQ(st.cells[0].count, 2u);
+    EXPECT_EQ(st.cells[0].revision, 5u);
+    EXPECT_EQ(st.cells[1].x, 1);
+    EXPECT_EQ(st.cells[1].revision, 6u);
+    const de_foliage_instance *i0 = &st.cells[0].inst[0], *i1 = &st.cells[0].inst[1];
+    EXPECT_FLOAT_EQ(i0->x, 1.5f, 1e-6f);
+    EXPECT_FLOAT_EQ(i0->scale, 1.25f, 1e-6f);
+    EXPECT_EQ(i0->type, 1u);
+    EXPECT_EQ(i1->rule, 7u);
+    EXPECT_EQ(i1->nx, 12);
+    EXPECT_EQ(i1->nz, -3);
+    EXPECT_FLOAT_EQ(st.cells[1].inst[0].x, 17.5f, 1e-6f);
+    de__foliage_store_free(&st);
+    /* The pages are in the scene: a save writes them, as version 2, and they load back. */
+    EXPECT_EQ(page_count(f, lay), 2u);
+    u64 scene = 0, sid = 0;
+    static page_set ps;
+    pages_of(f, &ps);
+    for (u32 i = 0; i < ps.n; ++i) {
+        EXPECT_TRUE(de__ed_scene_member(ps.e[i].bits, &scene, &sid));
+        EXPECT_EQ(scene, 1u);
+    }
+}
+
+/* Scene text and prefabs: a loaded layer holds its own pages, and a page that is a prefab root
+ * is unparented and joins its layer's scene. */
+TEST_F(editor_foliage, loaded_pages_join_the_scene_of_their_layer, foliage_fx) {
+    de__ed_scene_register(&f->ed);
+    de_ep_foliage_stroke s = stroke(f, 0, 4.0f, 4.0f, 1.0f);
+    ASSERT_EQ(paint(f, &s), 0);
+    static page_set ps;
+    pages_of(f, &ps);
+    ASSERT_GT(ps.n, 0u);
+    /* As de_prefab_instantiate leaves them: the layer in the scene (the instance tree), the page
+     * a root parented to the instantiate parent and in no scene. */
+    const de_entity parent = spawn_at(f, 0, 0, 0);
+    ASSERT_TRUE(de__ed_scene_member_set(f->layer.bits, 1, 0xabc));
+    de__ed_scene_member_drop(ps.e[0].bits);
+    ASSERT_EQ(de_entity_set_parent(f->engine.world, ps.e[0], parent), DE_OK);
+    layer(f)->source = 0;
+    const u64 ents[2] = {f->layer.bits, ps.e[0].bits};
+    f->ed.foliage->loaded(&f->ed, ents, 2, parent);
+    EXPECT_EQ(layer(f)->source, f->layer.bits);
+    EXPECT_EQ(de_entity_parent(f->engine.world, ps.e[0]).bits, 0u);
+    u64 scene = 0, sid = 0;
+    EXPECT_TRUE(de__ed_scene_member(ps.e[0].bits, &scene, &sid));
+    EXPECT_EQ(scene, 1u);
+    /* A scene save and reload keeps the layer, its pages and their instances. */
+    static inst_list before, now;
+    instances_of(f, &before);
+    mpack_node_t root;
+    CALL(f, DE_EP_METHOD_SCENE_SERIALIZE, de_ep_write_scene_params,
+         (&(de_ep_scene_params){1}));
+    ASSERT_EQ(code_of(root), 0);
+    const mpack_node_t t = mpack_node_map_cstr(result(root), "text");
+    static char text[256u << 10];
+    const size_t len = mpack_node_strlen(t);
+    ASSERT_TRUE(len < sizeof text);
+    memcpy(text, mpack_node_str(t), len);
+    text[len] = '\0';
+    ASSERT_EQ(reload_text(f, text), 0);
+    f->layer = other_layer(f, DE_ENTITY_NULL);
+    ASSERT_TRUE(f->layer.bits != 0);
+    EXPECT_EQ(layer(f)->source, f->layer.bits);
+    instances_of(f, &now);
+    EXPECT_TRUE(same(&now, &before));
 }
 
 #endif /* !DE_SHIPPING */

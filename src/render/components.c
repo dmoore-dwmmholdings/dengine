@@ -560,6 +560,9 @@ static de_result reg_foliage(de_world *w, de_component *out) {
                      DE_FOLIAGE_TYPES}),
         DE_FIELD_EX(DeFoliage, rules, DE_FK_FIXED_ARRAY, AUTHORED,
                     {0, 0, 0, "Scatter rules", "de_foliage_rule", DE_FOLIAGE_RULES}),
+        /* DENG-824: editor data, not saved; see DeFoliage.source. */
+        DE_FIELD_EX(DeFoliage, source, DE_FK_U64, DE_FIELD_SNAPSHOT | DE_FIELD_EDITOR_HIDDEN,
+                    {0, 0, 0, "The layer whose pages this one holds", 0, 0}),
     };
     /* Version 2 (DENG-823): the instances moved to DeFoliagePage entities. */
     return register_component(w, DE_TYPE_DESC(DeFoliage, 2, k_fields), construct_foliage, out);
