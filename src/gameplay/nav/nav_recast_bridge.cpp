@@ -1,6 +1,7 @@
-// nav_recast_bridge.cpp: the Recast / Detour bridge (DENG-76). The only C++ of the nav module;
-// its C interface is nav_recast_bridge.h. No exceptions and no RTTI are needed by Recast or
-// Detour; nothing here throws. Built with the module's deterministic flags (no FP contraction).
+// nav_recast_bridge.cpp: the Recast / Detour bridge (DENG-76; queries and off-mesh links DENG-77).
+// The only C++ of the nav module; its C interface is nav_recast_bridge.h. No exceptions and no
+// RTTI are needed by Recast or Detour; nothing here throws. Built with the module's deterministic
+// flags (no FP contraction).
 //
 // Allocation: process-wide hooks (installed once) take every block from the thread's current
 // de_allocator (alloc_scope, set by each entry point below) and put a 16-byte header in front of
@@ -10,10 +11,12 @@
 #include <DetourAlloc.h>
 #include <DetourNavMesh.h>
 #include <DetourNavMeshBuilder.h>
+#include <DetourNavMeshQuery.h>
 #include <Recast.h>
 #include <RecastAlloc.h>
 
 #include <atomic>
+#include <cfloat>
 #include <cstring>
 #include <new>
 
@@ -89,7 +92,9 @@ struct tile_work {
     rcPolyMesh *pmesh = nullptr;
     rcPolyMeshDetail *dmesh = nullptr;
     unsigned char *areas = nullptr;
+    void *offmesh = nullptr; // one block for the off-mesh connection arrays
     ~tile_work() {
+        rcFree(offmesh);
         rcFreeHeightField(hf);
         rcFreeCompactHeightfield(chf);
         rcFreeContourSet(cset);
@@ -100,6 +105,31 @@ struct tile_work {
 };
 
 const unsigned short k_walk_flag = 1;
+
+// Makes Detour's math (de_detour_math.h) deterministic on this thread for the scope when `on`.
+struct det_scope {
+    bool prev;
+    explicit det_scope(bool on) : prev(de__nav_detmath_on) {
+        if (on)
+            de__nav_detmath_on = true;
+    }
+    ~det_scope() { de__nav_detmath_on = prev; }
+    det_scope(const det_scope &) = delete;
+    det_scope &operator=(const det_scope &) = delete;
+};
+
+// FNV-1a 64.
+struct fnv {
+    u64 h = 1469598103934665603ull;
+    void bytes(const void *p, size_t n) {
+        const unsigned char *b = static_cast<const unsigned char *>(p);
+        for (size_t i = 0; i < n; ++i) {
+            h ^= b[i];
+            h *= 1099511628211ull;
+        }
+    }
+    template <typename T> void val(const T &v) { bytes(&v, sizeof v); }
+};
 
 } // namespace
 
@@ -250,6 +280,38 @@ de_result de__nav_rc_build_tile(const de_allocator *a, const de__nav_rc_tile_con
     p.cs = cfg.cs;
     p.ch = cfg.ch;
     p.buildBvTree = true;
+    if (c->offmesh_count > 0 && c->offmesh != nullptr) {
+        const size_t n = (size_t)c->offmesh_count;
+        // verts (6 floats), rad (float), flags (u16), user id (u32), dir and area (u8 each).
+        const size_t bytes = n * (6 * sizeof(float) + sizeof(float) + sizeof(unsigned short) +
+                                  sizeof(unsigned int) + 2);
+        w.offmesh = rcAlloc(bytes + 16, RC_ALLOC_TEMP);
+        if (w.offmesh == nullptr)
+            return DE_ERR_OUT_OF_MEMORY;
+        float *verts = static_cast<float *>(w.offmesh);
+        float *rad = verts + n * 6;
+        unsigned int *ids = reinterpret_cast<unsigned int *>(rad + n);
+        unsigned short *flags = reinterpret_cast<unsigned short *>(ids + n);
+        unsigned char *dirs = reinterpret_cast<unsigned char *>(flags + n);
+        unsigned char *areas = dirs + n;
+        for (size_t i = 0; i < n; ++i) {
+            const f32 *o = &c->offmesh[i * DE__NAV_RC_OFFMESH_FLOATS];
+            for (int k = 0; k < 6; ++k)
+                verts[i * 6 + k] = o[k];
+            rad[i] = o[6];
+            dirs[i] = o[7] != 0.0f ? DT_OFFMESH_CON_BIDIR : 0;
+            areas[i] = (unsigned char)o[8];
+            flags[i] = (unsigned short)(1u << areas[i]);
+            ids[i] = (unsigned int)i;
+        }
+        p.offMeshConVerts = verts;
+        p.offMeshConRad = rad;
+        p.offMeshConDir = dirs;
+        p.offMeshConAreas = areas;
+        p.offMeshConFlags = flags;
+        p.offMeshConUserID = ids;
+        p.offMeshConCount = c->offmesh_count;
+    }
     unsigned char *data = nullptr;
     int size = 0;
     if (!dtCreateNavMeshData(&p, &data, &size))
@@ -405,6 +467,214 @@ bool de__nav_mesh_point_on_poly(const de__nav_mesh *m, const f32 p[3], f32 max_d
             return true;
     }
     return false;
+}
+
+u64 de__nav_mesh_hash(const de__nav_mesh *m) {
+    if (m == nullptr)
+        return 0;
+    const dtNavMesh *nav = m->nav;
+    fnv f;
+    // Tiles in grid order (z, then x), whatever order Detour stores them in.
+    bool have_prev = false;
+    int px = 0, pz = 0;
+    for (;;) {
+        const dtMeshTile *best = nullptr;
+        for (int i = 0; i < nav->getMaxTiles(); ++i) {
+            const dtMeshTile *t = nav->getTile(i);
+            if (t == nullptr || t->header == nullptr)
+                continue;
+            const int x = t->header->x, z = t->header->y;
+            if (have_prev && (z < pz || (z == pz && x <= px)))
+                continue;
+            if (best == nullptr || z < best->header->y ||
+                (z == best->header->y && x < best->header->x))
+                best = t;
+        }
+        if (best == nullptr)
+            break;
+        const dtMeshHeader *h = best->header;
+        have_prev = true;
+        px = h->x;
+        pz = h->y;
+        f.val(h->x);
+        f.val(h->y);
+        f.val(h->polyCount);
+        f.val(h->vertCount);
+        f.val(h->detailMeshCount);
+        f.val(h->detailVertCount);
+        f.val(h->detailTriCount);
+        f.val(h->offMeshConCount);
+        f.bytes(best->verts, sizeof(float) * 3 * (size_t)h->vertCount);
+        for (int i = 0; i < h->polyCount; ++i) {
+            const dtPoly &p = best->polys[i];
+            f.bytes(p.verts, sizeof p.verts);
+            f.bytes(p.neis, sizeof p.neis);
+            f.val(p.flags);
+            f.val(p.vertCount);
+            f.val(p.areaAndtype);
+        }
+        f.bytes(best->detailMeshes, sizeof(dtPolyDetail) * (size_t)h->detailMeshCount);
+        f.bytes(best->detailVerts, sizeof(float) * 3 * (size_t)h->detailVertCount);
+        f.bytes(best->detailTris, 4 * (size_t)h->detailTriCount);
+        for (int i = 0; i < h->offMeshConCount; ++i) {
+            const dtOffMeshConnection &o = best->offMeshCons[i];
+            f.bytes(o.pos, sizeof o.pos);
+            f.val(o.rad);
+            f.val(o.poly);
+            f.val(o.flags);
+            f.val(o.side);
+            f.val(o.userId);
+        }
+    }
+    return f.h;
+}
+
+} // extern "C"
+
+/* ---- Queries (DENG-77) ----------------------------------------------------------------------- */
+
+struct de__nav_query {
+    de__nav_mesh *mesh;
+    dtNavMeshQuery *q;
+    bool det;
+    dtPolyRef polys[DE__NAV_QUERY_MAX_POLYS];
+    float points[DE__NAV_QUERY_MAX_POINTS * 3];
+    unsigned char flags[DE__NAV_QUERY_MAX_POINTS];
+    dtPolyRef refs[DE__NAV_QUERY_MAX_POINTS];
+};
+
+namespace {
+
+// Nodes of the A* pool: enough for corridors of DE__NAV_QUERY_MAX_POLYS polygons.
+const int k_query_nodes = 4096;
+
+void make_filter(const de__nav_query_args *a, dtQueryFilter *f) {
+    f->setIncludeFlags(a->include);
+    f->setExcludeFlags(0);
+}
+
+} // namespace
+
+extern "C" {
+
+de_result de__nav_query_create(de__nav_mesh *m, de__nav_query **out) {
+    if (m == nullptr || out == nullptr)
+        return DE_ERR_INVALID_ARGUMENT;
+    *out = nullptr;
+    const de_allocator *a = m->alloc;
+    alloc_scope scope(a);
+    de__nav_query *q = static_cast<de__nav_query *>(
+        DE_ALLOC(a, sizeof(de__nav_query), alignof(de__nav_query), DE_MEM_GENERAL));
+    if (q == nullptr)
+        return DE_ERR_OUT_OF_MEMORY;
+    std::memset(q, 0, sizeof *q);
+    q->mesh = m;
+    q->q = dtAllocNavMeshQuery();
+    if (q->q == nullptr || dtStatusFailed(q->q->init(m->nav, k_query_nodes))) {
+        dtFreeNavMeshQuery(q->q);
+        DE_FREE(a, q, sizeof *q);
+        return DE_ERR_OUT_OF_MEMORY;
+    }
+    *out = q;
+    return DE_OK;
+}
+
+void de__nav_query_destroy(de__nav_query *q) {
+    if (q == nullptr)
+        return;
+    const de_allocator *a = q->mesh->alloc;
+    {
+        alloc_scope scope(a);
+        dtFreeNavMeshQuery(q->q);
+    }
+    DE_FREE(a, q, sizeof *q);
+}
+
+void de__nav_query_set_deterministic(de__nav_query *q, bool on) {
+    if (q != nullptr)
+        q->det = on;
+}
+
+de_result de__nav_query_path(de__nav_query *q, const de__nav_query_args *args, const f32 start[3],
+                             const f32 end[3], const f32 **points, i32 *count, bool *partial,
+                             bool *bad_end) {
+    *points = q->points;
+    *count = 0;
+    *partial = false;
+    *bad_end = false;
+    det_scope det(q->det);
+    dtQueryFilter f;
+    make_filter(args, &f);
+    dtPolyRef sref = 0, eref = 0;
+    float sp[3], ep[3];
+    if (dtStatusFailed(q->q->findNearestPoly(start, args->ext, &f, &sref, sp)))
+        return DE_ERR_INTERNAL;
+    if (sref == 0)
+        return DE_ERR_NOT_FOUND;
+    if (dtStatusFailed(q->q->findNearestPoly(end, args->ext, &f, &eref, ep)))
+        return DE_ERR_INTERNAL;
+    if (eref == 0) {
+        *bad_end = true;
+        return DE_ERR_NOT_FOUND;
+    }
+    int np = 0;
+    const dtStatus st =
+        q->q->findPath(sref, eref, sp, ep, &f, q->polys, &np, DE__NAV_QUERY_MAX_POLYS);
+    if (dtStatusFailed(st) || np <= 0)
+        return DE_ERR_INTERNAL;
+    bool part = dtStatusDetail(st, DT_PARTIAL_RESULT) || q->polys[np - 1] != eref;
+    float target[3] = {ep[0], ep[1], ep[2]};
+    if (part && dtStatusFailed(q->q->closestPointOnPoly(q->polys[np - 1], ep, target, nullptr)))
+        return DE_ERR_INTERNAL;
+    int ns = 0;
+    const dtStatus ss = q->q->findStraightPath(sp, target, q->polys, np, q->points, q->flags,
+                                               q->refs, &ns, DE__NAV_QUERY_MAX_POINTS, 0);
+    if (dtStatusFailed(ss) || ns <= 0)
+        return DE_ERR_INTERNAL;
+    if (dtStatusDetail(ss, DT_BUFFER_TOO_SMALL))
+        part = true;
+    *count = ns;
+    *partial = part;
+    return DE_OK;
+}
+
+i32 de__nav_query_raycast(de__nav_query *q, const de__nav_query_args *args, const f32 start[3],
+                          const f32 end[3], f32 hit[3]) {
+    det_scope det(q->det);
+    dtQueryFilter f;
+    make_filter(args, &f);
+    dtPolyRef sref = 0;
+    float sp[3];
+    if (dtStatusFailed(q->q->findNearestPoly(start, args->ext, &f, &sref, sp)) || sref == 0)
+        return -1;
+    float t = 0.0f, normal[3];
+    int np = 0;
+    if (dtStatusFailed(q->q->raycast(sref, sp, end, &f, &t, normal, q->polys, &np,
+                                     DE__NAV_QUERY_MAX_POLYS)))
+        return -1;
+    if (t == FLT_MAX)
+        return 0;
+    float p[3];
+    for (int k = 0; k < 3; ++k)
+        p[k] = sp[k] + (end[k] - sp[k]) * t;
+    const dtPolyRef last = np > 0 ? q->polys[np - 1] : sref;
+    if (dtStatusFailed(q->q->closestPointOnPoly(last, p, hit, nullptr))) {
+        hit[0] = p[0];
+        hit[1] = p[1];
+        hit[2] = p[2];
+    }
+    return 1;
+}
+
+bool de__nav_query_nearest(de__nav_query *q, const de__nav_query_args *args, const f32 p[3],
+                           f32 out[3]) {
+    det_scope det(q->det);
+    dtQueryFilter f;
+    make_filter(args, &f);
+    dtPolyRef ref = 0;
+    if (dtStatusFailed(q->q->findNearestPoly(p, args->ext, &f, &ref, out)))
+        return false;
+    return ref != 0;
 }
 
 } // extern "C"

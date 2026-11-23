@@ -71,6 +71,9 @@ static void wait_all(de_nav *n) {
 void de_nav_update(de_nav *n) {
     if (n == NULL)
         return;
+    de__nav_update_obstacles(n);
+    if (n->deterministic)
+        wait_all(n); /* every pending rebuild lands on this frame, on every machine */
     while (n->jobs_head != NULL) {
         de__nav_job *j = n->jobs_head;
         if (j->on_worker && !de_task_done(&j->counter))
@@ -112,8 +115,11 @@ void de_nav_destroy(de_nav *n) {
         job_free(j);
     }
     de_nav_attach(n, NULL);
+    de__nav_queries_free(n);
     de__nav_mesh_destroy(n->mesh);
     const de_allocator *a = n->alloc;
+    if (n->links != NULL)
+        DE_FREE(a, n->links, sizeof(de__nav_link) * n->link_cap);
     if (n->obstacles != NULL)
         DE_FREE(a, n->obstacles, sizeof(de__nav_obstacle) * n->obstacle_cap);
     if (n->extra != NULL)
@@ -197,7 +203,21 @@ void de_nav_attach(de_nav *n, de_world *w) {
 static de_result ensure_mesh(de_nav *n, f32 tile_size) {
     if (n->mesh != NULL)
         return DE_OK;
-    return de__nav_mesh_create(n->alloc, tile_size, &n->mesh);
+    DE_TRY(de__nav_mesh_create(n->alloc, tile_size, &n->mesh));
+    const de_result r = de__nav_queries_init(n);
+    if (r != DE_OK) {
+        de__nav_queries_free(n);
+        de__nav_mesh_destroy(n->mesh);
+        n->mesh = NULL;
+    }
+    return r;
+}
+
+static void gather_links(const de_nav *n, de__nav_soup *s) {
+    for (u32 i = 0; i < n->link_count; ++i) {
+        const de__nav_link *l = &n->links[i];
+        de__nav_soup_add_offmesh(s, l->from, l->to, l->radius, l->bidirectional, l->area);
+    }
 }
 
 static void gather_extra(const de_nav *n, de__nav_soup *s) {
@@ -246,7 +266,15 @@ de_result de_nav_rebuild_tiles(de_nav *n, const de_navmesh_build_desc *desc, de_
     if (count > DE__NAV_MAX_TILES)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_nav_rebuild_tiles: more than %d tiles",
                        DE__NAV_MAX_TILES);
+    return de__nav_rebuild_range(n, &st, tx0, tz0, tx1, tz1);
+}
 
+de_result de__nav_rebuild_range(de_nav *n, const de__nav_settings *stp, i32 tx0, i32 tz0, i32 tx1,
+                                i32 tz1) {
+    const de__nav_settings st = *stp;
+    const i64 count = ((i64)tx1 - tx0 + 1) * ((i64)tz1 - tz0 + 1);
+    if (count <= 0 || count > DE__NAV_MAX_TILES)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "nav: tile range of %lld tiles", (long long)count);
     const de_allocator *a = n->alloc;
     de__nav_job *j = DE_NEW(a, de__nav_job, DE_MEM_GENERAL);
     if (j == NULL)
@@ -270,7 +298,8 @@ de_result de_nav_rebuild_tiles(de_nav *n, const de_navmesh_build_desc *desc, de_
     j->soup.clip_max[2] = (f32)(tz1 + 1) * t + pad;
     de__nav_gather_world(n, &j->soup, st.desc.collision_mask);
     gather_extra(n, &j->soup);
-    de__nav_gather_obstacles(n, &j->soup);
+    de__nav_gather_obstacles(n, &j->soup, tx0, tz0, tx1, tz1);
+    gather_links(n, &j->soup);
     j->data = (u8 **)DE_ALLOC(a, sizeof(u8 *) * j->tile_count, 16, DE_MEM_GENERAL);
     j->sizes = (i32 *)DE_ALLOC(a, sizeof(i32) * j->tile_count, 16, DE_MEM_GENERAL);
     if (j->soup.failed || j->data == NULL || j->sizes == NULL) {
@@ -304,8 +333,13 @@ void de_nav_add_obstacle(de_nav *n, de_entity e, de_vec3 half_extents) {
         !(half_extents.z > 0.0f))
         return;
     for (u32 i = 0; i < n->obstacle_count; ++i) {
-        if (n->obstacles[i].entity.bits == e.bits) {
-            n->obstacles[i].half_extents = half_extents;
+        de__nav_obstacle *o = &n->obstacles[i];
+        if (o->entity.bits == e.bits) {
+            if (o->removed || o->half_extents.x != half_extents.x ||
+                o->half_extents.y != half_extents.y || o->half_extents.z != half_extents.z)
+                o->dirty = true;
+            o->removed = false;
+            o->half_extents = half_extents;
             return;
         }
     }
@@ -323,19 +357,96 @@ void de_nav_add_obstacle(de_nav *n, de_entity e, de_vec3 half_extents) {
         n->obstacles = (de__nav_obstacle *)p;
         n->obstacle_cap = nc;
     }
-    n->obstacles[n->obstacle_count].entity = e;
-    n->obstacles[n->obstacle_count].half_extents = half_extents;
+    de__nav_obstacle *o = &n->obstacles[n->obstacle_count];
+    memset(o, 0, sizeof *o);
+    o->entity = e;
+    o->half_extents = half_extents;
+    o->dirty = true;
     ++n->obstacle_count;
 }
 
-void de__nav_gather_obstacles(de_nav *n, de__nav_soup *soup) {
+void de_nav_remove_obstacle(de_nav *n, de_entity e) {
+    if (n == NULL)
+        return;
+    for (u32 i = 0; i < n->obstacle_count; ++i)
+        if (n->obstacles[i].entity.bits == e.bits)
+            n->obstacles[i].removed = true;
+}
+
+void de__nav_gather_obstacles(de_nav *n, de__nav_soup *soup, i32 tx0, i32 tz0, i32 tx1, i32 tz1) {
     if (n->world == NULL)
         return;
     for (u32 i = 0; i < n->obstacle_count; ++i) {
+        de__nav_obstacle *o = &n->obstacles[i];
         de__nav_pose p;
-        if (de__nav_entity_pose(n->world, n->obstacles[i].entity, &p))
-            de__nav_soup_add_obstacle(soup, &p, n->obstacles[i].half_extents);
+        if (o->removed || !de__nav_entity_pose(n->world, o->entity, &p))
+            continue;
+        de__nav_soup_add_obstacle(soup, &p, o->half_extents);
+        i32 a0, b0, a1, b1;
+        de__nav_obstacle_tiles(n, &p, o->half_extents, &a0, &b0, &a1, &b1);
+        if (a0 >= tx0 && b0 >= tz0 && a1 <= tx1 && b1 <= tz1) {
+            o->carved = true;
+            o->dirty = false;
+            o->carved_pose = p;
+            o->carved_half = o->half_extents;
+        }
     }
+}
+
+void de__nav_obstacle_tiles(const de_nav *n, const de__nav_pose *p, de_vec3 h, i32 *tx0, i32 *tz0,
+                            i32 *tx1, i32 *tz1) {
+    de_dvec3 wmin = p->pos, wmax = p->pos;
+    for (u32 i = 0; i < 8; ++i) {
+        de_vec3 c;
+        c.x = (i & 1u) ? h.x : -h.x;
+        c.y = (i & 2u) ? h.y : -h.y;
+        c.z = (i & 4u) ? h.z : -h.z;
+        const de_dvec3 w = de__nav_pose_apply(p, c);
+        wmin.x = w.x < wmin.x ? w.x : wmin.x;
+        wmin.y = w.y < wmin.y ? w.y : wmin.y;
+        wmin.z = w.z < wmin.z ? w.z : wmin.z;
+        wmax.x = w.x > wmax.x ? w.x : wmax.x;
+        wmax.y = w.y > wmax.y ? w.y : wmax.y;
+        wmax.z = w.z > wmax.z ? w.z : wmax.z;
+    }
+    f32 rmin[3], rmax[3];
+    de__nav_box_to_recast(&n->origin, wmin, wmax, rmin, rmax);
+    /* Erosion grows the footprint by the agent radius, and a tile reads `border` cells of input
+     * around itself: tiles within that distance change too. */
+    const de__nav_settings *st = &n->settings;
+    const f32 pad = (f32)st->border * st->desc.cell_size + st->desc.agent_radius;
+    rmin[0] -= pad;
+    rmin[2] -= pad;
+    rmax[0] += pad;
+    rmax[2] += pad;
+    de__nav_tile_range(st->desc.tile_size, rmin, rmax, tx0, tz0, tx1, tz1);
+}
+
+de_result de_nav_add_offmesh_link(de_nav *n, de_dvec3 from, de_dvec3 to, f32 radius,
+                                  bool bidirectional, u8 area) {
+    if (n == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_nav_add_offmesh_link: NULL nav");
+    if (!(radius > 0.0f) || area > 15u)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                       "de_nav_add_offmesh_link: radius must be > 0 and area 0..15");
+    if (n->link_count == n->link_cap) {
+        const u32 nc = n->link_cap != 0 ? n->link_cap * 2u : 8u;
+        void *p = n->links == NULL
+                      ? DE_ALLOC(n->alloc, sizeof(de__nav_link) * nc, 16, DE_MEM_GENERAL)
+                      : DE_REALLOC(n->alloc, n->links, sizeof(de__nav_link) * n->link_cap,
+                                   sizeof(de__nav_link) * nc, 16, DE_MEM_GENERAL);
+        if (p == NULL)
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de_nav_add_offmesh_link");
+        n->links = (de__nav_link *)p;
+        n->link_cap = nc;
+    }
+    de__nav_link *l = &n->links[n->link_count++];
+    l->from = from;
+    l->to = to;
+    l->radius = radius;
+    l->bidirectional = bidirectional;
+    l->area = area;
+    return DE_OK;
 }
 
 /* ---- Cooked navmeshes ------------------------------------------------------------------------ */
@@ -442,6 +553,14 @@ bool de__nav_origin(const de_nav *n, de_dvec3 *out) {
         return false;
     *out = n->origin;
     return true;
+}
+
+u64 de__nav_mesh_checksum(const de_nav *n) {
+    return n != NULL ? de__nav_mesh_hash(n->mesh) : 0;
+}
+
+u32 de__nav_obstacle_count(const de_nav *n) {
+    return n != NULL ? n->obstacle_count : 0;
 }
 
 u32 de__nav_pending_jobs(const de_nav *n) {
