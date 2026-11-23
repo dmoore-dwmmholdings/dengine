@@ -121,6 +121,12 @@ endif()
 # the debug layer.
 if(TARGET test_gpu_d3d12)
     target_sources(test_gpu_d3d12 PRIVATE d3d12/test_d3d12_barrier_tables.c)
+    # DENG-752: the strict UTF-8 to UTF-16 export-name converter (gpu_d3d12.d3d12.utf16_*), pure,
+    # on every host: without the D3D12 backend the test compiles src/gpu/d3d12/d3d12_utf16.c.
+    target_sources(test_gpu_d3d12 PRIVATE d3d12/test_d3d12_utf16.c)
+    if(NOT DE_HAS_GPU_D3D12)
+        target_sources(test_gpu_d3d12 PRIVATE "${DE_ROOT_DIR}/src/gpu/d3d12/d3d12_utf16.c")
+    endif()
     if(DE_HAS_GPU_D3D12)
         target_sources(test_gpu_d3d12 PRIVATE d3d12/test_d3d12_cmd.c)
         target_link_libraries(test_gpu_d3d12 PRIVATE de_platform)

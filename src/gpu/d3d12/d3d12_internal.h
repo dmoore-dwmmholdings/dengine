@@ -359,6 +359,22 @@ bool de__d3d12_pipeline_library_check(const void *file, u64 size, u32 vendor_id,
 bool de__d3d12_pipeline_library_path(char *out, size_t cap, const char *dir, u32 vendor_id,
                                      u32 device_id, u64 driver_version);
 
+/* ---------- UTF-16 export names (portable, DENG-752) ---------- */
+
+/**
+ * Strict UTF-8 to UTF-16: `utf8` is NUL-terminated. Malformed input (a bad lead or continuation
+ * byte, an overlong form, an encoded surrogate, a value above U+10FFFF, a truncated sequence) is
+ * DE_ERR_INVALID_ARGUMENT; a failed allocation is DE_ERR_OUT_OF_MEMORY. On DE_OK, `*out` is a
+ * NUL-terminated string of `*out_units` UTF-16 units (terminator included) from `a`; free it with
+ * DE_FREE(a, *out, *out_units * sizeof(u16)). On failure `*out` is NULL and nothing is allocated.
+ * There is no length cap.
+ */
+de_result de__d3d12_utf8_to_utf16(const de_allocator *a, const char *utf8, u16 **out,
+                                  size_t *out_units);
+/** The same for a ray tracing shader entry name: NULL means "main"; "" is DE_ERR_INVALID_ARGUMENT. */
+de_result de__d3d12_rt_entry_to_utf16(const de_allocator *a, const char *entry, u16 **out,
+                                      size_t *out_units);
+
 /* ---------- The backend (Windows) ---------- */
 #if defined(_WIN32)
 
