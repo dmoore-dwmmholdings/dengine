@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.20"
-#define DE_EP_SCHEMA_HASH "5ece11fddbb88fc6"
+#define DE_EP_PROTOCOL_VERSION "1.21"
+#define DE_EP_SCHEMA_HASH "b6c744f10f18b392"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -211,6 +211,7 @@ typedef struct de_ep_limits de_ep_limits;
 typedef struct de_ep_loc_locale_info de_ep_loc_locale_info;
 typedef struct de_ep_loc_locales de_ep_loc_locales;
 typedef struct de_ep_loc_preview_params de_ep_loc_preview_params;
+typedef struct de_ep_loc_pseudo_params de_ep_loc_pseudo_params;
 typedef struct de_ep_loc_string de_ep_loc_string;
 typedef struct de_ep_loc_strings de_ep_loc_strings;
 typedef struct de_ep_log_record de_ep_log_record;
@@ -318,6 +319,9 @@ typedef struct de_ep_ui_sheet de_ep_ui_sheet;
 typedef struct de_ep_ui_sheet_error de_ep_ui_sheet_error;
 typedef struct de_ep_ui_stylesheets de_ep_ui_stylesheets;
 typedef struct de_ep_ui_text_line de_ep_ui_text_line;
+typedef struct de_ep_ui_text_overflow de_ep_ui_text_overflow;
+typedef struct de_ep_ui_text_overflow_entry de_ep_ui_text_overflow_entry;
+typedef struct de_ep_ui_text_overflow_params de_ep_ui_text_overflow_params;
 typedef struct de_ep_ui_text_style de_ep_ui_text_style;
 typedef struct de_ep_ui_theme_info de_ep_ui_theme_info;
 typedef struct de_ep_ui_theme_var de_ep_ui_theme_var;
@@ -609,6 +613,11 @@ typedef struct de_ep_list_animation_joint_frame {
     uint32_t count;
 } de_ep_list_animation_joint_frame;
 
+typedef struct de_ep_list_ui_text_overflow_entry {
+    de_ep_ui_text_overflow_entry *items;
+    uint32_t count;
+} de_ep_list_ui_text_overflow_entry;
+
 typedef struct de_ep_list_material_graph_diagnostic {
     de_ep_material_graph_diagnostic *items;
     uint32_t count;
@@ -830,7 +839,7 @@ struct de_ep_camera {
     de_ep_list_f32 rotation; /* quaternion [x, y, z, w] */
     float fov_y; /* radians; 0 for orthographic */
     bool has_ortho_height;
-    float ortho_height;
+    float ortho_height; /* Optional. Values <= 0 are ignored (as if absent): the view uses perspective when fovY > 0. A positive value selects orthographic projection with that world height. */
     float near;
     float far;
 };
@@ -1157,12 +1166,19 @@ struct de_ep_loc_locales {
     de_ep_str fallback; /* the default locale at the end of the fallback chain */
     uint64_t generation; /* changes when a locale switch is published */
     bool previewing;
+    bool has_pseudo;
+    bool pseudo; /* pseudo-localization is on (de_loc_locale_state pseudo), protocol 1.21; absent means off, as from an engine before 1.21 */
     de_ep_list_loc_locale_info locales; /* sorted by tag (byte order) */
 };
 
 struct de_ep_loc_preview_params {
     bool has_locale;
     de_ep_str locale; /* the locale to preview; absent or null ends the preview. The switch is asynchronous: wait for a new generation. A tag that is not a valid identifier is invalid_params */
+};
+
+struct de_ep_loc_pseudo_params {
+    bool has_enabled;
+    bool enabled; /* turn pseudo-localization on or off; absent or null only reads the state. The switch is asynchronous like loc.previewLocale: the reply carries the requested state in `pseudo`, and `generation` changes when it is published */
 };
 
 struct de_ep_loc_string {
@@ -1988,6 +2004,25 @@ struct de_ep_ui_text_line {
     float height;
 };
 
+/* The text nodes that overflow, in pre-order of the UI tree; empty when none do. A node with neither flag set is not listed. */
+struct de_ep_ui_text_overflow {
+    de_ep_list_ui_text_overflow_entry overflows;
+};
+
+/* One text node whose text does not fit its box (de_ui_find_text_overflow). */
+struct de_ep_ui_text_overflow_entry {
+    uint64_t entity; /* the DeUiText node */
+    bool overflow_x; /* a line cannot break narrow enough for the box width */
+    bool overflow_y; /* the text is taller than the box */
+    de_ep_list_f32 text_size; /* [width, height] of the laid-out text in layout pixels */
+    de_ep_list_f32 box_size; /* [width, height] of the node's box in layout pixels */
+};
+
+struct de_ep_ui_text_overflow_params {
+    bool has_root;
+    uint64_t root; /* a live UI node (DeUiNode); not_found otherwise. Only text nodes at or under it are checked. Absent checks every UI root */
+};
+
 struct de_ep_ui_theme_info {
     de_ep_str name;
     uint32_t sheets; /* how many loaded sheets declare the theme */
@@ -2328,6 +2363,8 @@ void de_ep_write_loc_locales(mpack_writer_t *w, const de_ep_loc_locales *v);
 void de_ep_read_loc_locales(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_locales *out);
 void de_ep_write_loc_preview_params(mpack_writer_t *w, const de_ep_loc_preview_params *v);
 void de_ep_read_loc_preview_params(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_preview_params *out);
+void de_ep_write_loc_pseudo_params(mpack_writer_t *w, const de_ep_loc_pseudo_params *v);
+void de_ep_read_loc_pseudo_params(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_pseudo_params *out);
 void de_ep_write_loc_string(mpack_writer_t *w, const de_ep_loc_string *v);
 void de_ep_read_loc_string(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_string *out);
 void de_ep_write_loc_strings(mpack_writer_t *w, const de_ep_loc_strings *v);
@@ -2542,6 +2579,12 @@ void de_ep_write_ui_stylesheets(mpack_writer_t *w, const de_ep_ui_stylesheets *v
 void de_ep_read_ui_stylesheets(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_stylesheets *out);
 void de_ep_write_ui_text_line(mpack_writer_t *w, const de_ep_ui_text_line *v);
 void de_ep_read_ui_text_line(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_text_line *out);
+void de_ep_write_ui_text_overflow(mpack_writer_t *w, const de_ep_ui_text_overflow *v);
+void de_ep_read_ui_text_overflow(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_text_overflow *out);
+void de_ep_write_ui_text_overflow_entry(mpack_writer_t *w, const de_ep_ui_text_overflow_entry *v);
+void de_ep_read_ui_text_overflow_entry(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_text_overflow_entry *out);
+void de_ep_write_ui_text_overflow_params(mpack_writer_t *w, const de_ep_ui_text_overflow_params *v);
+void de_ep_read_ui_text_overflow_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_text_overflow_params *out);
 void de_ep_write_ui_text_style(mpack_writer_t *w, const de_ep_ui_text_style *v);
 void de_ep_read_ui_text_style(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_text_style *out);
 void de_ep_write_ui_theme_info(mpack_writer_t *w, const de_ep_ui_theme_info *v);
@@ -2642,6 +2685,7 @@ typedef enum de_ep_method {
     DE_EP_METHOD_INPUT_FOCUS,
     DE_EP_METHOD_LOC_LOCALES,
     DE_EP_METHOD_LOC_PREVIEW_LOCALE,
+    DE_EP_METHOD_LOC_PSEUDO,
     DE_EP_METHOD_LOC_STRINGS,
     DE_EP_METHOD_LOG_SUBSCRIBE,
     DE_EP_METHOD_MATERIAL_GRAPH_CATALOG,
@@ -2694,6 +2738,7 @@ typedef enum de_ep_method {
     DE_EP_METHOD_UI_NODE_CORNERS,
     DE_EP_METHOD_UI_PREVIEW_THEME,
     DE_EP_METHOD_UI_STYLESHEETS,
+    DE_EP_METHOD_UI_TEXT_OVERFLOW,
     DE_EP_METHOD_UI_THEME_VARS,
     DE_EP_METHOD_UI_THEMES,
     DE_EP_METHOD_UNSUBSCRIBE,
@@ -2844,6 +2889,8 @@ bool de_ep_read_params_loc_locales(const de_ep_request *req, de_ep_arena *a, de_
 void de_ep_write_response_loc_locales(mpack_writer_t *w, uint64_t id, const de_ep_loc_locales *result);
 bool de_ep_read_params_loc_preview_locale(const de_ep_request *req, de_ep_arena *a, de_ep_loc_preview_params *out);
 void de_ep_write_response_loc_preview_locale(mpack_writer_t *w, uint64_t id, const de_ep_loc_locales *result);
+bool de_ep_read_params_loc_pseudo(const de_ep_request *req, de_ep_arena *a, de_ep_loc_pseudo_params *out);
+void de_ep_write_response_loc_pseudo(mpack_writer_t *w, uint64_t id, const de_ep_loc_locales *result);
 bool de_ep_read_params_loc_strings(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
 void de_ep_write_response_loc_strings(mpack_writer_t *w, uint64_t id, const de_ep_loc_strings *result);
 bool de_ep_read_params_log_subscribe(const de_ep_request *req, de_ep_arena *a, de_ep_log_subscribe_params *out);
@@ -2948,6 +2995,8 @@ bool de_ep_read_params_ui_preview_theme(const de_ep_request *req, de_ep_arena *a
 void de_ep_write_response_ui_preview_theme(mpack_writer_t *w, uint64_t id, const de_ep_ui_themes *result);
 bool de_ep_read_params_ui_stylesheets(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
 void de_ep_write_response_ui_stylesheets(mpack_writer_t *w, uint64_t id, const de_ep_ui_stylesheets *result);
+bool de_ep_read_params_ui_text_overflow(const de_ep_request *req, de_ep_arena *a, de_ep_ui_text_overflow_params *out);
+void de_ep_write_response_ui_text_overflow(mpack_writer_t *w, uint64_t id, const de_ep_ui_text_overflow *result);
 bool de_ep_read_params_ui_theme_vars(const de_ep_request *req, de_ep_arena *a, de_ep_ui_theme_vars_params *out);
 void de_ep_write_response_ui_theme_vars(mpack_writer_t *w, uint64_t id, const de_ep_ui_theme_vars *result);
 bool de_ep_read_params_ui_themes(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);

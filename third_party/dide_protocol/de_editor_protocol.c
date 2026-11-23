@@ -4183,6 +4183,7 @@ void de_ep_write_loc_locales(mpack_writer_t *w, const de_ep_loc_locales *v) {
     ++n;
     ++n;
     ++n;
+    n += v->has_pseudo ? 1u : 0u;
     ++n;
     mpack_start_map(w, n);
     mpack_write_cstr(w, "active");
@@ -4197,6 +4198,10 @@ void de_ep_write_loc_locales(mpack_writer_t *w, const de_ep_loc_locales *v) {
     mpack_write_u64(w, v->generation);
     mpack_write_cstr(w, "previewing");
     mpack_write_bool(w, v->previewing);
+    if (v->has_pseudo) {
+        mpack_write_cstr(w, "pseudo");
+        mpack_write_bool(w, v->pseudo);
+    }
     mpack_write_cstr(w, "locales");
     mpack_start_array(w, v->locales.count);
     for (uint32_t i_1 = 0; i_1 < v->locales.count; ++i_1) {
@@ -4231,8 +4236,12 @@ void de_ep_read_loc_locales(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_locales
         } else if (de_ep_str_eq(k, "previewing")) {
             seen |= (uint64_t)1 << 5;
             out->previewing = mpack_expect_bool(r);
-        } else if (de_ep_str_eq(k, "locales")) {
+        } else if (de_ep_str_eq(k, "pseudo")) {
             seen |= (uint64_t)1 << 6;
+            out->has_pseudo = true;
+            out->pseudo = mpack_expect_bool(r);
+        } else if (de_ep_str_eq(k, "locales")) {
+            seen |= (uint64_t)1 << 7;
             out->locales.count = mpack_expect_array(r);
             out->locales.items = (de_ep_loc_locale_info *)de_ep_arena_array(r, a, out->locales.count, sizeof(*out->locales.items));
             for (uint32_t i_3 = 0; out->locales.items && i_3 < out->locales.count; ++i_3)
@@ -4245,7 +4254,7 @@ void de_ep_read_loc_locales(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_locales
         }
     }
     mpack_done_map(r);
-    if ((seen & UINT64_C(127)) != UINT64_C(127))
+    if ((seen & UINT64_C(191)) != UINT64_C(191))
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
@@ -4271,6 +4280,36 @@ void de_ep_read_loc_preview_params(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_
             seen |= (uint64_t)1 << 0;
             out->has_locale = true;
             de_ep_read_str(r, &out->locale);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    (void)seen;
+}
+
+void de_ep_write_loc_pseudo_params(mpack_writer_t *w, const de_ep_loc_pseudo_params *v) {
+    uint32_t n = 0;
+    n += v->has_enabled ? 1u : 0u;
+    mpack_start_map(w, n);
+    if (v->has_enabled) {
+        mpack_write_cstr(w, "enabled");
+        mpack_write_bool(w, v->enabled);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_loc_pseudo_params(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_pseudo_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "enabled")) {
+            seen |= (uint64_t)1 << 0;
+            out->has_enabled = true;
+            out->enabled = mpack_expect_bool(r);
         } else {
             mpack_discard(r);
         }
@@ -10071,6 +10110,146 @@ void de_ep_read_ui_text_line(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_text_li
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
+void de_ep_write_ui_text_overflow(mpack_writer_t *w, const de_ep_ui_text_overflow *v) {
+    uint32_t n = 0;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "overflows");
+    mpack_start_array(w, v->overflows.count);
+    for (uint32_t i_1 = 0; i_1 < v->overflows.count; ++i_1) {
+        de_ep_write_ui_text_overflow_entry(w, &v->overflows.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_ui_text_overflow(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_text_overflow *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "overflows")) {
+            seen |= (uint64_t)1 << 0;
+            out->overflows.count = mpack_expect_array(r);
+            out->overflows.items = (de_ep_ui_text_overflow_entry *)de_ep_arena_array(r, a, out->overflows.count, sizeof(*out->overflows.items));
+            for (uint32_t i_3 = 0; out->overflows.items && i_3 < out->overflows.count; ++i_3)
+            {
+                de_ep_read_ui_text_overflow_entry(r, a, &out->overflows.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(1)) != UINT64_C(1))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_ui_text_overflow_entry(mpack_writer_t *w, const de_ep_ui_text_overflow_entry *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "entity");
+    mpack_write_u64(w, v->entity);
+    mpack_write_cstr(w, "overflowX");
+    mpack_write_bool(w, v->overflow_x);
+    mpack_write_cstr(w, "overflowY");
+    mpack_write_bool(w, v->overflow_y);
+    mpack_write_cstr(w, "textSize");
+    mpack_start_array(w, v->text_size.count);
+    for (uint32_t i_1 = 0; i_1 < v->text_size.count; ++i_1) {
+        mpack_write_float(w, v->text_size.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "boxSize");
+    mpack_start_array(w, v->box_size.count);
+    for (uint32_t i_1 = 0; i_1 < v->box_size.count; ++i_1) {
+        mpack_write_float(w, v->box_size.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_ui_text_overflow_entry(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_text_overflow_entry *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "entity")) {
+            seen |= (uint64_t)1 << 0;
+            out->entity = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "overflowX")) {
+            seen |= (uint64_t)1 << 1;
+            out->overflow_x = mpack_expect_bool(r);
+        } else if (de_ep_str_eq(k, "overflowY")) {
+            seen |= (uint64_t)1 << 2;
+            out->overflow_y = mpack_expect_bool(r);
+        } else if (de_ep_str_eq(k, "textSize")) {
+            seen |= (uint64_t)1 << 3;
+            out->text_size.count = mpack_expect_array(r);
+            out->text_size.items = (float *)de_ep_arena_array(r, a, out->text_size.count, sizeof(*out->text_size.items));
+            for (uint32_t i_3 = 0; out->text_size.items && i_3 < out->text_size.count; ++i_3)
+            {
+                out->text_size.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "boxSize")) {
+            seen |= (uint64_t)1 << 4;
+            out->box_size.count = mpack_expect_array(r);
+            out->box_size.items = (float *)de_ep_arena_array(r, a, out->box_size.count, sizeof(*out->box_size.items));
+            for (uint32_t i_3 = 0; out->box_size.items && i_3 < out->box_size.count; ++i_3)
+            {
+                out->box_size.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(31)) != UINT64_C(31))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_ui_text_overflow_params(mpack_writer_t *w, const de_ep_ui_text_overflow_params *v) {
+    uint32_t n = 0;
+    n += v->has_root ? 1u : 0u;
+    mpack_start_map(w, n);
+    if (v->has_root) {
+        mpack_write_cstr(w, "root");
+        mpack_write_u64(w, v->root);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_ui_text_overflow_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_text_overflow_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "root")) {
+            seen |= (uint64_t)1 << 0;
+            out->has_root = true;
+            out->root = mpack_expect_u64(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    (void)seen;
+}
+
 void de_ep_write_ui_text_style(mpack_writer_t *w, const de_ep_ui_text_style *v) {
     uint32_t n = 0;
     ++n;
@@ -11538,6 +11717,7 @@ static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
     "input.focus",
     "loc.locales",
     "loc.previewLocale",
+    "loc.pseudo",
     "loc.strings",
     "log.subscribe",
     "materialGraph.catalog",
@@ -11590,6 +11770,7 @@ static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
     "ui.nodeCorners",
     "ui.previewTheme",
     "ui.stylesheets",
+    "ui.textOverflow",
     "ui.themeVars",
     "ui.themes",
     "unsubscribe",
@@ -11658,6 +11839,7 @@ static const char *const de_ep__capabilities[DE_EP_METHOD_COUNT] = {
     "ui.editor",
     "ui.editor",
     "ui.editor",
+    "ui.editor",
     NULL,
     "assets.materialGraph",
     "assets.materialGraph",
@@ -11709,6 +11891,7 @@ static const char *const de_ep__capabilities[DE_EP_METHOD_COUNT] = {
     "ui.editor",
     "ui.editor",
     "ui.stylesheets",
+    "ui.editor",
     "ui.editor",
     "ui.editor",
     NULL,
@@ -12313,6 +12496,19 @@ bool de_ep_read_params_loc_preview_locale(const de_ep_request *req, de_ep_arena 
 }
 
 void de_ep_write_response_loc_preview_locale(mpack_writer_t *w, uint64_t id, const de_ep_loc_locales *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_loc_locales(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_loc_pseudo(const de_ep_request *req, de_ep_arena *a, de_ep_loc_pseudo_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_loc_pseudo_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_loc_pseudo(mpack_writer_t *w, uint64_t id, const de_ep_loc_locales *result) {
     de_ep_write_result_begin(w, id);
     de_ep_write_loc_locales(w, result);
     de_ep_write_result_end(w);
@@ -12991,6 +13187,19 @@ bool de_ep_read_params_ui_stylesheets(const de_ep_request *req, de_ep_arena *a, 
 void de_ep_write_response_ui_stylesheets(mpack_writer_t *w, uint64_t id, const de_ep_ui_stylesheets *result) {
     de_ep_write_result_begin(w, id);
     de_ep_write_ui_stylesheets(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_ui_text_overflow(const de_ep_request *req, de_ep_arena *a, de_ep_ui_text_overflow_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_ui_text_overflow_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_ui_text_overflow(mpack_writer_t *w, uint64_t id, const de_ep_ui_text_overflow *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_ui_text_overflow(w, result);
     de_ep_write_result_end(w);
 }
 
