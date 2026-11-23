@@ -492,6 +492,12 @@ void de__ed_gizmo_set_tool(const de_ep_gizmo_tool_params *q) {
     G.hover = H_NONE;
 }
 
+u32 de__ed_gizmo_selection(u64 *out, u32 cap) {
+    for (u32 i = 0; i < G.sel_count && i < cap; ++i)
+        out[i] = G.sel[i];
+    return G.sel_count;
+}
+
 void de__ed_gizmo_set_selection(const u64 *entities, u32 count) {
     G.sel_count = 0;
     for (u32 i = 0; i < count && i < GZ_MAX; ++i)

@@ -9,6 +9,7 @@
 #define _CRT_SECURE_NO_WARNINGS /* fopen */
 #endif
 #include "host/editor/editor_internal.h"
+#include "host/editor/editor_gizmo.h"
 
 #include <dengine/de_asset.h>
 #include <dengine/de_memory.h>
@@ -159,12 +160,108 @@ static bool in_scene(de__editor *ed, de_entity e, u64 scene) {
 
 /* ---------- Reading scene text ---------- */
 
+/* Why scene text was refused: scene.load and scene.reloadFromText reply `invalid_params` with
+ * `data: { reason, line?, entity?, component? }` (DENG-570). `reason` is one of "syntax" (not
+ * TOML), "shape" (`entity` or an entity is not a table), "id" (a key or `id` that is no scene
+ * ID, or an `id` in a keyed table), "duplicate" (two entities with one scene ID), "parent" (a
+ * parent that is no entity of the text, or a cycle) and "value" (a component value its type
+ * can't hold). `line` is 1-based, `entity` the scene ID as "0x" and 16 hex digits. */
+typedef struct scene_err {
+    const char *reason;
+    char msg[400];
+    int line;
+    u64 sid;
+    char component[64];
+} scene_err;
+
+static bool scene_fail(scene_err *e, const char *reason, int line, u64 sid, const char *component,
+                       const char *fmt, ...) DE_PRINTF_FMT(6, 7);
+static bool scene_fail(scene_err *e, const char *reason, int line, u64 sid, const char *component,
+                       const char *fmt, ...) {
+    e->reason = reason;
+    e->line = line;
+    e->sid = sid;
+    snprintf(e->component, sizeof e->component, "%s", component != NULL ? component : "");
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(e->msg, sizeof e->msg, fmt, ap);
+    va_end(ap);
+    return false;
+}
+
+/* The `invalid_params` reply for `e`, its message prefixed with `prefix` (a path) when given. */
+static void scene_error_reply(mpack_writer_t *w, u64 id, const char *prefix, const scene_err *e) {
+    char msg[512];
+    if (prefix != NULL)
+        snprintf(msg, sizeof msg, "%s: %s", prefix, e->msg);
+    else
+        snprintf(msg, sizeof msg, "%s", e->msg);
+    const u32 fields = 1u + (e->line > 0) + (e->sid != 0) + (e->component[0] != '\0');
+    mpack_start_map(w, 2);
+    mpack_write_cstr(w, "id");
+    mpack_write_u64(w, id);
+    mpack_write_cstr(w, "error");
+    mpack_start_map(w, 3);
+    mpack_write_cstr(w, "code");
+    mpack_write_i32(w, (int32_t)DE_EP_ERR_INVALID_PARAMS);
+    mpack_write_cstr(w, "message");
+    mpack_write_cstr(w, msg);
+    mpack_write_cstr(w, "data");
+    mpack_start_map(w, fields);
+    mpack_write_cstr(w, "reason");
+    mpack_write_cstr(w, e->reason != NULL ? e->reason : "value");
+    if (e->line > 0) {
+        mpack_write_cstr(w, "line");
+        mpack_write_i32(w, e->line);
+    }
+    if (e->sid != 0) {
+        char hex[20];
+        de__ser_format_hex64(e->sid, hex);
+        mpack_write_cstr(w, "entity");
+        mpack_write_cstr(w, hex);
+    }
+    if (e->component[0] != '\0') {
+        mpack_write_cstr(w, "component");
+        mpack_write_cstr(w, e->component);
+    }
+    mpack_finish_map(w);
+    mpack_finish_map(w);
+    mpack_finish_map(w);
+}
+
+/* A scene ID spelled as a key or a string: "0x" and 1 to 16 hex digits, or decimal digits. 0 if
+ * it is neither (0 is no scene ID). */
+static u64 sid_from_str(const char *s, size_t len) {
+    u64 v = 0;
+    if (len > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+        return de__ser_parse_hex64(s, len, &v) ? v : 0;
+    if (len == 0 || len > 20)
+        return 0;
+    for (size_t i = 0; i < len; ++i) {
+        if (s[i] < '0' || s[i] > '9')
+            return 0;
+        const u64 d = (u64)(s[i] - '0');
+        if (v > (UINT64_MAX - d) / 10)
+            return 0;
+        v = v * 10 + d;
+    }
+    return v;
+}
+
 static u64 parse_sid(const toml_datum_t *d) {
     if (d->type == TOML_INT64)
-        return (u64)d->u.int64;
+        return d->u.int64 > 0 ? (u64)d->u.int64 : 0;
     if (d->type == TOML_STRING)
-        return strtoull(d->u.s, NULL, 0);
+        return sid_from_str(d->u.str.ptr, (size_t)d->u.str.len);
     return 0;
+}
+
+/* The 1-based line in a reflection reader message ("scene: line N: ..."), else `fallback`. */
+static int line_of_message(const char *msg, int fallback) {
+    int line = 0;
+    if (msg != NULL && sscanf(msg, "scene: line %d:", &line) == 1 && line > 0)
+        return line;
+    return fallback;
 }
 
 static const toml_datum_t *tab_get(const toml_datum_t *t, const char *key) {
@@ -206,49 +303,149 @@ static bool is_hierarchy_name(const char *name) {
            strcmp(name, "DeGlobalTransform") == 0;
 }
 
-/* Spawns the entities of scene text into `scene`. False with `err` set on a failure; nothing
- * stays spawned then. */
-static bool spawn_text(de__editor *ed, const char *text, size_t len, u64 scene, char *err,
-                       size_t err_cap) {
+static const char *datum_kind(toml_type_t t) {
+    switch (t) {
+    case TOML_STRING:
+        return "a string";
+    case TOML_INT64:
+        return "an integer";
+    case TOML_FP64:
+        return "a float";
+    case TOML_BOOLEAN:
+        return "a boolean";
+    case TOML_ARRAY:
+        return "an array";
+    case TOML_TABLE:
+        return "a table";
+    default:
+        return "a date or time";
+    }
+}
+
+/* One entity of scene text: its scene ID and its table. */
+typedef struct text_ent {
+    u64 sid;
+    const toml_datum_t *tab;
+    int line; /* of its table, 0 if not known */
+} text_ent;
+
+static int cmp_text_ent(const void *x, const void *y) {
+    const text_ent *a = (const text_ent *)x, *b = (const text_ent *)y;
+    return a->sid < b->sid ? -1 : a->sid > b->sid;
+}
+
+/* The entities of scene text into `out` (room for `cap`), in scene-ID order. Two layouts:
+ * - keyed (what scene.serialize writes, SPEC §9.2): `[entity.0x…]`, one table per entity keyed
+ *   by its scene ID; an `id` key in it is refused (the key is the ID);
+ * - `[[entity]]` (DENG-215 authored scenes): an array of tables, each with an optional `id`
+ *   (a new scene ID when absent). */
+static bool text_entities(const toml_datum_t *top, text_ent *out, u32 cap, u32 *count,
+                          scene_err *err) {
+    *count = 0;
+    const toml_datum_t *ents = tab_get(top, "entity");
+    if (ents == NULL)
+        return true;
+    u32 n = 0;
+    if (ents->type == TOML_TABLE) {
+        for (int32_t k = 0; k < ents->u.tab.size && n < cap; ++k) {
+            const char *key = ents->u.tab.key[k];
+            const toml_datum_t *v = &ents->u.tab.value[k];
+            const u64 sid = sid_from_str(key, strlen(key));
+            if (sid == 0)
+                return scene_fail(err, "id", v->lineno, 0, NULL,
+                                  "entity key \"%.64s\" is no scene ID (\"0x\" and 1 to 16 hex "
+                                  "digits, not 0)",
+                                  key);
+            if (v->type != TOML_TABLE)
+                return scene_fail(err, "shape", v->lineno, sid, NULL,
+                                  "entity 0x%016llx is %s, not a table", (unsigned long long)sid,
+                                  datum_kind(v->type));
+            const toml_datum_t *id = tab_get(v, "id");
+            if (id != NULL)
+                return scene_fail(err, "id", id->lineno, sid, NULL,
+                                  "entity 0x%016llx: a keyed entity table has no `id` (its key "
+                                  "is the scene ID)",
+                                  (unsigned long long)sid);
+            out[n++] = (text_ent){sid, v, v->lineno};
+        }
+    } else if (ents->type == TOML_ARRAY) {
+        for (int32_t i = 0; i < ents->u.arr.size && n < cap; ++i) {
+            const toml_datum_t *v = &ents->u.arr.elem[i];
+            if (v->type != TOML_TABLE)
+                return scene_fail(err, "shape", v->lineno, 0, NULL, "entity %d is %s, not a table",
+                                  (int)i, datum_kind(v->type));
+            const toml_datum_t *id = tab_get(v, "id");
+            u64 sid = 0;
+            if (id != NULL && (sid = parse_sid(id)) == 0)
+                return scene_fail(err, "id", id->lineno, 0, NULL,
+                                  "entity %d: `id` is no scene ID", (int)i);
+            out[n++] = (text_ent){id != NULL ? sid : de_scene_id_new(), v, v->lineno};
+        }
+    } else {
+        return scene_fail(err, "shape", ents->lineno, 0, NULL,
+                          "`entity` is %s; scene text has `[entity.0x…]` tables",
+                          datum_kind(ents->type));
+    }
+    qsort(out, n, sizeof(text_ent), cmp_text_ent);
+    for (u32 i = 1; i < n; ++i)
+        if (out[i].sid == out[i - 1].sid)
+            return scene_fail(err, "duplicate", out[i].line, out[i].sid, NULL,
+                              "scene ID 0x%016llx is on two entities",
+                              (unsigned long long)out[i].sid);
+    *count = n;
+    return true;
+}
+
+static u32 text_entity_cap(const toml_datum_t *top) {
+    const toml_datum_t *ents = tab_get(top, "entity");
+    if (ents == NULL)
+        return 0;
+    if (ents->type == TOML_TABLE)
+        return (u32)ents->u.tab.size;
+    if (ents->type == TOML_ARRAY)
+        return (u32)ents->u.arr.size;
+    return 0;
+}
+
+/* Spawns the entities of scene text into `scene`, in scene-ID order. False with `err` set on a
+ * failure; nothing stays spawned then. */
+static bool spawn_text(de__editor *ed, const char *text, size_t len, u64 scene, scene_err *err) {
     de_world *w = ed->e->world;
     const de_allocator *al = de_heap_allocator();
+    memset(err, 0, sizeof *err);
     de__ed_note_asset_paths(text, len);
     toml_result_t tr = de__toml_parse(al, text, (int)len);
     if (!tr.ok) {
-        snprintf(err, err_cap, "%s", tr.errmsg);
+        scene_fail(err, "syntax", tr.errline, 0, NULL, "%s", tr.errmsg);
         de__toml_free(tr);
         return false;
     }
-    de_text_doc *doc = NULL;
-    if (de_text_doc_parse(al, text, len, "scene", &doc) != DE_OK) {
-        const de_error *e = de_error_last();
-        snprintf(err, err_cap, "%s", e != NULL ? e->message : "bad scene text");
-        de_error_clear();
-        de__toml_free(tr);
-        return false;
-    }
-    const toml_datum_t *arr = tab_get(&tr.toptab, "entity");
-    const u32 n = arr != NULL && arr->type == TOML_ARRAY ? (u32)arr->u.arr.size : 0u;
-    load_map m = {NULL, NULL, n, ed};
-    m.sids = (u64 *)DE_ALLOC(al, sizeof(u64) * (n + 1), 8, DE_MEM_GENERAL);
-    m.ents = (u64 *)DE_ALLOC(al, sizeof(u64) * (n + 1), 8, DE_MEM_GENERAL);
-    bool ok = m.sids != NULL && m.ents != NULL;
+    const u32 cap = text_entity_cap(&tr.toptab);
+    text_ent *te = (text_ent *)DE_ALLOC(al, sizeof(text_ent) * (cap + 1), 8, DE_MEM_GENERAL);
+    load_map m = {NULL, NULL, 0, ed};
+    m.sids = (u64 *)DE_ALLOC(al, sizeof(u64) * (cap + 1), 8, DE_MEM_GENERAL);
+    m.ents = (u64 *)DE_ALLOC(al, sizeof(u64) * (cap + 1), 8, DE_MEM_GENERAL);
+    u32 n = 0;
+    bool ok = te != NULL && m.sids != NULL && m.ents != NULL;
+    if (!ok)
+        scene_fail(err, "value", 0, 0, NULL, "out of memory");
+    ok = ok && text_entities(&tr.toptab, te, cap, &n, err);
     /* 1: spawn every entity, so ENTITY fields can point at any of them. */
     for (u32 i = 0; ok && i < n; ++i) {
-        const toml_datum_t *ent = &arr->u.arr.elem[i];
-        const toml_datum_t *id = tab_get(ent, "id");
-        m.sids[i] = id != NULL ? parse_sid(id) : de_scene_id_new();
+        m.sids[i] = te[i].sid;
         m.ents[i] = de_entity_spawn(w).bits;
+        m.n = i + 1;
         member_add(m.ents[i], scene, m.sids[i]);
     }
-    /* 2: components. */
+    /* 2: components, read from their tables. */
     const de_ser_context ctx = {NULL, map_sid_to_entity, NULL, map_id_to_asset, &m};
     const de_ser_options opt = {DE_SER_TEXT, 0, &ctx};
     for (u32 i = 0; ok && i < n; ++i) {
-        const toml_datum_t *ent = &arr->u.arr.elem[i];
-        for (int32_t k = 0; k < ent->u.tab.size; ++k) {
+        const toml_datum_t *ent = te[i].tab;
+        for (int32_t k = 0; ok && k < ent->u.tab.size; ++k) {
             const char *key = ent->u.tab.key[k];
-            if (ent->u.tab.value[k].type != TOML_TABLE || is_hierarchy_name(key))
+            const toml_datum_t *v = &ent->u.tab.value[k];
+            if (v->type != TOML_TABLE || is_hierarchy_name(key))
                 continue;
             const de_component c = de__ed_component(ed, de_ep_cstr(key));
             de_type_id type;
@@ -260,42 +457,45 @@ static bool spawn_text(de__editor *ed, const char *text, size_t len, u64 scene, 
             void *data = de_entity_add(w, (de_entity){m.ents[i]}, c);
             if (size == 0 || data == NULL)
                 continue;
-            if (de_text_doc_read_member(doc, "entity", i, key, ed->e->types, type, data, &opt) !=
-                DE_OK) {
+            if (de__ser_text_read_table(ed->e->types, type, data, &opt, v, al, "scene") != DE_OK) {
                 const de_error *e = de_error_last();
-                /* Keep the entity/component prefix, then bound the diagnostic to what fits. */
-                const int prefix_length = snprintf(err, err_cap, "entity %u, %s: ", i, key);
-                if (prefix_length >= 0 && (size_t)prefix_length < err_cap) {
-                    const size_t remaining = err_cap - (size_t)prefix_length;
-                    const int precision =
-                        remaining - 1 > (size_t)INT_MAX ? INT_MAX : (int)(remaining - 1);
-                    snprintf(err + prefix_length, remaining, "%.*s", precision,
-                             e != NULL ? e->message : "bad value");
-                }
+                const char *why = e != NULL ? e->message : "bad value";
+                ok = scene_fail(err, "value", line_of_message(why, v->lineno), te[i].sid, key,
+                                "entity 0x%016llx, %s: %s", (unsigned long long)te[i].sid, key,
+                                why);
                 de_error_clear();
-                ok = false;
-                break;
             }
         }
     }
-    /* 3: the hierarchy. */
+    /* 3: the hierarchy. A parent must be an entity of the same text. */
     for (u32 i = 0; ok && i < n; ++i) {
-        const toml_datum_t *p = tab_get(&arr->u.arr.elem[i], "parent");
+        const toml_datum_t *p = tab_get(te[i].tab, "parent");
         if (p == NULL)
             continue;
-        const u64 pe = map_sid_to_entity(parse_sid(p), &m);
-        if (pe != 0)
-            (void)de_entity_set_parent(w, (de_entity){m.ents[i]}, (de_entity){pe});
+        const u64 psid = parse_sid(p);
+        const u64 pe = psid != 0 ? map_sid_to_entity(psid, &m) : 0;
+        if (pe == 0) {
+            ok = scene_fail(err, "parent", p->lineno, te[i].sid, NULL,
+                            "entity 0x%016llx: parent is no entity of this scene",
+                            (unsigned long long)te[i].sid);
+            break;
+        }
+        if (de_entity_set_parent(w, (de_entity){m.ents[i]}, (de_entity){pe}) != DE_OK) {
+            de_error_clear();
+            ok = scene_fail(err, "parent", p->lineno, te[i].sid, NULL,
+                            "entity 0x%016llx: parent 0x%016llx makes a cycle",
+                            (unsigned long long)te[i].sid, (unsigned long long)psid);
+        }
     }
     if (!ok)
-        for (u32 i = 0; i < n; ++i)
-            if (m.ents != NULL && m.ents[i] != 0)
-                de_entity_despawn(w, (de_entity){m.ents[i]});
+        for (u32 i = 0; i < m.n; ++i)
+            de_entity_despawn(w, (de_entity){m.ents[i]});
+    if (te)
+        DE_FREE(al, te, sizeof(text_ent) * (cap + 1));
     if (m.sids)
-        DE_FREE(al, m.sids, sizeof(u64) * (n + 1));
+        DE_FREE(al, m.sids, sizeof(u64) * (cap + 1));
     if (m.ents)
-        DE_FREE(al, m.ents, sizeof(u64) * (n + 1));
-    de_text_doc_destroy(doc);
+        DE_FREE(al, m.ents, sizeof(u64) * (cap + 1));
     de__toml_free(tr);
     if (!ok)
         members_prune(ed);
@@ -464,7 +664,11 @@ static int cmp_cstr(const void *x, const void *y) {
     return strcmp(*(const char *const *)x, *(const char *const *)y);
 }
 
-/* The entities of `scene` (or `only`, when given) as scene text into `out`. */
+/* The entities of `scene` (or `only`, when given) as scene text into `out` (DENG-570,
+ * DIDE-R147): entities in scene-ID order, each `[entity.0x<16 hex>]` with its `parent`, then its
+ * serialized components as `[entity.0x<16 hex>.<Type>]` in type-name order, fields in reflection
+ * order, a blank line between entities. The same world always gives the same bytes, and moving
+ * one entity changes only that entity's transform lines. */
 static void write_scene(de__editor *ed, u64 scene, const u64 *only, u32 only_count,
                         de_mem_writer *out) {
     de_world *w = ed->e->world;
@@ -510,11 +714,16 @@ static void write_scene(de__editor *ed, u64 scene, const u64 *only, u32 only_cou
         const de_entity e = {list[i].entity};
         if (i > 0)
             putf(out, "\n");
-        putf(out, "[[entity]]\nid = \"0x%016llx\"\n", (unsigned long long)list[i].sid);
+        /* SPEC §9.2: one table per entity keyed by its scene ID, then its components. */
+        putf(out, "[entity.0x%016llx]\n", (unsigned long long)list[i].sid);
         const de_entity p = de_entity_parent(w, e);
         if (p.bits != 0) {
+            /* Only a parent that is saved too: the text must reload on its own. */
             const ed_member *pm = member_find(p.bits);
-            if (pm != NULL)
+            bool saved = false;
+            for (u32 k = 0; pm != NULL && k < n && !saved; ++k)
+                saved = list[k].entity == p.bits;
+            if (saved)
                 putf(out, "parent = \"0x%016llx\"\n", (unsigned long long)pm->sid);
         }
         const ecs_record *rec = ecs_entity_record(w, e);
@@ -543,7 +752,7 @@ static void write_scene(de__editor *ed, u64 scene, const u64 *only, u32 only_cou
         (void)cmp_cstr;
         for (u32 k = 0; k < nn; ++k) {
             const ecs_component_info *ci = ecs_component_get(w, a->components[idx[k]]);
-            putf(out, "[entity.%s]\n", ci->name);
+            putf(out, "[entity.0x%016llx.%s]\n", (unsigned long long)list[i].sid, ci->name);
             const u32 col = a->column_of[idx[k]];
             if (col != ECS_INVALID_INDEX && ci->size != 0)
                 put_component(
@@ -646,13 +855,13 @@ static void on_load(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mp
     const u64 id = ++g_scene.next_scene;
     char *text = NULL;
     size_t len = 0;
-    char err[512] = "";
+    scene_err err;
     /* A missing file is a new, empty scene (the IDE creates it on save). */
     if (read_file(path, &text, &len)) {
-        const bool ok = spawn_text(ed, text, len, id, err, sizeof err);
+        const bool ok = spawn_text(ed, text, len, id, &err);
         DE_FREE(de_heap_allocator(), text, len + 1);
         if (!ok) {
-            de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "%s: %s", path, err);
+            scene_error_reply(w, req->id, path, &err);
             return;
         }
     }
@@ -719,6 +928,40 @@ static void on_set_active(de__editor *ed, const de_ep_request *req, de_ep_arena 
     de_ep_write_response_scene_set_active(w, req->id, &e);
 }
 
+/* The entities scene.serialize writes for `scene`: its members, and for the game scene the
+ * entities in no scene, never the editor's views. NULL (count 0) if there are none or memory ran
+ * out; free with DE_FREE(heap, list, sizeof(u64) * (count + 1)). */
+static u64 *scene_entities(de__editor *ed, u64 scene, u32 *count) {
+    de_world *w = ed->e->world;
+    const de_allocator *al = de_heap_allocator();
+    u32 total = 0;
+    for (u32 ai = 0; ai < w->archetypes.count; ++ai)
+        total += (((ecs_archetype *const *)w->archetypes.data)[ai])->count;
+    *count = 0;
+    u64 *list = (u64 *)DE_ALLOC(al, sizeof(u64) * (total + 1), 8, DE_MEM_GENERAL);
+    if (list == NULL)
+        return NULL;
+    u32 n = 0;
+    for (u32 ai = 0; ai < w->archetypes.count; ++ai) {
+        const ecs_archetype *a = ((ecs_archetype *const *)w->archetypes.data)[ai];
+        for (u32 c = 0; c < a->chunks.count; ++c) {
+            const ecs_chunk *ch = ecs_table_chunk(a, c);
+            for (u32 r = 0; r < ch->count; ++r) {
+                const de_entity e = ecs_chunk_entities(ch)[r];
+                if (n < total && in_scene(ed, e, scene) && !de__ed_views_owns(e.bits))
+                    list[n++] = e.bits;
+            }
+        }
+    }
+    *count = n;
+    return list;
+}
+
+#define ED_RELOAD_SELECTION 256u
+
+/* DIDE-R147, DIDE-R148: replaces the scene with the text. All or nothing: the new entities are
+ * spawned first and the old ones go only when the whole text read, so bad text leaves the scene
+ * as it was. The selection is kept by scene ID. */
 static void on_reload(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
     DE__ED_PARAMS(scene_reload_from_text, de_ep_scene_reload_params, q);
     if (!no_change_in_play(ed, req, w))
@@ -728,20 +971,49 @@ static void on_reload(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
         de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "scene %llu", (unsigned long long)q.scene);
         return;
     }
-    /* Check the text parses before the old entities go. */
-    toml_result_t tr = de__toml_parse(NULL, q.text.ptr, (int)q.text.len);
-    if (!tr.ok) {
-        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "%s", tr.errmsg);
-        de__toml_free(tr);
+    members_prune(ed);
+    const de_allocator *al = de_heap_allocator();
+    u32 old_count = 0;
+    u64 *old = scene_entities(ed, q.scene, &old_count);
+    /* The selection by scene ID (0: not an entity of this scene, kept as it is). */
+    u64 sel[ED_RELOAD_SELECTION], sel_sid[ED_RELOAD_SELECTION];
+    u32 sel_count = de__ed_gizmo_selection(sel, ED_RELOAD_SELECTION);
+    if (sel_count > ED_RELOAD_SELECTION)
+        sel_count = ED_RELOAD_SELECTION;
+    for (u32 i = 0; i < sel_count; ++i) {
+        const ed_member *m = member_find(sel[i]);
+        sel_sid[i] = m != NULL && m->scene == q.scene ? m->sid : 0;
+    }
+    /* Old and new members share scene IDs until the old entities go: members are found by
+     * entity, and the text's references resolve among its own entities. */
+    scene_err err;
+    if (!spawn_text(ed, q.text.ptr, q.text.len, q.scene, &err)) {
+        if (old != NULL)
+            DE_FREE(al, old, sizeof(u64) * (old_count + 1));
+        scene_error_reply(w, req->id, NULL, &err);
         return;
     }
-    de__toml_free(tr);
-    despawn_scene(ed, q.scene);
-    char err[512] = "";
-    if (!spawn_text(ed, q.text.ptr, q.text.len, q.scene, err, sizeof err)) {
-        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "%s", err);
-        return;
+    for (u32 i = 0; i < old_count; ++i)
+        de_entity_despawn(ed->e->world, (de_entity){old[i]});
+    if (old != NULL)
+        DE_FREE(al, old, sizeof(u64) * (old_count + 1));
+    members_prune(ed);
+    de__ed_world_touch(ed);
+    /* The selection follows its scene IDs to the new entities; one whose ID is gone drops. */
+    u32 kept = 0;
+    for (u32 i = 0; i < sel_count; ++i) {
+        if (sel_sid[i] == 0) {
+            sel[kept++] = sel[i];
+            continue;
+        }
+        for (u32 k = 0; k < g_scene.member_count; ++k)
+            if (g_scene.members[k].scene == q.scene && g_scene.members[k].sid == sel_sid[i]) {
+                sel[kept++] = g_scene.members[k].entity;
+                break;
+            }
     }
+    if (sel_count != 0)
+        de__ed_gizmo_set_selection(sel, kept);
     s->dirty = true;
     de_ep_empty e;
     memset(&e, 0, sizeof e);

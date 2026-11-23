@@ -40,6 +40,8 @@ u32 de__ed_show_flags(const de_ep_list_str *names);
 
 void de__ed_gizmo_set_tool(const de_ep_gizmo_tool_params *q);
 void de__ed_gizmo_set_selection(const u64 *entities, u32 count);
+/** The selected entities into `out` (room for `cap`); returns how many are selected. */
+u32 de__ed_gizmo_selection(u64 *out, u32 cap);
 /** A pointer or key event of editor view `view`; `x`, `y` in source pixels. */
 void de__ed_gizmo_input(de__editor *ed, u32 view, const de__ed_cam *c, const de_ep_input_event *e,
                         f32 x, f32 y);

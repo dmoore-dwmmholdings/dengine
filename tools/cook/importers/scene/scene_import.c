@@ -4,6 +4,7 @@
 #include "asset/asset_internal.h"
 #include "core/de_array.h"
 #include "core/de_toml_internal.h"
+#include "reflect/ser_internal.h"
 #include <dengine/de_reflect.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -13,7 +14,6 @@
 typedef struct imp_entity {
     u64 id;
     u64 parent_id;              /* 0: none */
-    u32 entry;                  /* index in [[entity]] */
     u32 parent;                 /* sorted index, or DE__SCENE_NO_PARENT */
     u32 first_cand, cand_count; /* its candidates in imp.cands */
     int line;
@@ -23,6 +23,7 @@ typedef struct imp_entity {
 typedef struct imp_cand {
     const char *name; /* the TOML key (lives in the parsed document) */
     de_type_id type;
+    const toml_datum_t *tab; /* its table */
 } imp_cand;
 
 /* A component in output order. */
@@ -153,13 +154,36 @@ static u64 imp_asset_to_id(u32 handle, const char *asset_type, void *user) {
     return handle != 0 && handle <= m->refs.count ? DE_ARRAY_AT(&m->refs, u64, handle - 1u) : 0u;
 }
 
-/* Pass 1: entity tables (`id`, `parent`, component candidates). */
-static de_result imp_collect(imp *m, const toml_datum_t *arr, imp_cand **out_cands,
+/* A scene ID as an `[entity.<key>]` key: "0x" and 1 to 16 hex digits, or decimal digits. 0 when
+ * invalid. */
+static u64 imp_key_id(const char *key) {
+    const size_t n = strlen(key);
+    u64 x = 0;
+    if (n > 2 && key[0] == '0' && (key[1] == 'x' || key[1] == 'X'))
+        return de__ser_parse_hex64(key, n, &x) ? x : 0u;
+    if (n == 0 || n > 20)
+        return 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (key[i] < '0' || key[i] > '9')
+            return 0;
+        const u64 d = (u64)(key[i] - '0');
+        if (x > (UINT64_MAX - d) / 10u)
+            return 0;
+        x = x * 10u + d;
+    }
+    return x;
+}
+
+/* Pass 1: entity tables (`id`, `parent`, component candidates). `ents` is `entity`: a table of
+ * entity tables keyed by scene ID (`[entity.0x…]`, what the editor's scene.serialize writes,
+ * DENG-570) or an array of tables with an `id` each (`[[entity]]`). */
+static de_result imp_collect(imp *m, const toml_datum_t *ents, imp_cand **out_cands,
                              u32 *out_cand_count) {
-    u32 n = (u32)arr->u.arr.size;
+    const bool keyed = ents->type == TOML_TABLE;
+    u32 n = keyed ? (u32)ents->u.tab.size : (u32)ents->u.arr.size;
     u32 cand_cap = 0;
     for (u32 i = 0; i < n; ++i)
-        cand_cap += (u32)arr->u.arr.elem[i].u.tab.size;
+        cand_cap += (u32)(keyed ? ents->u.tab.value[i] : ents->u.arr.elem[i]).u.tab.size;
     m->ents = (imp_entity *)DE_ALLOC(m->a, sizeof(imp_entity) * (n ? n : 1u),
                                      DE_ALIGNOF(imp_entity), DE_MEM_SCRATCH);
     imp_cand *cands = (imp_cand *)DE_ALLOC(m->a, sizeof(imp_cand) * (cand_cap ? cand_cap : 1u),
@@ -168,18 +192,32 @@ static de_result imp_collect(imp *m, const toml_datum_t *arr, imp_cand **out_can
         return de_asset_import_fail(m->ctx, DE_ERR_OUT_OF_MEMORY, "no scratch memory");
     u32 nc = 0;
     for (u32 i = 0; i < n; ++i) {
-        const toml_datum_t *t = &arr->u.arr.elem[i];
+        const toml_datum_t *t = keyed ? &ents->u.tab.value[i] : &ents->u.arr.elem[i];
         imp_entity *e = &m->ents[i];
         memset(e, 0, sizeof *e);
-        e->entry = i;
         e->line = t->lineno;
         e->parent = DE__SCENE_NO_PARENT;
         e->first_cand = nc;
         bool has_id = false;
+        if (keyed) {
+            e->id = imp_key_id(ents->u.tab.key[i]);
+            if (e->id == 0)
+                return de_asset_import_fail(
+                    m->ctx, DE_ERR_PARSE,
+                    "%s:%d: entity key `%.64s` must be a scene ID (\"0x\" and 1 to 16 hex "
+                    "digits, or a positive integer)",
+                    m->source, t->lineno, ents->u.tab.key[i]);
+            has_id = true;
+        }
         for (int32_t k = 0; k < t->u.tab.size; ++k) {
             const char *key = t->u.tab.key[k];
             const toml_datum_t *v = &t->u.tab.value[k];
-            if (strcmp(key, "id") == 0) {
+            if (strcmp(key, "id") == 0 && keyed) {
+                return de_asset_import_fail(m->ctx, DE_ERR_PARSE,
+                                            "%s:%d: entity %u: a keyed entity table has no `id` "
+                                            "(its key is the scene ID)",
+                                            m->source, v->lineno, (unsigned)i);
+            } else if (strcmp(key, "id") == 0) {
                 e->id = imp_scene_id(v);
                 if (e->id == 0)
                     return de_asset_import_fail(
@@ -218,6 +256,7 @@ static de_result imp_collect(imp *m, const toml_datum_t *arr, imp_cand **out_can
                 } else {
                     cands[nc].name = key;
                     cands[nc].type = tid;
+                    cands[nc].tab = v;
                     nc++;
                 }
             }
@@ -281,8 +320,8 @@ static de_result imp_sort(imp *m, bool prefab, u32 *out_roots) {
 }
 
 /* Reads one component table and appends its binary object to `data`. `*kept` false: skipped. */
-static de_result imp_component(imp *m, const de_text_doc *doc, const imp_entity *e,
-                               const imp_cand *c, de_mem_writer *data, bool *kept) {
+static de_result imp_component(imp *m, const imp_entity *e, const imp_cand *c,
+                               de_mem_writer *data, bool *kept) {
     *kept = false;
     const de_type_desc *td = de_type_get(m->reg, c->type);
     size_t align = td->align ? td->align : 1u;
@@ -293,8 +332,7 @@ static de_result imp_component(imp *m, const de_text_doc *doc, const imp_entity 
     de_ser_context sc = {imp_entity_to_scene_id, imp_scene_id_to_entity, imp_asset_to_id,
                          imp_id_to_asset, m};
     de_ser_options topt = {DE_SER_TEXT, DE_FIELD_SERIALIZE, &sc};
-    de_result r =
-        de_text_doc_read_member(doc, "entity", e->entry, c->name, m->reg, c->type, obj, &topt);
+    de_result r = de__ser_text_read_table(m->reg, c->type, obj, &topt, c->tab, m->a, m->source);
     if (r == DE_OK && m->cb_err != DE_OK)
         r = m->cb_err;
     if (r == DE_ERR_VERSION_MISMATCH) {
@@ -366,7 +404,6 @@ static de_result scene_import_kind(de_asset_import_ctx *ctx, bool prefab) {
         de__toml_free(tr);
         return fr;
     }
-    de_text_doc *doc = NULL;
     de_mem_writer data;
     de_mem_writer_init(&data, m.a);
     de_result r = DE_OK;
@@ -384,13 +421,15 @@ static de_result scene_import_kind(de_asset_import_ctx *ctx, bool prefab) {
                      tr.toptab.u.tab.key[k]);
             continue;
         }
-        bool ok = v->type == TOML_ARRAY;
-        for (int32_t i = 0; ok && i < v->u.arr.size; ++i)
+        bool ok = v->type == TOML_ARRAY || v->type == TOML_TABLE;
+        for (int32_t i = 0; ok && v->type == TOML_ARRAY && i < v->u.arr.size; ++i)
             ok = v->u.arr.elem[i].type == TOML_TABLE;
+        for (int32_t i = 0; ok && v->type == TOML_TABLE && i < v->u.tab.size; ++i)
+            ok = v->u.tab.value[i].type == TOML_TABLE;
         if (!ok) {
             r = de_asset_import_fail(ctx, DE_ERR_PARSE,
-                                     "%s:%d: `entity` must be an array of "
-                                     "tables ([[entity]])",
+                                     "%s:%d: `entity` must be entity tables keyed by scene ID "
+                                     "([entity.0x...]) or an array of tables ([[entity]])",
                                      m.source, v->lineno);
             goto done;
         }
@@ -406,11 +445,6 @@ static de_result scene_import_kind(de_asset_import_ctx *ctx, bool prefab) {
         goto done;
 
     /* Components in output order: entities by scene ID, then type name. */
-    r = de_text_doc_parse(m.a, src, (size_t)len, m.source, &doc);
-    if (r != DE_OK) {
-        r = de_asset_import_fail(ctx, r, "%s: the text reader refused the file", m.source);
-        goto done;
-    }
     comps = (imp_comp *)DE_ALLOC(m.a, sizeof(imp_comp) * (cand_count ? cand_count : 1u),
                                  DE_ALIGNOF(imp_comp), DE_MEM_SCRATCH);
     names = (const char **)DE_ALLOC(m.a, sizeof(char *) * (cand_count ? cand_count : 1u),
@@ -426,7 +460,7 @@ static de_result scene_import_kind(de_asset_import_ctx *ctx, bool prefab) {
             const imp_cand *c = &cands[e->first_cand + k];
             u64 before = data.size;
             bool kept = false;
-            r = imp_component(&m, doc, e, c, &data, &kept);
+            r = imp_component(&m, e, c, &data, &kept);
             if (r != DE_OK)
                 goto done;
             if (!kept)
@@ -529,7 +563,6 @@ static de_result scene_import_kind(de_asset_import_ctx *ctx, bool prefab) {
         r = de_asset_import_add_dependency(ctx, (de_asset_id){refs[i]});
 
 done:
-    de_text_doc_destroy(doc);
     de_mem_writer_free(&data);
     de_array_free(&m.refs);
     de__toml_free(tr);

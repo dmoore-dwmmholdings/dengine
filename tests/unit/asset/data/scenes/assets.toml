@@ -6,6 +6,7 @@ asset_root = "assets"
 [assets]
 "levels/level"     = { type = "scene",  source = "level.scene.toml" }
 "levels/reordered" = { type = "scene",  source = "level_reordered.scene.toml" }
+"levels/keyed"     = { type = "scene",  source = "level_keyed.scene.toml" }
 "levels/unknown"   = { type = "scene",  source = "unknown.scene.toml" }
 "levels/migrate"   = { type = "scene",  source = "migrate.scene.toml" }
 "levels/bad_ref"   = { type = "scene",  source = "bad_parent.scene.toml" }

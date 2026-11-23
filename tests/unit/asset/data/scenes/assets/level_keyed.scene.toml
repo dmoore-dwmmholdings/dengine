@@ -1,0 +1,23 @@
+# DENG-570: the content of level.scene.toml in the keyed layout that scene.serialize writes (one
+# table per entity keyed by scene ID, SPEC §9.2). It cooks to the same bytes.
+[entity.0x00000000000000b2]
+parent = "0x00000000000000a1"
+[entity.0x00000000000000b2.TTarget]
+target = "0x00000000000000c3"
+texture = "ui/heart"
+speed = 2.5
+[entity.0x00000000000000b2.THealth]
+current = 10.0
+max = 20.0
+
+[entity.0xa1]
+[entity.0xa1.THealth]
+current = 75.5
+max = 100.0
+
+[entity.0x00000000000000c3]
+parent = "0xb2"
+[entity.0x00000000000000c3.TTarget]
+target = "0x00000000000000a1"
+texture = "ui/heart"
+speed = -1.25

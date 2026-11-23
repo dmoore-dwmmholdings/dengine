@@ -483,6 +483,16 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_compile_definitions(test_editor_service PRIVATE
         DE_EDITOR_PREFAB_DATA_DIR="${DE_ROOT_DIR}/tests/unit/asset/data/scenes")
 endif()
+# DENG-570 (DIDE-R147, DIDE-R148): deterministic TOML scene text (scene.serialize, keyed by scene
+# ID) and scene.reloadFromText, with a byte golden.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_scene_text SOURCES test_editor_scene_text.c
+        LIBS de_host de_tp_dide_protocol LABELS unit host determinism
+        CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_scene_text PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_editor_scene_text PRIVATE
+        DE_SCENE_TEXT_GOLDEN="${DE_ROOT_DIR}/tests/unit/host/data/scene_text/golden.scene.toml")
+endif()
 # DENG-784: the editor IPC on its own service thread (latency, frame queueing, races).
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     de_add_test(NAME editor_ipc SOURCES test_editor_ipc.c
