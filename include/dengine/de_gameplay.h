@@ -26,6 +26,19 @@ DE_API de_result de_nav_rebuild_tiles(de_nav *n, const de_navmesh_build_desc *de
                                       de_aabb region); /* background */
 DE_API void de_nav_add_obstacle(de_nav *n, de_entity e, de_vec3 half_extents);
 
+/* ---- DENG-76: navmesh generation (Recast / Detour) ----
+ * Main thread only. de_nav_rebuild_tiles: `region` is a world-space box; the tiles it meets are
+ * rebuilt from the attached world's static colliders (collision_mask 0 = every layer) and the
+ * obstacles, on a background task (inline when the nav has no task system). Call it outside
+ * schedules. The new tiles appear at a later de_nav_update (the `nav.update` PRE_UPDATE system of
+ * the attached world calls it). tile_size is fixed by the first build or navmesh and must divide
+ * 256 m into whole tiles. Obstacles are entity-placed boxes carved from later rebuilds. */
+DE_API void de_nav_update(de_nav *n);
+/** Registers the `navmesh` asset type with `assets` and uses it for de_nav_add_navmesh. */
+DE_API de_result de_nav_use_assets(de_nav *n, de_asset_system *assets);
+DE_API de_navmesh de_asset_navmesh(de_asset_system *s, de_asset_id id);
+/* Path queries (DENG-77) and crowd agents (DENG-78) are declared below but not implemented yet. */
+
 typedef struct de_nav_path {
     de_dvec3 *points;
     u32 count;

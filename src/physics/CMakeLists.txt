@@ -175,3 +175,8 @@ if(TARGET de_physics)
     target_link_libraries(de_physics PRIVATE de_tp_tomlc17)
     set_property(TARGET de_physics APPEND PROPERTY DE_MODULE_LIBS de_tp_tomlc17)
 endif()
+
+# DENG-76: de_shape_triangulate, the read-only shape surface for navmesh input.
+if(TARGET de_physics)
+    target_sources(de_physics PRIVATE shapes/triangulate.c)
+endif()

@@ -249,6 +249,17 @@ DE_API bool de_shape_valid(const de_physics_world *p, de_shape s);
 DE_API bool de_shape_get_kind(const de_physics_world *p, de_shape s, de_shape_kind *out);
 /** The shape's bounding box in its local frame, or false for a stale handle. */
 DE_API bool de_shape_get_local_aabb(const de_physics_world *p, de_shape s, de_aabb *out);
+/** DENG-76: receives one triangle of de_shape_triangulate, in the shape's local frame. */
+typedef void (*de_shape_triangle_fn)(void *user, const de_vec3 tri[3]);
+/**
+ * DENG-76: the surface of a live shape as triangles in its local frame, front faces
+ * counter-clockwise seen from outside (up for a heightfield). Sphere, capsule and cylinder are
+ * 8-sided and contain the true shape; box, convex, mesh and heightfield (holes skipped) are exact;
+ * a compound gives its children, placed. Calls `fn` once per triangle, in a fixed order.
+ * @return DE_OK, or DE_ERR_INVALID_ARGUMENT (stale shape or NULL `fn`).
+ */
+DE_API de_result de_shape_triangulate(const de_physics_world *p, de_shape s,
+                                      de_shape_triangle_fn fn, void *user);
 /**
  * Mass properties of the shape filled with `density` (kg/m^3; 0 = DE_PHYSICS_DEFAULT_DENSITY):
  * analytic for primitives, tetrahedra for hulls, parallel axis for compounds. Meshes and

@@ -19,6 +19,7 @@
 #include "cook/importers/sprite_clip/sprite_clip_import.h"
 #include "cook/importers/aseprite/aseprite_import.h"
 #include "cook/importers/tilemap/tilemap_import.h"
+#include "cook/importers/navmesh/navmesh_import.h"
 #if DE_COOKER_HAS_SHADER_IMPORTER /* tools/cook/importers/shader/CMakeLists.txt */
 #include "cook/importers/shader/shader_importer.h"
 #endif
@@ -70,6 +71,7 @@ static const struct {
     {"sprite_clip", de_sprite_clip_import_type_desc},
     {"aseprite", de_aseprite_import_type_desc},
     {"tilemap", de_tilemap_import_type_desc},
+    {"navmesh", de_navmesh_import_type_desc}, /* DENG-76 */
 #if DE_COOKER_HAS_SHADER_IMPORTER
     {"shader", shader_desc},
 #endif

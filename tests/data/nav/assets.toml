@@ -1,0 +1,7 @@
+# tests/data/nav/assets.toml: the navmesh fixture (DENG-76) as a project, for the nav tests
+# (tests/unit/nav/), which cook it in-process.
+[project]
+asset_root = "."
+
+[assets]
+"nav/plane_box" = { type = "navmesh", source = "plane_box.navmesh" }
