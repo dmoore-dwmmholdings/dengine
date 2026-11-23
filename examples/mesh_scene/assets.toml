@@ -1,0 +1,16 @@
+[project]
+asset_root = "."
+version = 1
+
+# The CC0 torus (UV0) and pyramid (UV0/UV1) from examples/model_inspection, copied so this
+# example is self-contained.
+[assets."models/mesh"]
+type = "model"
+source = "mesh.gltf"
+generate_lods = true
+lod_error = 0.1
+max_position_error = 0.001
+
+[assets."mesh_scene/level"]
+type = "scene"
+source = "mesh_scene.scene"

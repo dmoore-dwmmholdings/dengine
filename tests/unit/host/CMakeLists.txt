@@ -724,6 +724,16 @@ if(APPLE AND Python3_EXECUTABLE)
         LABELS "unit;host" TIMEOUT 120 SKIP_RETURN_CODE 77)
 endif()
 
+# DENG-817: the Scene render modes on a real 3D mesh. Starts examples/mesh_scene with
+# --editor-service, loads its scene and reads back wireframe/uv0/uv1/meshletIds/normals, which
+# must be non-black and differ from Lit. Needs a GPU window and Python with msgpack (exit 77).
+if(APPLE AND Python3_EXECUTABLE AND DE_BUILD_EXAMPLES AND DE_HAS_RENDER)
+    add_test(NAME editor_mesh_scene_modes COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/check_mesh_scene_modes.py" "$<TARGET_FILE:mesh_scene>")
+    set_tests_properties(editor_mesh_scene_modes PROPERTIES
+        LABELS "unit;host" TIMEOUT 180 SKIP_RETURN_CODE 77)
+endif()
+
 # DENG-663: real resize parsing/state with trapped resources; no graphics initialization.
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER AND
    ((APPLE AND TARGET de_gpu_metal) OR (WIN32 AND TARGET de_gpu_d3d12)))

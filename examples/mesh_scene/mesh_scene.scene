@@ -1,0 +1,46 @@
+# DENG-817: a small 3D scene for editor render-mode probes (wireframe, uv0, meshletIds ...).
+# Perspective camera on -Y looking along +Y (Z up), one torus and one pyramid, one sun.
+
+[[entity]]
+id = "0x3d5c000000000001"
+[entity.DeTransform]
+position = [1, -7, 2]
+rotation = [0.707107, 0, 0, 0.707107]
+scale = [1, 1, 1]
+[entity.DeCamera]
+projection = "DE_PROJ_PERSPECTIVE"
+fov_y = 0.8
+near_z = 0.1
+exposure_ev100 = 0.0
+
+[[entity]]
+id = "0x3d5c000000000002"
+[entity.DeTransform]
+position = [0, 0, 5]
+rotation = [0.5, 0.2, 0.1, 0.83]
+scale = [1, 1, 1]
+[entity.DeLight]
+kind = "DE_LIGHT_DIRECTIONAL"
+color = [1, 1, 1]
+intensity = 3.0
+cast_shadows = false
+
+[[entity]]
+id = "0x3d5c000000000003"
+[entity.DeTransform]
+position = [0, 0, 0]
+rotation = [0.3, 0, 0, 0.954]
+scale = [1, 1, 1]
+[entity.DeMeshRenderer]
+mesh = "models/mesh#Body"
+cast_shadows = false
+
+[[entity]]
+id = "0x3d5c000000000004"
+[entity.DeTransform]
+position = [2, 0, 0]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeMeshRenderer]
+mesh = "models/mesh#Lid"
+cast_shadows = false
