@@ -267,6 +267,32 @@ On macOS the library is normally `build/my_game/libmy_game.dylib`, and the host 
 instead of a dynamic game library. Shipping uses cooked `.dpak` files beside that executable;
 `--dev-dir` is ignored there.
 
+### Cooked assets in Release and Shipping
+
+Release and Shipping builds have no cooker, so they cannot read `.slang` shaders or other
+source assets. Name the game's manifest in `de_add_game` and the build cooks it for you:
+
+```cmake
+de_add_game(NAME my_game SOURCES game.c GAME_TOML game.toml
+            ASSETS data/assets.toml [PACK_NAME my_game])
+```
+
+- In a Release or Shipping build, the `my_game_pack` target runs `de-cook cook` on the manifest
+  and writes `<game dir>/<PACK_NAME>.dpak` (default `game.dpak`). `my_game` depends on it, and
+  the cook cache stays in the build tree. Debug and Dev cook nothing: they cook in-process.
+- At engine create, Release and Shipping mount every `*.dpak` in `game:/`. A mounted pack
+  overrides the manifests' sources, so the same `de_asset_manifest_load` and asset IDs work in
+  every build type.
+- The cook needs the host-built `de-cook`: keep `DE_BUILD_TOOLS ON`. A cross build without an
+  emulator, or `DE_BUILD_TOOLS OFF`, prints a warning and cooks nothing. Cook on the host and
+  copy the `.dpak` into the game directory. Multi-config generators are not supported yet.
+- Shaders: the renderer does not register the `shader` type on `e->assets`. A game that loads
+  its own `.slang` assets calls `de_shader_register_type(e->assets, NULL)` once in `init`,
+  before it loads the manifest (see `include/dengine/de_shader.h`).
+- The asset types the manifest uses must be ones `de-cook` knows (the built-in importers).
+  Assets of the game's own types still need the game library: cook those with
+  `de-cook cook --game <library>`, as `examples/flappy` does.
+
 The host provides the window, tasks, ECS world/types, input, assets and text. For a rendered game,
 create a device with `de_gpu_device_create` and assign `e->gpu`; create a renderer with that device,
 `e->window`, `e->assets` and `e->types`, assign `e->renderer`, then call `de_renderer_attach`.

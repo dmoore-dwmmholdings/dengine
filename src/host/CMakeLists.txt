@@ -86,7 +86,8 @@ target_sources(de_host PRIVATE hot_reload.h hot_reload.c)
 # `quit` console command, wired into engine create and de_host_run (host_crash.c).
 target_sources(de_host PRIVATE host_crash.h host_crash.c)
 
-# DENG-213: in PACKED mode (Shipping) engine create mounts every game:/*.dpak (host_packs.c).
+# DENG-213: in PACKED mode (Shipping) engine create mounts every game:/*.dpak (host_packs.c);
+# DENG-789: so does Release, which has no cooker.
 target_sources(de_host PRIVATE host_packs.h host_packs.c)
 
 # DENG-285: the D3D12 Agility SDK runtime (D3D12Core.dll, d3d12SDKLayers.dll) goes into D3D12/

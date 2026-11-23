@@ -127,6 +127,32 @@ if(DE_BUILD_TESTS)
         list(APPEND _de_hg_tests host_game_run)
     endif()
 
+    # DENG-789: a game's own .slang shader loads in every build type: cooked in-process in Debug
+    # and Dev, from the game.dpak that de_add_game(ASSETS) cooked at build time in Release and
+    # Shipping (fixtures/shader_game/).
+    if(TARGET shader_game)
+        set(_de_sg_expect "shader_game: shader ready \\(spirv vs [1-9][0-9]* ps [1-9][0-9]*")
+        if(APPLE)
+            string(APPEND _de_sg_expect ", metallib vs [1-9][0-9]* ps [1-9][0-9]*")
+        endif()
+        get_target_property(_de_sg_form shader_game DE_GAME_FORM)
+        if(_de_sg_form STREQUAL "library")
+            set(_de_sg_cmd "$<TARGET_FILE:dengine_exe>|--headless|--game|$<TARGET_FILE:shader_game>")
+        else()
+            set(_de_sg_cmd "$<TARGET_FILE:shader_game>|--headless")
+        endif()
+        if(_de_sg_form STREQUAL "static" OR TARGET dengine_exe)
+            add_test(NAME host_game_shader COMMAND "${CMAKE_COMMAND}"
+                "-DCMD=${_de_sg_cmd}"
+                -DEXPECT_EXIT=0
+                "-DEXPECT=${_de_sg_expect}|Shader Game exited normally"
+                "-DREJECT=shader_game: FAILED"
+                -P "${_de_hg_script}")
+            set_tests_properties(host_game_shader PROPERTIES
+                LABELS "unit;host;shader" TIMEOUT 150 ENVIRONMENT "${_de_hg_env}")
+        endif()
+    endif()
+
     # Every way a library can be refused: exit code 1 and the error in the log.
     if(TARGET dengine_exe)
         set(_de_hg_cases

@@ -277,8 +277,12 @@ static de_result init(de_engine *e) {
     DE_TRY(de_asset_manifest_load(e->assets, "flappy:/examples/flappy/assets.toml"));
 #elif !defined(DE_SHIPPING)
     /* Release has no cooker: it loads flappy.dpak beside the executable, which the flappy_pack
-     * target cooks in a Dev build (Publish puts it there). Shipping mounts game:/'s packs itself. */
-    if (de_asset_pack_mount(e->assets, "game:/flappy.dpak", 0) != DE_OK) {
+     * target cooks in a Dev build (Publish puts it there). The host mounts game:/'s packs. */
+    /* DENG-789: the host mounts game:/'s packs in Release too; ALREADY_EXISTS means it did. */
+    de_result pr = de_asset_pack_mount(e->assets, "game:/flappy.dpak", 0);
+    if (pr == DE_ERR_ALREADY_EXISTS) {
+        de_error_clear();
+    } else if (pr != DE_OK) {
         DE_ERROR(DE_LOG_CAT_GENERAL, "flappy.dpak: %s (build flappy_pack in Dev and copy it here)",
                  de_error_last()->message);
         return DE_ERR_NOT_FOUND;
