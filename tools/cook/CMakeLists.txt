@@ -72,6 +72,7 @@ target_sources(de_cooker PRIVATE importers/scene/scene_import.c)
 # its sources are part of de_cooker (like the other importers), so the built-in importer table
 # names it; `de_cook_shader` remains as an INTERFACE alias of de_cooker.
 add_subdirectory(importers/shader)
+add_subdirectory(importers/material_graph)
 
 # DENG-664: single-file inspection command; parsers also link into unit/fuzz harnesses.
 add_library(de_cook_shader_cmd STATIC shader_cmd.c shader_args.c shader_cmd.h)

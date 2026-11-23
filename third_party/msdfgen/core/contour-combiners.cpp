@@ -65,8 +65,9 @@ OverlappingContourCombiner<EdgeSelector>::OverlappingContourCombiner(const Shape
 template <class EdgeSelector>
 void OverlappingContourCombiner<EdgeSelector>::reset(const Point2 &p) {
     this->p = p;
-    for (typename std::vector<EdgeSelector>::iterator contourEdgeSelector = edgeSelectors.begin(); contourEdgeSelector != edgeSelectors.end(); ++contourEdgeSelector)
-        contourEdgeSelector->reset(p);
+    // Index walk (DENG-758): checked-iterator builds lock a global mutex per iterator.
+    for (size_t i = 0, n = edgeSelectors.size(); i < n; ++i)
+        edgeSelectors[i].reset(p);
 }
 
 template <class EdgeSelector>

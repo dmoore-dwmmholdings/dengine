@@ -42,6 +42,7 @@ set(_de_shader_dir "${CMAKE_CURRENT_SOURCE_DIR}")
 target_sources(de_cooker PRIVATE
     "${_de_shader_dir}/shader_importer.h"
     "${_de_shader_dir}/shader_importer.c"
+    "${_de_shader_dir}/shader_cook.h"
     "${_de_shader_dir}/slang_compile.h"
     "${_de_shader_dir}/slang_compile.cpp"
     "${_de_shader_embed}")

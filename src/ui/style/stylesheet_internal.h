@@ -56,7 +56,17 @@ typedef struct de_ui_style_sheet_slot {
     u64 fingerprint;
     de_ui_sheet_document *sheet;
     de_ui_compiled_rule *compiled;
+    /* DENG-780: a rejected reload keeps the old rules and sets `failed` until a good reload.
+     * `asset_error` is the ui_style asset's last load error seen, so a message is read once. */
+    bool failed;
+    de_result asset_error;
+    de_ui_sheet_error error;
 } de_ui_style_sheet_slot;
+/* DENG-780: a sheet whose first de_ui_load_stylesheet failed. */
+typedef struct de_ui_style_failed_sheet {
+    de_blob handle;
+    de_ui_sheet_error error;
+} de_ui_style_failed_sheet;
 typedef struct de_ui_style_cache {
     de_entity entity;
     de_name class_name;
@@ -91,12 +101,21 @@ typedef struct de_ui_style_system {
     de_ui_style_sheet_slot sheets[DE_UI_STYLE_SHEETS];
     u32 sheet_count;
     u32 builtin_count;
+    de_ui_style_failed_sheet failed[DE_UI_STYLE_SHEETS];
+    u32 failed_count;
     de_ui_style_cache *cache;
+    /* Slots that ever held an entity since the cache was last cleared. Zero means every
+     * lookup would stop at an empty slot, so lookups that do not create can skip the probe. */
+    u32 cache_used;
     de_entity *entities;
     u32 entity_count;
     de_ui_property_tween *tweens;
     u64 revision;
     de_name theme;
+    /* DENG-781: the compiled theme's name, the game's de_ui_set_theme choice, and whether an
+     * editor preview (de_ui_preview_theme) holds the compiled theme. */
+    char theme_active[DE_UI_THEME_NAME_MAX], theme_selected[DE_UI_THEME_NAME_MAX];
+    bool theme_previewing;
     de_component widget;
     de_query nodes;
     de_system system;
@@ -108,6 +127,12 @@ extern const u32 de_ui__style_property_count;
 de_result de_ui__sheet_parse(const de_allocator *alloc, const char *bytes, u64 length,
                              de_ui_sheet_document **out);
 void de_ui__sheet_release(de_ui_sheet_document *sheet);
+/* DENG-780: fails with DE_ERR_PARSE and "UI stylesheet line L, column C: reason" (the column
+ * part is left out when `column` is 0). */
+de_result de_ui__sheet_fail(int line, int column, const char *reason);
+/* DENG-780: reads the position and reason from an error message that holds "UI stylesheet line
+ * L[, column C]: reason"; any other message becomes the reason with line and column 0. */
+void de_ui__sheet_error_from_message(const char *message, de_ui_sheet_error *out);
 de_result de_ui__load_stylesheet_source(de_ui *ui, const char *bytes, u64 length, bool builtin);
 de_result de_ui__style_init(de_ui *ui);
 void de_ui__style_shutdown(de_ui *ui);
@@ -121,6 +146,9 @@ de_result de_ui__style_asset_register(de_asset_system *assets);
 void de_ui__sheets_refresh(de_ui_style_system *state);
 void de_ui__sheets_shutdown(de_ui_style_system *state);
 de_result de_ui__compile_sheet(de_ui_style_system *state, de_ui_style_sheet_slot *slot);
+/* DENG-781: whether a loaded sheet has [theme.<name>]. */
+bool de_ui__theme_declared(const de_ui_style_system *state, const char *name);
+de_result de_ui__apply_theme(de_ui_style_system *state, const char *name);
 de_result de_ui__tween_path(de_ui *ui, de_entity entity, const char *property, f32 to, f32 seconds,
                             de_ui_easing easing);
 f32 de_ui__ease(de_ui_easing easing, f32 progress);

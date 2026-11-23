@@ -35,6 +35,7 @@
 #include <dengine/de_base.h>
 #include <dengine/de_gpu.h>
 #include <dengine/de_memory.h>
+#include <dengine/de_shader.h>
 
 #include "gpu/shader/shader_format.h"
 
@@ -131,6 +132,16 @@ de__shader_entry de__shader_view_entry(const de__shader_view *v, u32 i, const ch
 const char *de__shader_view_permutation(const de__shader_view *v, u32 i);
 /** The index of the record of (target, permutation, entry), or -1. */
 i32 de__shader_view_find(const de__shader_view *v, u32 target, u32 permutation, u32 entry);
+/**
+ * DENG-770: de_shader_get_code on a checked view the caller owns (a cooked shader embedded in
+ * another asset: the material graph's DMGR). `out->code` and `out->entry` point into the view's
+ * bytes. Any thread.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL argument); DE_ERR_NOT_FOUND (no such entry point
+ *         or permutation, or the backend's target was not cooked).
+ */
+de_result de__shader_view_code(const de__shader_view *v, de_gpu_backend backend, u32 permutation,
+                               const char *entry, de_gpu_shader_blob *out,
+                               de_shader_reflection *refl);
 
 DE_EXTERN_C_END
 

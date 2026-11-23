@@ -52,9 +52,9 @@ static bool is_self_or_ancestor(const de_world *w, de_entity ancestor, de_entity
     return false;
 }
 
-/* Removes `child` (which has DeChildOf) from its parent's list and clears its links. The parent
- * loses DeChildren with its last child. */
-static void unlink_child(de_world *w, de_entity child) {
+/* Removes `child` (which has DeChildOf) from its parent's list and clears its links. Unless
+ * `keep_empty`, the parent loses DeChildren with its last child. */
+static void unlink_child_ex(de_world *w, de_entity child, bool keep_empty) {
     const de_builtin_component_ids *ids = &w->hier->ids;
     DeChildOf *co = child_of_of(w, child);
     DE_ASSERT(co != NULL);
@@ -81,12 +81,22 @@ static void unlink_child(de_world *w, de_entity child) {
         ch->last = prev;
     DE_ASSERT(ch->count > 0);
     ch->count -= 1u;
-    if (ch->count == 0) {
+    if (ch->count == 0 && !keep_empty) {
         /* Out of memory keeps an empty DeChildren; every reader treats count 0 as no children. */
         (void)ecs_entity_remove(w, parent, ids->children.id);
     } else {
         ecs_entity_mark_changed(w, parent, ids->children.id);
     }
+}
+
+static void unlink_child(de_world *w, de_entity child) {
+    unlink_child_ex(w, child, false);
+}
+
+/* Unlinks `child` from `parent` for a move within the same list: DeChildren stays even when the
+ * child was the only one, because it is linked back at once. */
+static void unlink_child_keep(de_world *w, de_entity child) {
+    unlink_child_ex(w, child, true);
 }
 
 /* Appends `child` (which has DeChildOf, unlinked) to the list of `parent` (which has
@@ -109,7 +119,44 @@ static void link_last(de_world *w, de_entity child, de_entity parent) {
     ch->count += 1u;
 }
 
+/* Inserts `child` (which has DeChildOf, unlinked) into the list of `parent` (which has
+ * DeChildren) so it becomes child number `index`; an index at or past the end appends. */
+static void link_at(de_world *w, de_entity child, de_entity parent, u32 index) {
+    DeChildren *ch = children_of(w, parent);
+    DE_ASSERT(ch != NULL);
+    if (index >= ch->count || ch->first.bits == 0) {
+        link_last(w, child, parent);
+        return;
+    }
+    de_entity next = ch->first;
+    for (u32 i = 0; i < index; ++i) {
+        const DeChildOf *n = child_of_of(w, next);
+        DE_ASSERT(n != NULL);
+        next = n->next_sibling;
+    }
+    DeChildOf *nc = child_of_of(w, next), *co = child_of_of(w, child);
+    DE_ASSERT(nc != NULL && co != NULL);
+    const de_entity prev = nc->prev_sibling;
+    co->parent = parent;
+    co->prev_sibling = prev;
+    co->next_sibling = next;
+    nc->prev_sibling = child;
+    if (prev.bits != 0) {
+        DeChildOf *pc = child_of_of(w, prev);
+        DE_ASSERT(pc != NULL);
+        pc->next_sibling = child;
+    } else {
+        ch->first = child;
+    }
+    ch->count += 1u;
+}
+
 de_result ecs_hier_set_parent(de_world *w, de_entity child, de_entity parent, bool from_command) {
+    return ecs_hier_set_parent_at(w, child, parent, UINT32_MAX, true, from_command);
+}
+
+de_result ecs_hier_set_parent_at(de_world *w, de_entity child, de_entity parent, u32 index,
+                                 bool keep_place, bool from_command) {
     const de_builtin_component_ids *ids = &w->hier->ids;
     if (ecs_entity_record(w, child) == NULL)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "ecs: set_parent: child 0x%016llx is not alive",
@@ -127,8 +174,16 @@ de_result ecs_hier_set_parent(de_world *w, de_entity child, de_entity parent, bo
     if (ecs_entity_record(w, parent) == NULL)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "ecs: set_parent: parent 0x%016llx is not alive",
                        (unsigned long long)parent.bits);
-    if (co != NULL && same(co->parent, parent))
-        return DE_OK; /* already there: keep the child's place */
+    if (co != NULL && same(co->parent, parent)) {
+        if (keep_place)
+            return DE_OK; /* already there: keep the child's place */
+        /* A move within the list: the index counts the siblings without the child. */
+        unlink_child_keep(w, child);
+        link_at(w, child, parent, index);
+        ecs_entity_mark_changed(w, child, ids->child_of.id);
+        ecs_entity_mark_changed(w, parent, ids->children.id);
+        return DE_OK;
+    }
     if (is_self_or_ancestor(w, child, parent)) {
         if (from_command) {
             HIER_WARN("ecs: deferred set_parent of 0x%016llx under 0x%016llx would make a "
@@ -163,7 +218,7 @@ de_result ecs_hier_set_parent(de_world *w, de_entity child, de_entity parent, bo
          * list we append to. */
         unlink_child(w, child);
     }
-    link_last(w, child, parent);
+    link_at(w, child, parent, index);
     ecs_entity_mark_changed(w, child, ids->child_of.id);
     ecs_entity_mark_changed(w, child, ids->transform.id);
     ecs_entity_mark_changed(w, parent, ids->children.id);
@@ -231,6 +286,32 @@ de_result de_entity_set_parent(de_world *w, de_entity child, de_entity parent) {
     ECS_ASSERT_NOT_PENDING(parent);
     DE_TRY(ecs_builtins_ensure(w));
     return ecs_hier_set_parent(w, child, parent, false);
+}
+
+de_result de_entity_set_parent_at(de_world *w, de_entity child, de_entity parent, u32 index) {
+    if (w == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_entity_set_parent_at: world is NULL");
+    ECS_ASSERT_STRUCTURAL(w);
+    ECS_ASSERT_NOT_PENDING(child);
+    ECS_ASSERT_NOT_PENDING(parent);
+    DE_TRY(ecs_builtins_ensure(w));
+    return ecs_hier_set_parent_at(w, child, parent, index, false, false);
+}
+
+u32 de_entity_child_index(const de_world *w, de_entity child) {
+    if (w == NULL || w->hier == NULL)
+        return UINT32_MAX;
+    const DeChildOf *co = child_of_of(w, child);
+    if (co == NULL)
+        return UINT32_MAX;
+    u32 i = 0;
+    for (de_entity c = co->prev_sibling; c.bits != 0; ++i) {
+        const DeChildOf *p = child_of_of(w, c);
+        if (p == NULL || i == UINT32_MAX - 1u)
+            return UINT32_MAX; /* corrupted links: no index rather than a guess */
+        c = p->prev_sibling;
+    }
+    return i;
 }
 
 de_entity de_entity_parent(const de_world *w, de_entity e) {

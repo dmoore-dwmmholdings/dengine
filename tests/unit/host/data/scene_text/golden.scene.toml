@@ -1,0 +1,20 @@
+[entity.0x0000000000000005]
+[entity.0x0000000000000005.SvcHealth]
+current = 10.0
+max = 100.0
+
+[entity.0x0000000000000010]
+[entity.0x0000000000000010.DeTransform]
+position = [1.25, 0.5, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.0x0000000000000010.SvcHealth]
+current = 75.5
+max = 100.0
+
+[entity.0x0000000000000020]
+parent = "0x0000000000000010"
+[entity.0x0000000000000020.DeTransform]
+position = [-2.0, 0.5, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]

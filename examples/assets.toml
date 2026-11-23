@@ -47,7 +47,7 @@ stream_above_seconds = 10   # longer sounds stream
 "ui/font"             = { type = "font",    source = "fonts/Inter.ttf", mode = "msdf", charset = "latin-ext" }
 "ui/font_pixel"       = { type = "font",    source = "fonts/pixel.fnt", mode = "bitmap" }
 "ui/strings"          = { type = "strings", source = "loc/strings.csv" }
-"ui/theme"            = { type = "stylesheet", source = "ui/theme.toml" }
+"ui/theme"            = { type = "stylesheet", source = "ui/theme.uistyle.toml" }
 
 # Audio
 "music/title"         = { type = "sound",   source = "audio/title.ogg", stream = true }

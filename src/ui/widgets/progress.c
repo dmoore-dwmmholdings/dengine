@@ -11,12 +11,19 @@ static de_vec4 inset(de_vec4 rect, f32 amount) {
 static void widget_draw(de_ui *ui, de_entity entity, de_vec4 rect, de_ui_draw_emitter *emitter,
                         void *user) {
     (void)user;
+    /* Most nodes carry none of these widgets, so find the widget before reading the style. */
+    const DeUiProgress *progress = de_entity_get_const(ui->world, entity, ui->widgets->progress);
+    const DeUiToggle *toggle =
+        progress ? NULL : de_entity_get_const(ui->world, entity, ui->widgets->toggle);
+    const DeUiSlider *slider =
+        progress || toggle ? NULL : de_entity_get_const(ui->world, entity, ui->widgets->slider);
+    if (!progress && !toggle && !slider)
+        return;
     const DeUiStyle *style = de_entity_get_const(ui->world, entity, ui->ids.style);
     de_vec4 color = style ? style->text_color : (de_vec4){.1f, .3f, 1, 1};
     f32 border = style ? style->border_width * ui->scale : 0,
         radius = style ? style->corner_radius * ui->scale : 0;
     rect = inset(rect, border);
-    const DeUiProgress *progress = de_entity_get_const(ui->world, entity, ui->widgets->progress);
     if (progress) {
         f32 value = isfinite(progress->value) ? fmaxf(0, fminf(1, progress->value)) : 0;
         if (progress->indeterminate) {
@@ -31,7 +38,6 @@ static void widget_draw(de_ui *ui, de_entity entity, de_vec4 rect, de_ui_draw_em
             de_ui__emit_rect(emitter, rect, color, (de_vec4){0}, 0, radius);
         return;
     }
-    const DeUiToggle *toggle = de_entity_get_const(ui->world, entity, ui->widgets->toggle);
     if (toggle) {
         f32 diameter = fmaxf(0, rect.w - 4 * ui->scale),
             travel = fmaxf(0, rect.z - diameter - 4 * ui->scale);
@@ -42,7 +48,6 @@ static void widget_draw(de_ui *ui, de_entity entity, de_vec4 rect, de_ui_draw_em
         de_ui__emit_rect(emitter, knob, color, (de_vec4){0}, 0, diameter * .5f);
         return;
     }
-    const DeUiSlider *slider = de_entity_get_const(ui->world, entity, ui->widgets->slider);
     const DeUiNode *node = de_entity_get_const(ui->world, entity, ui->ids.node);
     if (slider && node) {
         f32 range = slider->max - slider->min,

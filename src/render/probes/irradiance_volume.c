@@ -240,7 +240,7 @@ struct de__irradiance {
     de_gpu_buffer metadata[DE__VIEW_MAX][4];
     de__gi_gpu *mapped[DE__VIEW_MAX][4];
     de_cvar faces;
-    u64 resource_drains;
+    u64 retired_begins;
     bool command_owner;
     de_dvec3 origin;
     de__gi_update_source_fn update_source;
@@ -275,18 +275,15 @@ static void gi_release(struct de__irradiance *s, gi_record *rec) {
 }
 static de_gpu_cmd *gi_begin(struct de__irradiance *s, const char *name) {
     de_gpu_device *dev = s->renderer->dev;
-    // Like the view path, standalone GI encoders must remove retired storage descriptors
-    // before recording. Metal retains every live bindless storage view on an encoder, so
-    // submit-time collection can otherwise release a resource that this new list references.
-    // This conservative drain can stall streaming/baking; DENG-432 owns the global fix.
-    if (de_gpu_get_caps(dev)->backend == DE_GPU_METAL && de__gpu_deferred_count(dev) != 0) {
-        de_gpu_wait_idle(dev);
-        ++s->resource_drains;
-    }
+    // DENG-432: no drain before recording. Logical retirement removes a texture from future
+    // Metal residency declarations, and each command list owns the native objects its encoders
+    // named until it completes (mtl_residency.m), so pending retirements are safe to record over.
+    if (de__gpu_deferred_count(dev) != 0)
+        ++s->retired_begins;
     return de_gpu_cmd_begin(dev, DE_QUEUE_GRAPHICS, name);
 }
-u64 de__irradiance_resource_drains(const de_renderer *r) {
-    return r && r->irradiance ? r->irradiance->resource_drains : 0;
+u64 de__irradiance_retired_begins(const de_renderer *r) {
+    return r && r->irradiance ? r->irradiance->retired_begins : 0;
 }
 static de_result gi_reserve(struct de__irradiance *s, gi_record *rec,
                             const de__irradiance_snapshot *snapshot) {
