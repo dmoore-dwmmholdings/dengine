@@ -188,6 +188,7 @@ de_result de_text__runtime_init(de_text_system *t) {
     memset(t->runtime, 0, sizeof *t->runtime);
     atomic_flag_clear(&t->runtime->lock);
     t->runtime->epoch = 1;
+    t->runtime->font_type_hash = de_hash64_str("font");
     if (!t->assets)
         return DE_OK;
     de_asset_type_desc d = {0};
@@ -215,26 +216,17 @@ void de_text_update(de_text_system *t) {
     de__loc_update(t->loc);
     struct de__text_runtime *r = t->runtime;
     de__text_lock(r);
-    for (u32 i = 0; i < r->watch_count; ++i) {
-        de__text_watch *w = &r->watch[i];
-        de_text_font *f = de_text__font_get(t, w->handle);
-        if (f != w->object) {
-            w->object = f;
-            ++w->generation;
-            if (f)
-                f->generation = w->generation;
-            ++r->epoch;
-        }
-    }
+    for (u32 i = 0; i < r->watch_count; ++i)
+        de__text_refresh_watch(t, &r->watch[i]);
     de__text_unlock(r);
     de_text__integrate_glyphs(t);
     de_text__publish_pages(t);
 }
 de_text_font *de_text__font_get(de_text_system *t, de_font font) {
-    if (!t || !t->assets || !font.id)
+    if (!t || !t->assets || !t->runtime || !font.id)
         return NULL;
     de__slot *s = de__slot_get(t->assets, font.id);
-    if (!s || s->type_hash != de_hash64_str("font"))
+    if (!s || s->type_hash != t->runtime->font_type_hash)
         return NULL;
     return de__slot_object(s);
 }

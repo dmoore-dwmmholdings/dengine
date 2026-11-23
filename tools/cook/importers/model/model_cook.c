@@ -400,12 +400,14 @@ static de_result import_ir(de_asset_import_ctx *ctx, const model_settings *s, de
     u32 nmax = ir->texture_count + ir->material_count + ir->mesh_count + ir->skin_count +
                ir->anim_count + 1u;
     de_asset_id *texture_ids = (de_asset_id *)de_model_ir_array(ir, nmax, sizeof(de_asset_id));
+    if (texture_ids == NULL)
+        return DE_ERR_OUT_OF_MEMORY;
     de_asset_id *material_ids = texture_ids + ir->texture_count;
     de_asset_id *mesh_ids = material_ids + ir->material_count;
     de_asset_id *skeleton_ids = mesh_ids + ir->mesh_count;
     de_asset_id *clip_ids = skeleton_ids + ir->skin_count;
     u32 *mesh_index = (u32 *)de_model_ir_array(ir, ir->mesh_count + 1u, sizeof(u32));
-    if (texture_ids == NULL || mesh_index == NULL)
+    if (mesh_index == NULL)
         return DE_ERR_OUT_OF_MEMORY;
     for (u32 i = 0; i < ir->texture_count; ++i)
         texture_ids[i] =

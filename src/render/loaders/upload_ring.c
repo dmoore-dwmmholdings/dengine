@@ -226,10 +226,11 @@ de_result de__uploader_init(de_render_uploader *u, u64 ring_bytes, u64 frame_cap
         DE_ALIGNOF(de__upload_handoff), DE_MEM_RENDER);
     if (u->records == NULL || u->releases == NULL)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "render assets: no memory for the upload queue");
-    u->ring = de_gpu_buffer_create(u->dev, &(de_gpu_buffer_desc){.size = u->ring_size,
-                                                                 .usage = DE_USAGE_COPY_SRC | DE_USAGE_STORAGE,
-                                                                 .memory = DE_MEM_UPLOAD,
-                                                                 .name = "asset upload ring"});
+    u->ring = de_gpu_buffer_create(
+        u->dev, &(de_gpu_buffer_desc){.size = u->ring_size,
+                                      .usage = DE_USAGE_COPY_SRC | DE_USAGE_STORAGE,
+                                      .memory = DE_MEM_UPLOAD,
+                                      .name = "asset upload ring"});
     if (!DE_HANDLE_VALID(u->ring)) {
         const de_error *e = de_error_last();
         return DE_FAIL_WRAP(e != NULL && e->result != DE_OK ? e->result : DE_ERR_INTERNAL,
@@ -703,6 +704,12 @@ void de__render_uploader_set_frame_fence(de_render_uploader *u, de_gpu_fence fen
     de_mutex_lock(&u->lock);
     u->frame_fence = fence;
     de_mutex_unlock(&u->lock);
+}
+
+void de__render_uploader_set_material_models(de_render_uploader *u,
+                                             struct de__material_models *models) {
+    if (u != NULL)
+        u->material_models = models;
 }
 
 void de__render_uploader_frame_prepared(de_render_uploader *u, u64 frame_index) {

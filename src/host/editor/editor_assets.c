@@ -32,6 +32,15 @@
 
 #define ED_LOADS 32u
 
+/* Deferred legacy requests own their load and copied name until serialization or cancellation. */
+typedef struct model_info_pending {
+    u64 request, deadline;
+    u32 epoch;
+    de_load_handle load;
+    de_model model;
+    char *name;
+} model_info_pending;
+
 typedef struct de__ed_assets {
     de_event_reader events;
     bool has_reader;
@@ -39,6 +48,7 @@ typedef struct de__ed_assets {
     de_load_handle loads[ED_LOADS];
     de_asset_id load_ids[ED_LOADS];
     u32 load_count;
+    model_info_pending model_info[ED_LOADS];
 } de__ed_assets;
 
 static de__ed_assets g_assets;
@@ -199,6 +209,17 @@ static de_ep_str id_str(de__editor *ed, de_asset_id id, de_ep_arena *a) {
     const char *p = S(ed)->resolved ? de__resolved_path(S(ed)->resolved, id) : NULL;
     if (p != NULL)
         return de_ep_cstr(p);
+    /* Generated names belong to the cook registry. Copy under its lock into this response;
+     * never borrow a registry string or invent an ID from catalog estimates. */
+    size_t bytes = 0;
+    if (de__cook_stage_subasset_path(S(ed), id, NULL, 0, &bytes) == DE_OK) {
+        char *copy = de__ed_alloc(a, bytes);
+        if (!copy)
+            return de_ep_cstr("");
+        if (de__cook_stage_subasset_path(S(ed), id, copy, bytes, &bytes) == DE_OK)
+            return de_ep_cstr(copy);
+        /* A registry change between the two lookups retains the unknown-ID fallback. */
+    }
     char *buf = (char *)de__ed_alloc(a, 24);
     if (buf == NULL)
         return de_ep_cstr("");
@@ -279,6 +300,33 @@ static bool source_vpath(de__editor *ed, const de__manifest_asset *ma, char *out
     const char *ar = m->asset_root != NULL && m->asset_root[0] ? m->asset_root : ".";
     const int n = snprintf(out, cap, "%.*s/%s/%s", dir, root, ar, ma->source);
     return n > 0 && (size_t)n < cap;
+}
+
+bool de__ed_asset_source(de__editor *ed, const char *id, void **data, u64 *size) {
+    *data = NULL;
+    *size = 0;
+    const de__manifest_asset *ma = id != NULL ? find_asset(ed, de_ep_cstr(id)) : NULL;
+    char vpath[1024];
+    return ma != NULL && source_vpath(ed, ma, vpath, sizeof vpath) && read_vfile(vpath, data, size);
+}
+
+bool de__ed_asset_source_vpath(de__editor *ed, const char *id, char *out, size_t cap) {
+    const de__manifest_asset *ma = id != NULL ? find_asset(ed, de_ep_cstr(id)) : NULL;
+    return ma != NULL && source_vpath(ed, ma, out, cap);
+}
+
+const char *de__ed_asset_source_path(de__editor *ed, const char *id) {
+    const de__manifest_asset *ma = id != NULL ? find_asset(ed, de_ep_cstr(id)) : NULL;
+    return ma != NULL ? ma->source : NULL;
+}
+
+/* The id of the manifest's `i`th asset of type `type` (DENG-807), or NULL past the last. */
+const char *de__ed_asset_nth(de__editor *ed, const char *type, u32 i) {
+    const de__manifest *m = manifest(ed);
+    for (u32 k = 0; m != NULL && k < m->asset_count; ++k)
+        if (m->assets[k].type != NULL && strcmp(m->assets[k].type, type) == 0 && i-- == 0)
+            return m->assets[k].id;
+    return NULL;
 }
 
 static void on_thumbnail(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
@@ -741,25 +789,14 @@ static void on_model_inspect(de__editor *ed, const de_ep_request *req, de_ep_are
 #endif
 }
 
-static void on_model_info(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
-                          mpack_writer_t *w) {
-    DE__ED_PARAMS(asset_model_info, de_ep_asset_id_params, q);
 #if DE_HAS_RENDER
-    char *id = de__ed_cstr(a, q.id);
+/* Keep the legacy first-mesh metadata contract unchanged. The caller retains the load. */
+static void write_model_info(de__editor *ed, u64 request, de_model model, const char *name,
+                             de_ep_arena *a, mpack_writer_t *w) {
     de_asset_system *s = S(ed);
-    const de_asset_id aid = de_asset_id_from(id ? id : "");
-    de_model m = s ? de_asset_model(s, aid) : (de_model){0};
-    if (!DE_HANDLE_VALID(m)) {
-        de_error_clear();
-        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "model %s", id ? id : "?");
-        return;
-    }
-    de_load_handle lh = de_asset_load(s, aid, 0);
-    (void)de_asset_wait(s, lh, 10000000000ULL);
-    const de_render_model *rm = de_render_model_get(s, m);
+    const de_render_model *rm = de_render_model_get(s, model);
     if (rm == NULL) {
-        de_asset_release(s, lh);
-        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "model %s did not load", id);
+        de__ed_error(w, request, DE_EP_ERR_NOT_FOUND, "model %s did not load", name);
         return;
     }
     de_ep_model_info mi;
@@ -825,8 +862,102 @@ static void on_model_info(de__editor *ed, const de_ep_request *req, de_ep_arena 
         const char *mp = de__ed_asset_path(ed, rm->materials[i].id);
         o->material = de_ep_cstr(mp ? mp : "");
     }
-    de_asset_release(s, lh);
-    de_ep_write_response_asset_model_info(w, req->id, &mi);
+    de_ep_write_response_asset_model_info(w, request, &mi);
+}
+#endif
+
+static void model_info_release(de__editor *ed, model_info_pending pending) {
+    de_asset_release(S(ed), pending.load);
+    if (pending.name)
+        DE_FREE(de_heap_allocator(), pending.name, strlen(pending.name) + 1);
+}
+
+static void model_info_reset(de__editor *ed) {
+    for (u32 i = 0; i < ED_LOADS; ++i) {
+        model_info_pending pending = g_assets.model_info[i];
+        memset(&g_assets.model_info[i], 0, sizeof pending);
+        if (pending.load.id)
+            model_info_release(ed, pending);
+    }
+}
+
+void de__ed_assets_shutdown(de__editor *ed) {
+    /* Only the new legacy-response queue is owned here; other asset cache lifetimes unchanged. */
+    model_info_reset(ed);
+}
+
+static void model_info_tick(de__editor *ed) {
+#if DE_HAS_RENDER
+    for (u32 i = 0; i < ED_LOADS; ++i) {
+        model_info_pending pending = g_assets.model_info[i];
+        if (!pending.load.id)
+            continue;
+        const bool respond = ed->connected && ed->authed && pending.epoch == ed->epoch;
+        const de_load_state state = de_asset_status(S(ed), pending.load, NULL);
+        if (respond && (state == DE_LOAD_PENDING || state == DE_LOAD_LOADING) &&
+            de_time_now_ns() < pending.deadline)
+            continue;
+        /* Sending may synchronously reset the session. Detach before serialization/send and
+         * retain this local load until all borrowed model strings have been consumed. */
+        memset(&g_assets.model_info[i], 0, sizeof pending);
+        if (respond) {
+            de_ep_arena a = {ed->arena, ed->arena_cap, 0};
+            mpack_writer_t w;
+            de__ed_respond_begin(ed, &w);
+            write_model_info(ed, pending.request, pending.model, pending.name, &a, &w);
+            de__ed_respond_limit(ed, &w, pending.request);
+            (void)de__ed_send(ed, &w, DE_EP_KIND_RESPONSE);
+        }
+        model_info_release(ed, pending);
+    }
+#else
+    (void)ed;
+#endif
+}
+
+static void on_model_info(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                          mpack_writer_t *w) {
+    DE__ED_PARAMS(asset_model_info, de_ep_asset_id_params, q);
+#if DE_HAS_RENDER
+    char *id = de__ed_cstr(a, q.id);
+    de_asset_system *s = S(ed);
+    const de_asset_id aid = de_asset_id_from(id ? id : "");
+    de_model m = s ? de_asset_model(s, aid) : (de_model){0};
+    if (!DE_HANDLE_VALID(m)) {
+        de_error_clear();
+        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "model %s", id ? id : "?");
+        return;
+    }
+    de_load_handle load = de_asset_load(s, aid, 0);
+    const de_load_state state = de_asset_status(s, load, NULL);
+    if (state != DE_LOAD_PENDING && state != DE_LOAD_LOADING) {
+        write_model_info(ed, req->id, m, id, a, w);
+        de_asset_release(s, load);
+        return;
+    }
+    u32 slot = 0;
+    while (slot < ED_LOADS && g_assets.model_info[slot].load.id)
+        ++slot;
+    if (slot == ED_LOADS) {
+        de_asset_release(s, load);
+        de__ed_error(w, req->id, DE_EP_ERR_BUSY, "too many pending model queries");
+        return;
+    }
+    size_t bytes = strlen(id) + 1;
+    char *name = DE_ALLOC(de_heap_allocator(), bytes, 1, DE_MEM_ASSET);
+    if (!name) {
+        de_asset_release(s, load);
+        de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "model query allocation failed");
+        return;
+    }
+    memcpy(name, id, bytes);
+    g_assets.model_info[slot] = (model_info_pending){.request = req->id,
+                                                     .deadline = de_time_now_ns() + 10000000000ULL,
+                                                     .epoch = ed->epoch,
+                                                     .load = load,
+                                                     .model = m,
+                                                     .name = name};
+    de__ed_defer(ed);
 #else
     (void)ed;
     (void)q;
@@ -837,6 +968,7 @@ static void on_model_info(de__editor *ed, const de_ep_request *req, de_ep_arena 
 /* ---------- asset.event ---------- */
 
 static void tick(de__editor *ed) {
+    model_info_tick(ed);
     de_asset_system *s = S(ed);
     if (s == NULL)
         return;
@@ -873,6 +1005,7 @@ static void tick(de__editor *ed) {
             break;
         case DE_ASSET_EV_RELOADED:
             de__ed_animation_invalidate(ed);
+            de__ed_prefab_reloaded(ed, ev->id);
 #if DE_HAS_RENDER
             de__ed_preview_invalidate();
 #endif
@@ -934,5 +1067,6 @@ void de__ed_assets_register(de__editor *ed) {
     if (ed->e->renderer)
         de__ed_add_capability(ed, "assets.modelInspection");
 #endif
+    de__ed_on_reset(ed, model_info_reset);
     de__ed_on_tick(ed, tick);
 }

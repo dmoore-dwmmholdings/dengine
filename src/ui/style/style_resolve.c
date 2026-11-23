@@ -19,6 +19,8 @@ static void collect(const de_query_chunk *chunk, void *user) {
         state->entities[state->entity_count++] = chunk->entities[i];
 }
 static de_ui_style_cache *cached(de_ui_style_system *state, de_entity entity, bool create) {
+    if (!create && !state->cache_used)
+        return NULL;
     u64 h = entity.bits;
     h ^= h >> 33;
     h *= 0xff51afd7ed558ccdULL;
@@ -31,6 +33,8 @@ static de_ui_style_cache *cached(de_ui_style_system *state, de_entity entity, bo
         if (!cache->entity.bits || !de_entity_alive(state->ui->world, cache->entity)) {
             if (!create)
                 return NULL;
+            if (!cache->entity.bits)
+                ++state->cache_used;
             memset(cache, 0, sizeof *cache);
             cache->entity = entity;
             return cache;
@@ -347,6 +351,7 @@ void de_ui__style_detach(de_ui *ui) {
     ui->style->system = (de_system){0};
     if (ui->style->cache)
         memset(ui->style->cache, 0, (size_t)ui->hash_capacity * sizeof *ui->style->cache);
+    ui->style->cache_used = 0;
     if (ui->style->tweens)
         memset(ui->style->tweens, 0, (size_t)DE_UI_STYLE_TWEENS * sizeof *ui->style->tweens);
 }

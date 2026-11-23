@@ -891,6 +891,11 @@ void de__asset_reload_swap(de_asset_system *s, de__pjob *job, de_asset_id *deps)
 static void reload_details(de__pjob *job, de_asset_event *ev, const char *message) {
     ev->has_cook_ms = job->has_cook_ms;
     ev->cook_ms = job->cook_ms;
+    if (job->diagnostic_captured) {
+        memcpy(ev->source, job->diagnostic_source, sizeof ev->source);
+        ev->line = job->diagnostic_line;
+        return; /* Failed resolution stays unknown, never imported line + root source. */
+    }
     char diagnostic[DE_ASSET_EVENT_SOURCE_CAP];
     const bool located =
         de__asset_diagnostic_location(message, diagnostic, sizeof diagnostic, &ev->line);

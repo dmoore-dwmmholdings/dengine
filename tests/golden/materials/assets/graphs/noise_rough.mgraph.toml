@@ -1,0 +1,53 @@
+kind = "material"
+version = 1
+next_id = 16
+[[node]]
+id = "n1"
+type = "param.color"
+values = { name = "tint", r = 0.95, g = 0.64, b = 0.54 }
+[[node]]
+id = "n2"
+type = "param.float"
+values = { name = "metal", value = 1.0, min = 0.0, max = 1.0 }
+[[node]]
+id = "n3"
+type = "param.float"
+values = { name = "rough_lo", value = 0.15, min = 0.0, max = 1.0 }
+[[node]]
+id = "n4"
+type = "param.float"
+values = { name = "rough_hi", value = 0.8, min = 0.0, max = 1.0 }
+[[node]]
+id = "n5"
+type = "value.float"
+values = { value = 6.0 }
+[[node]]
+id = "n6"
+type = "noise.value"
+[[node]]
+id = "n7"
+type = "math.lerp"
+[[node]]
+id = "n8"
+type = "output.base"
+[[link]]
+from = "n5.out"
+to = "n6.scale"
+[[link]]
+from = "n3.out"
+to = "n7.a"
+[[link]]
+from = "n4.out"
+to = "n7.b"
+[[link]]
+from = "n6.out"
+to = "n7.t"
+[[link]]
+from = "n7.out"
+to = "n8.roughness"
+[[link]]
+from = "n1.out"
+to = "n8.base_color"
+[[link]]
+from = "n2.out"
+to = "n8.metallic"

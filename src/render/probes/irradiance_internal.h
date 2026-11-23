@@ -39,8 +39,9 @@ de_result de__irradiance_create(de_renderer *r, struct de__irradiance **out);
 void de__irradiance_destroy(struct de__irradiance *s);
 void de__irradiance_prepare(de_renderer *r, const de__render_world_frame *world);
 void de__irradiance_view_complete(de_renderer *r, de_view view, bool success);
-/** Read only after the render world is idle; Metal standalone-retirement guard counter. */
-u64 de__irradiance_resource_drains(const de_renderer *r);
+/** Read only after the render world is idle; standalone GI lists begun while retirements were
+ * pending (DENG-432 evidence that recording over them needs no drain). */
+u64 de__irradiance_retired_begins(const de_renderer *r);
 void de__irradiance_debug_skip_depth(de_renderer *r, u32 mask);
 void de__irradiance_after_views(de_renderer *r, u64 frame);
 typedef struct de__irradiance_info {

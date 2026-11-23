@@ -60,6 +60,20 @@
 #define DE_PRINTF_FMT(fmt_index, args_index)
 #endif
 
+/*
+ * DE_DEPRECATED(msg): marks a declaration as deprecated so callers get a compiler warning that
+ * carries `msg` (a string literal, for example "use de_x_create2()"). Put it before the
+ * declaration, after DE_API: `DE_API DE_DEPRECATED("use de_x_create2()") de_x de_x_create(void);`.
+ * Expands to nothing on a compiler that has no deprecation attribute. See docs/versioning.md.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+#define DE_DEPRECATED(msg) __attribute__((deprecated(msg)))
+#elif defined(_MSC_VER)
+#define DE_DEPRECATED(msg) __declspec(deprecated(msg))
+#else
+#define DE_DEPRECATED(msg)
+#endif
+
 DE_EXTERN_C_BEGIN
 
 typedef uint8_t u8;

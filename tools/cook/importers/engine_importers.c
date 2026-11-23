@@ -22,6 +22,9 @@
 #if DE_COOKER_HAS_SHADER_IMPORTER /* tools/cook/importers/shader/CMakeLists.txt */
 #include "cook/importers/shader/shader_importer.h"
 #endif
+#if DE_COOKER_HAS_MATERIAL_GRAPH_IMPORTER /* tools/cook/importers/material_graph/CMakeLists.txt */
+#include "cook/importers/material_graph/mg_import.h"
+#endif
 
 #include <dengine/de_asset.h>
 #include <dengine/de_base.h>
@@ -69,6 +72,9 @@ static const struct {
     {"tilemap", de_tilemap_import_type_desc},
 #if DE_COOKER_HAS_SHADER_IMPORTER
     {"shader", shader_desc},
+#endif
+#if DE_COOKER_HAS_MATERIAL_GRAPH_IMPORTER
+    {"material_graph", de_mg_import_type_desc}, /* DENG-770 */
 #endif
 };
 

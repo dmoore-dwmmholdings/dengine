@@ -1,0 +1,5 @@
+error: no location
+note: imported here
+ --> note.slang:7:2
+error: failure
+ --> imported.slang:4:2

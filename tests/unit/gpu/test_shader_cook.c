@@ -18,6 +18,7 @@
 #include <dengine/de_task.h>
 
 #include "asset/hot_reload_internal.h"
+#include "asset/asset_internal.h"
 #include "asset/load_internal.h"
 #include "asset/manifest_internal.h"
 #include "cook/importers/shader/shader_importer.h"
@@ -655,6 +656,15 @@ TEST_F(shader, format_view, shd_fx) {
 #if DE_HAS_COOKER && DE__ASSET_RELOAD_ENABLED
 static u32 g_reloads;
 static de_asset_id g_reload_id;
+static de_asset_event g_reload_failure;
+static u32 g_reload_failures;
+static void capture_reload_failure(de_asset_system *s, const de_asset_event *event) {
+    (void)s;
+    if (event->kind == DE_ASSET_EV_FAILED) {
+        g_reload_failure = *event;
+        ++g_reload_failures;
+    }
+}
 
 static void on_reload(de_asset_id id, void *user) {
     (void)user;
@@ -754,6 +764,45 @@ TEST_F(shader, dev_on_demand_and_reload, shd_fx) {
     for (u32 i = 0; i < 4; ++i)
         de_asset_system_update(s, NULL);
     EXPECT_EQ(g_reloads, 1u);
+
+    /* DENG-666: real pinned Slang failures preserve the imported location and old code. */
+    s->emit_fn = capture_reload_failure;
+    const u64 good_size = blob.size;
+    u8 good_code[4096];
+    ASSERT_LE(good_size, (u64)sizeof good_code);
+    memcpy(good_code, blob.code, (size_t)good_size);
+    for (u32 which = 0; which < 2; ++which) {
+        /* Restore the import before breaking the root, so its error cannot mask the root. */
+        snprintf(path, sizeof path, "%s/shaders/tint.slang", f->root);
+        put_text(path, "module tint;\npublic float4 de_tint(float4 c) { return c; }\n");
+        if (which == 0) {
+            put_text(path, "module tint;\npublic float4 de_tint(float4 c) {\n"
+                           "return missing_import_symbol;\n}\n");
+        } else {
+            snprintf(path, sizeof path, "%s/shaders/compute.slang", f->root);
+            put_text(path, "[shader(\"compute\")]\n[numthreads(8,1,1)]\n"
+                           "void cs_main() { missing_root_symbol(); }\n");
+        }
+        char expected_source[512];
+        ASSERT_EQ(de_fs_resolve(path, expected_source, sizeof expected_source), DE_OK);
+        g_reload_failures = 0;
+        memset(&g_reload_failure, 0, sizeof g_reload_failure);
+        de__asset_reload_on_change(s, path, DE_WATCH_MODIFIED, false);
+        const u64 failure_start = de_time_now_ns();
+        while (!g_reload_failures && de_time_now_ns() - failure_start < WAIT_NS) {
+            de_asset_system_update(s, NULL);
+            de_sleep_ns(2000000u);
+        }
+        EXPECT_EQ(g_reload_failures, 1u);
+        EXPECT_EQ(g_reload_failure.id.hash, id.hash);
+        EXPECT_EQ(g_reload_failure.line, 3u);
+        EXPECT_STREQ(g_reload_failure.source, expected_source);
+        EXPECT_EQ(g_reload_failure.state, DE_LOAD_READY);
+        EXPECT_EQ(g_reloads, 1u);
+        ASSERT_EQ(de__shader_blob(s, sh, DE_GPU_VULKAN, 1, "cs_main", &blob, NULL), DE_OK);
+        ASSERT_EQ(blob.size, good_size);
+        EXPECT_EQ(memcmp(blob.code, good_code, (size_t)good_size), 0);
+    }
 
     de_asset_release(s, h);
     de__shader_on_reload_remove(st, on_reload, NULL);
