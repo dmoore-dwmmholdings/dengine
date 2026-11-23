@@ -87,6 +87,9 @@ struct de__editor {
     struct de__ed_water *water;
     de__ed_op_fn terrain_op; /* DENG-580: the terrain.* ops (editor_terrain.c), NULL without */
     de__ed_op_fn foliage_op; /* DENG-581: the foliage.* ops (editor_foliage.c), NULL without */
+    /* DENG-824: the page upkeep of foliage layers (editor_foliage.c), NULL without. */
+    const struct de__ed_foliage_hooks *foliage;
+    u32 foliage_fail_spawn; /* tests only: when not 0, page spawn number n (1: the next) fails */
 };
 
 /* ---------- Lifecycle (editor.c) ---------- */
@@ -342,6 +345,25 @@ struct de_foliage_store;
 /** DENG-823: loads the instances of DeFoliage layer `layer` from its DeFoliagePage entities into
  * `st` (initialised, empty). False when the pages are not a valid cell table or out of memory. */
 bool de__ed_foliage_load(de__editor *ed, de_entity layer, struct de_foliage_store *st);
+/** DENG-824: what the edit transactions and the scene loader ask of the foliage pages. */
+typedef struct de__ed_foliage_hooks {
+    /* Before op `o`: when it despawns a foliage layer or removes its DeFoliage, a foliage.restore
+     * in `pre` that empties the layer's pages (applied first, so an undo restores them after the
+     * layer). False: no such op is needed or it cannot be built (the pages then stay, unseen). */
+    bool (*before)(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_ep_edit_op *pre);
+    /* After a spawn of `e`: when `e` is a copy of another layer (a DIDE Duplicate, whose
+     * DeFoliage.source still names the original), a foliage.restore in `post` that gives `e` the
+     * original's pages. False: not a copy. */
+    bool (*after_spawn)(de__editor *ed, de_ep_arena *a, u64 e, de_ep_edit_op *post);
+    /* After scene text or a prefab spawned `ents`: their layers get their own `source`, and their
+     * pages join the scene of their layer (a prefab's root-level page is not parented). */
+    void (*loaded)(de__editor *ed, const u64 *ents, u32 n, de_entity parent);
+    /* A version 1 DeFoliage scene table `toml` (a `const toml_datum_t *` with `cells` and
+     * `instances`) of `layer`: its instances become pages. False when out of memory. */
+    bool (*import_v1)(de__editor *ed, de_entity layer, const void *toml);
+    /* The layer of page `e`; 0 when `e` is no DeFoliagePage. */
+    u64 (*page_layer)(de__editor *ed, u64 e);
+} de__ed_foliage_hooks;
 /* DENG-821: physics.loadAsset and the mouse spring physics.drag.* (editor_physics.c, physics
  * builds only); capabilities physics.authoring and physics.mouseSpring (protocol 1.23). */
 void de__ed_physics_register(de__editor *ed);

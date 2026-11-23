@@ -989,6 +989,10 @@ typedef struct de_foliage_instance {
 typedef struct DeFoliage {
     de_blob types[DE_FOLIAGE_TYPES]; /**< foliageType assets; instances name them by slot */
     de_foliage_rule rules[DE_FOLIAGE_RULES];
+    /** DENG-824, editor data (not saved): the entity bits of the layer whose pages this one
+     * holds, its own once the editor wrote or loaded them. A spawned copy (DIDE Duplicate) still
+     * names the original, and the editor copies the original's pages to it. */
+    u64 source;
 } DeFoliage;
 /** DENG-823: one page of the instances of foliage cell (x, z) of `layer`. Cell (x, z) covers
  * [x * DE_FOLIAGE_CELL_SIZE, (x + 1) * DE_FOLIAGE_CELL_SIZE) along x and the same along z. A cell

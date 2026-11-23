@@ -512,6 +512,18 @@ static bool spawn_text(de__editor *ed, de_ep_arena *a, const char *text, size_t 
         const size_t at = (a->used + 15u) & ~(size_t)15u;
         const de_ep_arena scratch = {a->base + at, at < a->size ? a->size - at : 0, 0};
         link_instances(ed, &tr.toptab, &m, &scratch);
+        /* DENG-824: a version 1 layer kept its instances inline; they become pages. */
+        for (u32 i = 0; ed->foliage != NULL && i < n; ++i) {
+            const toml_datum_t *fo = tab_get(te[i].tab, "DeFoliage");
+            if (fo == NULL || fo->type != TOML_TABLE ||
+                (tab_get(fo, "cells") == NULL && tab_get(fo, "instances") == NULL))
+                continue;
+            if (!ed->foliage->import_v1(ed, (de_entity){m.ents[i]}, fo))
+                DE_WARN(ed->log, "scene: entity 0x%016llx: version 1 foliage not imported",
+                        (unsigned long long)te[i].sid);
+        }
+        if (ed->foliage != NULL)
+            ed->foliage->loaded(ed, m.ents, m.n, DE_ENTITY_NULL);
     }
     if (!ok)
         for (u32 i = 0; i < m.n; ++i)
@@ -721,6 +733,11 @@ static void write_scene(de__editor *ed, u64 scene, const u64 *only, u32 only_cou
                         want = only[k] == e.bits;
                 } else {
                     want = in_scene(ed, e, scene) && !de__ed_views_owns(e.bits);
+                }
+                /* DENG-824: the pages of a layer that is gone are not saved. */
+                if (want && only == NULL && ed->foliage != NULL) {
+                    const u64 layer = ed->foliage->page_layer(ed, e.bits);
+                    want = layer == 0 || de_entity_alive(w, (de_entity){layer});
                 }
                 if (!want)
                     continue;
@@ -2073,10 +2090,25 @@ bool de__ed_prefab_spawn(de__editor *ed, de_ep_arena *a, const char *asset, u64 
         de_error_clear();
         return false;
     }
+    /* DENG-824: a foliage page is a root of the prefab, beside its layer; the instance root is the
+     * first other root. */
+    if (ed->foliage != NULL && ed->foliage->page_layer(ed, root->bits) != 0)
+        for (u32 i = 0; i < lcount; ++i)
+            if (ed->foliage->page_layer(ed, lent[i].bits) == 0 &&
+                de_entity_parent(ed->e->world, lent[i]).bits == parent.bits) {
+                *root = lent[i];
+                break;
+            }
     u64 ents[1024];
     const u32 n = tree_of(ed, *root, ents, 1024);
     for (u32 i = 0; i < n; ++i)
         member_add(ents[i], scene, de_scene_id_new());
+    if (ed->foliage != NULL && lcount != 0) {
+        u64 all[ED_LOCAL_CAP];
+        for (u32 i = 0; i < lcount; ++i)
+            all[i] = lent[i].bits;
+        ed->foliage->loaded(ed, all, lcount, parent);
+    }
     /* Remember the instance and its fields as instantiated. */
     ed_instance *inst = instance_push();
     if (inst != NULL) {
