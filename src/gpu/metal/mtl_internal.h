@@ -437,7 +437,7 @@ de_gpu_colorspace de__mtl_swapchain_colorspace(de_gpu_device *d, de__gpu_swapcha
 
 /* ---------- mtl_residency.m ---------- */
 
-/** Picks the residency path: an MTLResidencySet on macOS 15+, useHeaps: per encoder on macOS 14
+/** Picks the residency path: an MTLResidencySet on macOS 15+ Apple6 devices, useHeaps: otherwise
  * or when the cvar gpu.metal.force_use_heap is true at device creation. */
 de_result de__mtl_residency_init(de_gpu_device *d);
 void de__mtl_residency_shutdown(de_gpu_device *d);

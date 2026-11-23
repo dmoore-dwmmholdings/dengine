@@ -19,8 +19,8 @@ void de_test_mtl_fill(void *blit_encoder, void *buffer, u64 offset, u64 size, u8
 int de_test_mtl_dispatch_copy(de_gpu_device *d, void *compute_encoder, u32 in_index, u32 out_index,
                               u32 count, char *err, size_t cap);
 
-/** Whether this OS has MTLResidencySet (macOS 15+). */
-bool de_test_mtl_has_residency_sets(void);
+/** Whether this OS and device support MTLResidencySet (macOS 15+, Apple6). */
+bool de_test_mtl_has_residency_sets(de_gpu_device *d);
 
 /** GPU timestamp counter samples around a blit pass, with the GPU and CPU clocks around it. */
 typedef struct de_test_mtl_timestamps {

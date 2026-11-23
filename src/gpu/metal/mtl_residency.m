@@ -4,10 +4,10 @@
  * pass uses: every heap that the table can point into must be made resident (Decision: Metal
  * bindless resources live in heaps named by one residency list). Two paths, picked at device
  * creation:
- *   - macOS 15+: one MTLResidencySet per device holding every heap of the heap list, added to all
- *     three queues. Heaps come and go with allocations (never per frame); each submit first
- *     rebuilds the set when the list changed (heap_gen) and commits it.
- *   - macOS 14 (no residency sets), or the cvar gpu.metal.force_use_heap set at device creation:
+ *   - macOS 15+ on Apple6-family devices: one MTLResidencySet holding every heap of the heap
+ *     list, added to all three queues. Heaps change with allocations, never per frame.
+ *     Before each submit, a changed list (heap_gen) is rebuilt and committed.
+ *   - older OS or unsupported devices, or the cvar gpu.metal.force_use_heap set at device creation:
  *     every render and compute encoder calls useHeaps: for the whole list when it opens. The list
  *     is read under its lock, so a heap cannot be released while an encoder names it.
  * Storage textures (DENG-407): shaders write the textures the storage table names, and Metal
@@ -56,19 +56,25 @@ de_result de__mtl_residency_init(de_gpu_device *d) {
         if (@available(macOS 15.0, *)) {
             @autoreleasepool {
                 id<MTLDevice> dev = (__bridge id<MTLDevice>)m->device;
-                MTLResidencySetDescriptor *rd = [MTLResidencySetDescriptor new];
-                rd.label = @"de bindless heaps";
-                rd.initialCapacity = 16;
-                NSError *err = nil;
-                id<MTLResidencySet> set = [dev newResidencySetWithDescriptor:rd error:&err];
-                if (set != nil) {
-                    for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q)
-                        [(__bridge id<MTLCommandQueue>)m->queues[q] addResidencySet:set];
-                    m->residency_set = (void *)CFBridgingRetain(set);
-                    m->use_heaps = false;
-                } else {
-                    DE_WARN(d->log, "metal: no residency set (%s); using useHeaps: per encoder",
-                            err ? err.localizedDescription.UTF8String : "no reason given");
+                /* API availability is not device support: hosted/paravirtual GPUs can
+                 * expose macOS 15 without Apple6 residency sets. Guard before creation;
+                 * Metal validation aborts unsupported calls instead of returning nil.
+                 * Apple Metal Feature Set Tables: Residency sets, Apple6 hardware family. */
+                if ([dev supportsFamily:MTLGPUFamilyApple6]) {
+                    MTLResidencySetDescriptor *rd = [MTLResidencySetDescriptor new];
+                    rd.label = @"de bindless heaps";
+                    rd.initialCapacity = 16;
+                    NSError *err = nil;
+                    id<MTLResidencySet> set = [dev newResidencySetWithDescriptor:rd error:&err];
+                    if (set != nil) {
+                        for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q)
+                            [(__bridge id<MTLCommandQueue>)m->queues[q] addResidencySet:set];
+                        m->residency_set = (void *)CFBridgingRetain(set);
+                        m->use_heaps = false;
+                    } else {
+                        DE_WARN(d->log, "metal: no residency set (%s); using useHeaps: per encoder",
+                                err ? err.localizedDescription.UTF8String : "no reason given");
+                    }
                 }
             }
         }
