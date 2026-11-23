@@ -245,6 +245,28 @@ u32 de__ed_edit_run(de__editor *ed, de_ep_arena *a, u32 tx, u64 scene, const de_
 /** The source text of asset `id` (heap memory the caller frees with `*size`); false when the
  * manifest has no source for it or the file can't be read. */
 bool de__ed_asset_source(de__editor *ed, const char *id, void **data, u64 *size);
+/** The virtual path of asset `id`'s source file (DENG-798); false when the manifest has none. */
+bool de__ed_asset_source_vpath(de__editor *ed, const char *id, char *out, size_t cap);
+
+/** One field to write into a prefab source (DENG-798): `path` is "Component.field", `val` the
+ * editor's MessagePack value in prefab space. A `follow` edit is for a level that inherits the
+ * field: it only replaces a value the source already sets. */
+typedef struct de__ed_src_edit {
+    u64 sid;
+    const char *path;
+    const void *val;
+    size_t val_len;
+    bool follow;
+} de__ed_src_edit;
+/** Applies `edits` to the source text `src` in place, keeping comments, key order and line
+ * endings. Returns NULL with `*out` (free with de__ed_prefab_source_free) on success, or a
+ * reason ("source_layout", "value", "memory") with `msg` set. */
+const char *de__ed_prefab_source_edit(const de_type_registry *types, const char *src, size_t len,
+                                      const de__ed_src_edit *edits, u32 count, char **out,
+                                      size_t *out_len, char *msg, size_t msg_cap);
+void de__ed_prefab_source_free(char *text, size_t len);
+/** The reason of the last failed prefab.state op ("write", "source_changed", ...), or NULL. */
+const char *de__ed_prefab_fail_reason(void);
 /** The component called `name` in the world (id 0 when there is none). */
 de_component de__ed_component(de__editor *ed, de_ep_str name);
 /** A component's reflected type and data size; false for an unknown component. */

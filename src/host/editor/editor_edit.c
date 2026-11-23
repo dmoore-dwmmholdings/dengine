@@ -72,6 +72,7 @@ static de__ed_edit g_edit;
 typedef struct ed_fail {
     de_ep_error code;
     char msg[256];
+    const char *reason; /* a structured reason, when the op has one (prefab.state) */
 } ed_fail;
 
 static bool fail(ed_fail *f, de_ep_error code, const char *fmt, ...) {
@@ -618,8 +619,10 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
         if (!o->has_value)
             return fail(f, DE_EP_ERR_INVALID_PARAMS, "prefab.state needs value");
         de_ep_raw old;
-        if (!de__ed_prefab_state(ed, a, o->value, &old, &f->code, f->msg, sizeof f->msg))
+        if (!de__ed_prefab_state(ed, a, o->value, &old, &f->code, f->msg, sizeof f->msg)) {
+            f->reason = de__ed_prefab_fail_reason();
             return false;
+        }
         inv->op = o->op;
         inv->has_value = true;
         inv->value = old;
@@ -914,7 +917,7 @@ static ed_tx *tx_open(de__editor *ed, u64 scene, ed_fail *f) {
 
 static void on_begin(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
     DE__ED_PARAMS(edit_begin, de_ep_edit_begin_params, q);
-    ed_fail f = {DE_EP_OK, ""};
+    ed_fail f = {DE_EP_OK, "", NULL};
     const ed_tx *slot = tx_open(ed, q.scene, &f);
     if (slot == NULL) {
         de__ed_error(w, req->id, f.code, "%s", f.msg);
@@ -971,7 +974,7 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
         de__ed_error(w, req->id, DE_EP_ERR_CONFLICT, "transaction %u isn't open", q.tx);
         return;
     }
-    ed_fail f = {DE_EP_OK, ""};
+    ed_fail f = {DE_EP_OK, "", NULL};
     if (!tx_apply(ed, a, t, q.ops.items, q.ops.count, &f)) {
         de__ed_error(w, req->id, f.code, "%s", f.msg);
         return;
@@ -1002,7 +1005,7 @@ static void on_commit(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
 
 u32 de__ed_edit_run(de__editor *ed, de_ep_arena *a, u32 tx, u64 scene, const de_ep_edit_op *ops,
                     u32 count, de_ep_error *code, char *msg, size_t msg_cap) {
-    ed_fail f = {DE_EP_OK, ""};
+    ed_fail f = {DE_EP_OK, "", NULL};
     ed_tx *t = NULL;
     if (tx != 0) {
         t = tx_find(tx);
@@ -1047,7 +1050,8 @@ static bool replay(de__editor *ed, de_ep_arena *a, ed_tx *t, bool undo, ed_fail 
         memset(fresh, 0, sizeof(ed_blob) * t->count);
     }
     bool ok = true;
-    for (u32 i = 0; i < t->count && ok; ++i) {
+    u32 done = 0;
+    for (u32 i = 0; i < t->count && ok; ++i, done += ok) {
         const u32 k = undo ? t->count - 1 - i : i;
         const ed_pair *p = &t->pairs[k];
         de_ep_edit_op o, inv;
@@ -1058,6 +1062,16 @@ static bool replay(de__editor *ed, de_ep_arena *a, ed_tx *t, bool undo, ed_fail 
             ok = false;
         else
             fresh[k] = blob_of_op(ed, &inv);
+    }
+    /* A failed op leaves the ones before it applied: put them back, newest first, so the world
+     * (and any prefab source file) is as it was before the replay. */
+    for (u32 j = ok ? 0 : done; j-- > 0;) {
+        const u32 k = undo ? t->count - 1 - j : j;
+        de_ep_edit_op o, inv;
+        u64 spawned = 0;
+        ed_fail ignored = {DE_EP_OK, "", NULL};
+        if (fresh[k].p != NULL && op_of_blob(&fresh[k], a, &o))
+            (void)apply_op(ed, a, &o, &inv, &spawned, &ignored);
     }
     for (u32 k = 0; k < t->count; ++k) {
         ed_blob *side = undo ? &t->pairs[k].fwd : &t->pairs[k].inv;
@@ -1084,7 +1098,7 @@ static void on_cancel(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
         de__ed_error(w, req->id, DE_EP_ERR_CONFLICT, "transaction %u isn't open", q.tx);
         return;
     }
-    ed_fail f;
+    ed_fail f = {DE_EP_OK, "", NULL};
     (void)replay(ed, a, t, true, &f);
     tx_free(t);
     de_ep_empty e;
@@ -1111,9 +1125,29 @@ static void undo_redo(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
                      undo ? "undone" : "redone");
         return;
     }
-    ed_fail f = {DE_EP_OK, ""};
+    ed_fail f = {DE_EP_OK, "", NULL};
     if (!replay(ed, a, t, undo, &f)) {
-        de__ed_error(w, req->id, f.code, "%s", f.msg);
+        if (f.reason != NULL && f.code != DE_EP_ERR_BUSY) {
+            /* {id, error: {code, message, data: {reason}}} */
+            mpack_start_map(w, 2);
+            mpack_write_cstr(w, "id");
+            mpack_write_u64(w, req->id);
+            mpack_write_cstr(w, "error");
+            mpack_start_map(w, 3);
+            mpack_write_cstr(w, "code");
+            mpack_write_i32(w, (int32_t)f.code);
+            mpack_write_cstr(w, "message");
+            mpack_write_cstr(w, f.msg);
+            mpack_write_cstr(w, "data");
+            mpack_start_map(w, 1);
+            mpack_write_cstr(w, "reason");
+            mpack_write_cstr(w, f.reason);
+            mpack_finish_map(w);
+            mpack_finish_map(w);
+            mpack_finish_map(w);
+        } else {
+            de__ed_error(w, req->id, f.code, "%s", f.msg);
+        }
         return;
     }
     t->state = undo ? TX_UNDONE : TX_COMMITTED;
@@ -1160,7 +1194,7 @@ static void reset(de__editor *ed) {
             scratch = (unsigned char *)DE_ALLOC(al, ED_RESET_SCRATCH, 8, DE_MEM_GENERAL);
         if (scratch != NULL) {
             de_ep_arena a = {scratch, ED_RESET_SCRATCH, 0};
-            ed_fail f = {DE_EP_OK, ""};
+            ed_fail f = {DE_EP_OK, "", NULL};
             if (!replay(ed, &a, t, true, &f))
                 DE_WARN(ed->log, "editor: could not cancel transaction %u at disconnect: %s", t->id,
                         f.msg);

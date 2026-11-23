@@ -111,6 +111,7 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
         editor/editor_world.c
         editor/editor_edit.c
         editor/editor_scene.c
+        editor/editor_prefab_source.c
         editor/editor_assets.c
         editor/editor_logs.c
         editor/editor_views.c
