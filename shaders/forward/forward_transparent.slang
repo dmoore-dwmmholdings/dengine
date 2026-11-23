@@ -76,7 +76,7 @@ public struct ForwardParams
     public uint rt_capture;
     public uint rt_result;
     public uint rt_path;
-    public uint rt_reserved;
+    public uint time_bits; // asfloat: seconds since the renderer started (DENG-771)
 };
 
 public struct FwdVertex
@@ -91,6 +91,7 @@ public struct FwdVertex
     public nointerpolation float3 geometric : GEONORMAL;
     public nointerpolation uint material : MATERIAL;
     public nointerpolation float object_scale : OBJSCALE;
+    public nointerpolation float3 object_pos : OBJPOS;
     public nointerpolation uint has_tangent : HASTANGENT;
 };
 
@@ -179,6 +180,7 @@ FwdVertex vs_forward(uint vid : SV_VertexID, uint iid : SV_InstanceID, uniform F
     o.geometric = gn;
     o.material = slot;
     o.object_scale = pow(abs(det), 1.0 / 3.0);
+    o.object_pos = float3(inst.transform[0].w, inst.transform[1].w, inst.transform[2].w);
     o.has_tangent = de_vis_mesh_has_stream(mesh, DE_VIS_STREAM_TANGENT) ? 1u : 0u;
     return o;
 }
@@ -203,6 +205,10 @@ void fwd_resolve_surface(FwdVertex i,ForwardParams pc,DeSceneConstants sc,out De
     v.uv[1] = i.uv1;
     v.has_tangent = i.has_tangent != 0u;
     v.object_scale = i.object_scale;
+    v.object_position = i.object_pos; // DENG-771
+    v.position_dx = ddx(i.world);
+    v.position_dy = ddy(i.world);
+    v.time = asfloat(pc.time_bits);
     lod.dx[0] = ddx(i.uv0);
     lod.dy[0] = ddy(i.uv0);
     lod.dx[1] = ddx(i.uv1);
@@ -210,6 +216,7 @@ void fwd_resolve_surface(FwdVertex i,ForwardParams pc,DeSceneConstants sc,out De
     float mip_scale=exp2(sc.temporal.x);
     lod.dx[0]*=mip_scale;lod.dy[0]*=mip_scale;
     lod.dx[1]*=mip_scale;lod.dy[1]*=mip_scale;
+    v.position_dx*=mip_scale;v.position_dy*=mip_scale;
     lod.sampler = pc.sampler;
     lod.feedback = 0u;
     lod.feedback_capacity = 0u;

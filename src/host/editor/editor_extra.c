@@ -23,9 +23,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#define ED_REPLAY_MAGIC 0x50524544u /* "DERP" */
+#define ED_REPLAY_MAGIC   0x50524544u /* "DERP" */
 #define ED_REPLAY_VERSION 1u
-#define ED_CK_HISTORY 4096u
+#define ED_CK_HISTORY     4096u
 
 typedef struct rp_frame {
     u64 checksum;
@@ -41,8 +41,8 @@ typedef struct de__ed_extra {
     u32 frame_count, frame_cap;
     de__input_event *events;
     u32 event_count, event_cap;
-    u32 tick;      /* playback position */
-    u32 seek_to;   /* fast-forward target (0: none) */
+    u32 tick;    /* playback position */
+    u32 seek_to; /* fast-forward target (0: none) */
     f32 speed;
     f32 saved_scale;
     /* Local world checksums, for net.checksums. */
@@ -102,7 +102,8 @@ static void set_scale(de__editor *ed, f32 scale) {
 
 /* ---------- capture ---------- */
 
-static void on_capture(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
+static void on_capture(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                       mpack_writer_t *w) {
     (void)ed;
     DE__ED_PARAMS(capture_request, de_ep_capture_params, q);
     de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "%.*s capture is not available in this build",
@@ -133,7 +134,7 @@ static void on_record_stop(de__editor *ed, const de_ep_request *req, de_ep_arena
                            mpack_writer_t *w) {
     (void)ed;
     if (!g_x.recording) {
-        de__ed_error(w, req->id, DE_EP_ERR_CONFLICT, "not recording");
+        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "not recording");
         return;
     }
     g_x.recording = false;
@@ -151,7 +152,8 @@ static void on_record_stop(de__editor *ed, const de_ep_request *req, de_ep_arena
     const u32 hdr[4] = {ED_REPLAY_MAGIC, ED_REPLAY_VERSION, g_x.frame_count, g_x.event_count};
     const u64 snap_size = g_x.snap.size;
     const bool ok = f != NULL && write_all(f, hdr, sizeof hdr) && write_all(f, &snap_size, 8) &&
-                    write_all(f, &g_x.snap.tick, 8) && write_all(f, g_x.snap.data, (size_t)snap_size) &&
+                    write_all(f, &g_x.snap.tick, 8) &&
+                    write_all(f, g_x.snap.data, (size_t)snap_size) &&
                     write_all(f, g_x.frames, sizeof(rp_frame) * g_x.frame_count) &&
                     write_all(f, g_x.events, sizeof(de__input_event) * g_x.event_count);
     if (f != NULL)
@@ -180,8 +182,9 @@ static void on_play(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mp
     replay_clear();
     u32 hdr[4];
     u64 snap_size = 0;
-    bool ok = read_all(f, hdr, sizeof hdr) && hdr[0] == ED_REPLAY_MAGIC && hdr[1] == ED_REPLAY_VERSION &&
-              read_all(f, &snap_size, 8) && read_all(f, &g_x.snap.tick, 8);
+    bool ok = read_all(f, hdr, sizeof hdr) && hdr[0] == ED_REPLAY_MAGIC &&
+              hdr[1] == ED_REPLAY_VERSION && read_all(f, &snap_size, 8) &&
+              read_all(f, &g_x.snap.tick, 8);
     const de_allocator *al = de_heap_allocator();
     if (ok) {
         g_x.snap.data = DE_ALLOC(al, (size_t)snap_size, 16, DE_MEM_GENERAL);
@@ -196,7 +199,8 @@ static void on_play(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mp
     fclose(f);
     if (!ok) {
         replay_clear();
-        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "%s is not a replay this engine reads", path);
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "%s is not a replay this engine reads",
+                     path);
         return;
     }
     g_x.frame_count = hdr[2];
@@ -219,7 +223,7 @@ static void on_play(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mp
 static void on_seek(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
     DE__ED_PARAMS(replay_seek, de_ep_replay_seek_params, q);
     if (!g_x.playing || !g_x.has_snap) {
-        de__ed_error(w, req->id, DE_EP_ERR_CONFLICT, "no replay is playing");
+        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "no replay is playing");
         return;
     }
     /* From the snapshot again, fast, to the tick. */
@@ -246,13 +250,15 @@ static void on_speed(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
 
 /* ---------- net ---------- */
 
-static void on_net_sim(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
+static void on_net_sim(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                       mpack_writer_t *w) {
     DE__ED_PARAMS(net_sim, de_ep_net_sim_params, q);
     /* The net module has no session layer yet (de_net_session and de_net_set_simulation are
      * declared, not built): nothing to simulate on. */
     (void)ed;
     de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED,
-                 "no network session (latency %.0f ms, loss %.0f%% not applied)", q.latency_ms, q.loss_pct);
+                 "no network session (latency %.0f ms, loss %.0f%% not applied)", q.latency_ms,
+                 q.loss_pct);
 }
 
 static void on_net_checksums(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
@@ -261,13 +267,15 @@ static void on_net_checksums(de__editor *ed, const de_ep_request *req, de_ep_are
     DE__ED_PARAMS(net_checksums, de_ep_net_checksums_params, q);
     de_ep_net_checksums r;
     memset(&r, 0, sizeof r);
-    r.checksums.items = (de_ep_peer_checksum *)de__ed_alloc(a, sizeof(de_ep_peer_checksum) * ED_CK_HISTORY);
+    r.checksums.items =
+        (de_ep_peer_checksum *)de__ed_alloc(a, sizeof(de_ep_peer_checksum) * ED_CK_HISTORY);
     const u64 first = g_x.ck_count > ED_CK_HISTORY ? g_x.ck_count - ED_CK_HISTORY : 0;
     for (u64 i = first; i < g_x.ck_count && r.checksums.items != NULL; ++i) {
         const u32 k = (u32)(i % ED_CK_HISTORY);
         if (g_x.ck_tick[k] < q.from_tick || g_x.ck_tick[k] > q.to_tick)
             continue;
-        r.checksums.items[r.checksums.count++] = (de_ep_peer_checksum){0, g_x.ck_tick[k], g_x.ck_value[k]};
+        r.checksums.items[r.checksums.count++] =
+            (de_ep_peer_checksum){0, g_x.ck_tick[k], g_x.ck_value[k]};
     }
     de_ep_write_response_net_checksums(w, req->id, &r);
 }
@@ -276,7 +284,8 @@ static void on_net_checksums(de__editor *ed, const de_ep_request *req, de_ep_are
 
 static void tick(de__editor *ed) {
     const u64 frame = de__ed_frame(ed);
-    const u64 ck = de_world_checksum(ed->e->world, DE_COMP_SNAPSHOT | DE_COMP_SERIALIZE | DE_COMP_REPLICATE);
+    const u64 ck =
+        de_world_checksum(ed->e->world, DE_COMP_SNAPSHOT | DE_COMP_SERIALIZE | DE_COMP_REPLICATE);
     const u32 k = (u32)(g_x.ck_count % ED_CK_HISTORY);
     g_x.ck_tick[k] = frame;
     g_x.ck_value[k] = ck;
@@ -287,7 +296,8 @@ static void tick(de__editor *ed) {
         const de_input *in = ed->e->input;
         const u32 n = in->frame_event_count;
         if (grow((void **)&g_x.frames, &g_x.frame_cap, g_x.frame_count + 1, sizeof(rp_frame)) &&
-            grow((void **)&g_x.events, &g_x.event_cap, g_x.event_count + n, sizeof(de__input_event))) {
+            grow((void **)&g_x.events, &g_x.event_cap, g_x.event_count + n,
+                 sizeof(de__input_event))) {
             memcpy(&g_x.events[g_x.event_count], in->frame_events, sizeof(de__input_event) * n);
             g_x.frames[g_x.frame_count++] = (rp_frame){ck, g_x.event_count, n};
             g_x.event_count += n;

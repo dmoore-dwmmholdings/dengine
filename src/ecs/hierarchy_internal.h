@@ -77,6 +77,11 @@ static inline void *ecs_hier_data(const de_world *w, const ecs_record *rec, u32 
  * DE_ERR_INVALID_ARGUMENT for it and change nothing. The built-ins must be registered.
  */
 de_result ecs_hier_set_parent(de_world *w, de_entity child, de_entity parent, bool from_command);
+/* DENG-768: set_parent placing `child` as child number `index` of `parent` (at or past the end:
+ * last). With `keep_place`, an unchanged parent keeps the child where it is (set_parent);
+ * without it the child moves to `index`, counted among its siblings without it. */
+de_result ecs_hier_set_parent_at(de_world *w, de_entity child, de_entity parent, u32 index,
+                                 bool keep_place, bool from_command);
 
 /** Called before alive entity `e` is despawned (not recursively): removes it from its parent's
  * list and detaches its children (they lose DeChildOf and become roots). No-op without built-ins.

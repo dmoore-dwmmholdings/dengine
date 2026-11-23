@@ -1,0 +1,69 @@
+# ABI check on release branches and version tags (DENG-128, SPEC §19.3; policy in
+# docs/versioning.md). On each platform: dump the public API/ABI of include/dengine with
+# tools/abi/abi_dump.py (the layout probe is compiled and run on the runner, so the sizes and
+# offsets are that platform's), then compare it with abi/baseline/<platform>.json using
+# tools/abi/abi_check.py. A breaking change fails the job unless the major version increased.
+# Until DENG-131 records the 1.0.0 baselines, a missing baseline is a warning and the dump is
+# uploaded so it can be recorded. Local equivalent: docs/versioning.md, "Running the check".
+name: ABI check
+
+on:
+  push:
+    branches: ["release/**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  abi-check:
+    name: abi-check ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: macos-arm64, os: macos-15 }
+          - { platform: linux-x86-64, os: ubuntu-24.04 }
+          - { platform: windows-x86-64, os: windows-2022 }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: clang version
+        run: clang --version
+
+      - name: Dump the public ABI
+        run: |
+          python tools/abi/abi_dump.py --include-dir include --header dengine/dengine.h \
+            --clang clang --platform "${{ matrix.platform }}" \
+            --out "build/abi/${{ matrix.platform }}.json"
+
+      - name: Compare with the baseline
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          baseline="abi/baseline/${PLATFORM}.json"
+          if [ ! -f "${baseline}" ]; then
+            echo "::warning::no ${baseline} yet (recorded by DENG-131); dump uploaded, check skipped"
+            exit 0
+          fi
+          python tools/abi/abi_check.py "${baseline}" "build/abi/${PLATFORM}.json" \
+            --json "build/abi/${PLATFORM}.report.json"
+
+      - name: Upload the dump and report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: abi-${{ matrix.platform }}
+          path: build/abi/
+          if-no-files-found: ignore
+          retention-days: 30

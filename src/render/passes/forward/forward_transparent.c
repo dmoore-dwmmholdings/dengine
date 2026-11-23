@@ -218,6 +218,13 @@ static void legacy_copy_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *u
                                       0);
 }
 
+/* The bits of a float: ForwardParams.time_bits is read with asfloat in the shader. */
+static u32 fwd_float_bits(f32 f) {
+    u32 u;
+    memcpy(&u, &f, sizeof u);
+    return u;
+}
+
 static void draw_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     const fw_pass *p = (const fw_pass *)user;
     de__fwd_params pc = p->pc;
@@ -387,6 +394,7 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
                            .entry = lc->constants_entry,
                            .view_slot = vc->scene_view_slot,
                            .sampler = fw->sampler_bindless,
+                           .time_bits = fwd_float_bits(vc->time), /* DENG-771 */
                            .refraction = !fw->cv_refraction.id || de_cvar_bool(fw->cv_refraction),
                            .width = lc->width,
                            .height = lc->height,

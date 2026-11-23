@@ -1,0 +1,17 @@
+# DENG-571: a variant of props/crate. Same ids; it sets THealth.max itself.
+[prefab]
+base = "props/crate"
+
+[[entity]]
+id = "0x1"
+[entity.THealth]
+current = 50.0
+max = 80.3
+
+[[entity]]
+id = "0x2"
+parent = "0x1"
+[entity.TTarget]
+target = "0x1"
+texture = "ui/heart"
+speed = 1.0

@@ -23,6 +23,11 @@ endif()
 if(TARGET test_text_import)
  target_link_libraries(test_text_import PRIVATE de_tp_harfbuzz)
 endif()
+# DENG-758: private phase localization; production MSDF source and flags stay unchanged.
+if(TARGET test_text_import)
+ target_sources(test_text_import PRIVATE font_msdf_diagnostic.cpp)
+ target_link_libraries(test_text_import PRIVATE de_tp_msdfgen)
+endif()
 if(TARGET test_text_import)
  target_sources(test_text_import PRIVATE test_shaper.c test_itemize.c test_shape_cache.c)
 endif()
@@ -50,7 +55,7 @@ if(TARGET test_text_layout)
 endif()
 
 if(TARGET test_text_layout AND DE_BUILD_TOOLS)
- target_sources(test_text_layout PRIVATE test_paragraph.c test_hit_test.c)
+ target_sources(test_text_layout PRIVATE test_paragraph.c test_hit_test.c test_layout_lines.c)
  target_link_libraries(test_text_layout PRIVATE de_cooker de_platform)
  target_include_directories(test_text_layout PRIVATE "${DE_ROOT_DIR}/tools")
  target_compile_definitions(test_text_layout PRIVATE "DE_FONT_DATA=\"${DE_ROOT_DIR}/tests/data/fonts/latin\"")
@@ -59,7 +64,7 @@ endif()
 # DENG-264: original internal localization object is independent of font/GPU initialization.
 if(DE_BUILD_TOOLS)
     de_add_test(NAME text_loc SOURCES test_string_table.c test_message_format.c test_plurals.c
-        test_number_format.c test_pseudo_loc.c
+        test_number_format.c test_pseudo_loc.c test_loc_preview.c
         "${DE_ROOT_DIR}/src/text/loc/loc.c" "${DE_ROOT_DIR}/src/text/loc/loc_api.c"
         LIBS de_loc_common de_asset de_cooker de_platform de_test_support de_tp_tomlc17 TIMEOUT 30)
     target_include_directories(test_text_loc PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")

@@ -1,5 +1,5 @@
 if(TARGET de_ui)
- de_add_test(NAME ui_layout SOURCES test_flex.c test_grid.c test_anchor_popup.c test_ui_scale.c test_layout_tree.c test_stylesheet.c test_style_resolve.c test_tween.c test_widgets_basic.c test_pointer.c test_text_input.c test_virtual_list.c test_scroll_view.c test_dropdown_tabs_tooltip.c LIBS de_ui de_platform de_ecs de_reflect de_tp_tomlc17)
+ de_add_test(NAME ui_layout SOURCES test_flex.c test_grid.c test_anchor_popup.c test_ui_scale.c test_layout_tree.c test_stylesheet.c test_style_resolve.c test_tween.c test_widgets_basic.c test_pointer.c test_text_input.c test_virtual_list.c test_scroll_view.c test_dropdown_tabs_tooltip.c test_layout_preview.c test_theme_preview.c test_stylesheet_errors.c test_text_metrics.c LIBS de_ui de_platform de_ecs de_reflect de_tp_tomlc17)
  if(TARGET test_ui_layout)
   target_include_directories(test_ui_layout PRIVATE "${DE_ROOT_DIR}/src")
  endif()
@@ -32,7 +32,7 @@ endif()
 
 # DENG-322 real world-root layout/ray routing and integer internal UI geometry.
 if(TARGET de_ui)
- de_add_test(NAME ui_world_pixel SOURCES test_world_panel.c test_pixel_ui.c
+ de_add_test(NAME ui_world_pixel SOURCES test_world_panel.c test_pixel_ui.c test_editor_pick.c
   LIBS de_ui de_platform de_ecs de_reflect LABELS ui)
  target_include_directories(test_ui_world_pixel PRIVATE "${DE_ROOT_DIR}/src")
  if(TARGET de_gpu_metal)
@@ -96,7 +96,7 @@ if(TARGET de_ui AND DE_HAS_RENDER)
 endif()
 
 # DENG-657: replay the real cold-frame watchdog condition without a renderer or GPU.
-de_add_test(NAME ui_golden_wait SOURCES test_golden_glyph_wait.c LABELS unit ui)
+de_add_test(NAME ui_golden_wait SOURCES test_golden_glyph_wait.c LIBS de_core LABELS unit ui)
 
 # DENG-732: exercise the actual fuzz callback's per-input ownership without a GPU.
 if(TARGET de_ui)

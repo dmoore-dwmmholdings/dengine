@@ -309,6 +309,36 @@ TEST_F(aseprite, composite_depths_palettes_and_alpha, ase_fx) {
     const u8 alpha[] = {85, 0, 170, 192};
     ASSERT_MEMEQ(pixels, alpha, 4);
 }
+TEST_F(aseprite, indexed_background_fills_uncovered_pixels, ase_fx) {
+    /* DENG-683: a visible first root Background layer on an indexed sprite pre-fills the canvas
+     * with palette[transparent index]; ordinary transparent indexed layers stay transparent. */
+    u8 pixels[8];
+    const u8 fill[] = {10, 20, 30, 255}, green[] = {0, 255, 0, 255}, zero[4] = {0};
+    render_parse(f, "indexed-background-partial");
+    render(f, 0, UINT32_MAX, pixels, sizeof pixels);
+    ASSERT_MEMEQ(pixels, fill, 4);
+    ASSERT_MEMEQ(pixels + 4, green, 4);
+    render(f, 0, 0, pixels, sizeof pixels);
+    ASSERT_MEMEQ(pixels, fill, 4);
+    ASSERT_MEMEQ(pixels + 4, green, 4);
+    render(f, 0, 1, pixels, sizeof pixels);
+    ASSERT_MEMEQ(pixels, zero, 4);
+    render_parse(f, "indexed-background-absent");
+    render(f, 0, UINT32_MAX, pixels, sizeof pixels);
+    ASSERT_MEMEQ(pixels, fill, 4);
+    ASSERT_MEMEQ(pixels + 4, green, 4);
+    render(f, 0, 1, pixels, sizeof pixels);
+    ASSERT_MEMEQ(pixels, zero, 4);
+    ASSERT_MEMEQ(pixels + 4, green, 4);
+    render_parse(f, "indexed-background-hidden");
+    render(f, 0, UINT32_MAX, pixels, sizeof pixels);
+    ASSERT_MEMEQ(pixels, zero, 4);
+    ASSERT_MEMEQ(pixels + 4, green, 4);
+    render_parse(f, "indexed");
+    render(f, 0, UINT32_MAX, pixels, sizeof pixels);
+    const u8 red[] = {255, 0, 0, 255, 0, 0, 0, 0};
+    ASSERT_MEMEQ(pixels, red, sizeof pixels);
+}
 TEST_F(aseprite, composite_z_order_hidden_slots_and_group_boundaries, ase_fx) {
     u8 pixels[4];
     render_parse(f, "z-order");

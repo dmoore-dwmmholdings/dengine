@@ -1,0 +1,48 @@
+# material graph (DENG-307; written by gen_assets.py)
+
+[[entity]]
+id = "0x0000000000000001"
+[entity.DeTransform]
+position = [0.0, -6.0, 0.0]
+rotation = [0.707107, 0.0, 0.0, 0.707107]
+scale = [1.0, 1.0, 1.0]
+[entity.DeCamera]
+projection = "DE_PROJ_PERSPECTIVE"
+fov_y = 0.523599
+near_z = 0.1
+exposure_ev100 = 0.0
+
+[[entity]]
+id = "0x0000000000000010"
+[entity.DeTransform]
+position = [-0.65, 0.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["graph/noise_rough#material"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000011"
+[entity.DeTransform]
+position = [0.65, 0.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/graph_twin"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000012"
+[entity.DeTransform]
+position = [0.0, 0.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeEnvironment]
+hdri = "env/sky"
+intensity = 1.0
+rotation = 0.0

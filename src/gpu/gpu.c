@@ -261,6 +261,7 @@ static void destroy_object(de_gpu_device *d, de__gpu_kind kind, u32 id, const ch
     submitted_values(d, values);
     if (de__gpu_deferred_push(&d->deferred, (u32)kind, index, values) != DE_OK) {
         /* No memory to queue it: wait for the GPU and release it now. */
+        (void)de_atomic_fetch_add_u64(&d->wait_idles, 1, DE_ATOMIC_RELAXED);
         d->vt->wait_idle(d);
         reclaim(d, (u32)kind, index);
     }
@@ -302,6 +303,10 @@ u32 de__gpu_collect(de_gpu_device *d) {
 
 u32 de__gpu_deferred_count(de_gpu_device *d) {
     return de__gpu_deferred_pending(&d->deferred);
+}
+
+u64 de__gpu_wait_idle_count(de_gpu_device *d) {
+    return de_atomic_load_u64(&d->wait_idles, DE_ATOMIC_RELAXED);
 }
 
 u32 de__gpu_live_count(de_gpu_device *d, de__gpu_kind kind) {
@@ -473,6 +478,7 @@ const de_gpu_caps *de_gpu_get_caps(const de_gpu_device *d) {
 void de_gpu_wait_idle(de_gpu_device *d) {
     if (!d)
         return;
+    (void)de_atomic_fetch_add_u64(&d->wait_idles, 1, DE_ATOMIC_RELAXED);
     d->vt->wait_idle(d);
     de__gpu_collect(d);
 }

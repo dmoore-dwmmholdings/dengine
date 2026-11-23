@@ -35,6 +35,11 @@ de_result de__material_load(de_asset_load_ctx *ctx);
 void de__material_unload(void *object, void *user);
 de_result de__material_ready(void *object, void *user);
 
+/* material_graph_loader.c: DMGR (DENG-770). */
+de_result de__material_graph_load(de_asset_load_ctx *ctx);
+void de__material_graph_unload(void *object, void *user);
+de_result de__material_graph_ready(void *object, void *user);
+
 /* loaders.c: DMDL. */
 de_result de__model_load(de_asset_load_ctx *ctx);
 void de__model_unload(void *object, void *user);

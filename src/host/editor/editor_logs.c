@@ -392,7 +392,9 @@ static void tick(de__editor *ed) {
     if (g_logs.last_frame_ns != 0)
         g_logs.frame_ms = g_logs.frame_ms * 0.9 + (f64)(now - g_logs.last_frame_ns) * 1e-6 * 0.1;
     g_logs.last_frame_ns = now;
+    de_mutex_lock(&g_logs.lock); /* the log thread's sink stamps records with it */
     g_logs.frame = de__ed_frame(ed);
+    de_mutex_unlock(&g_logs.lock);
     /* Game reload lifecycle is emitted at the actual attempt boundary (editor_session.c). */
     send_logs(ed);
     send_stats(ed);

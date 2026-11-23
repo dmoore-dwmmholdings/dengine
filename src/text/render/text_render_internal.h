@@ -26,11 +26,30 @@ typedef struct de__text_item {
     de_view view;
     de_dvec3 position;
 } de__text_item;
+/* Screen submission keeps only per-glyph data; effects shared by one de_text_draw call live
+ * once in a draw packet. The draw stage expands both into de__text_gpu_glyph. */
+typedef struct de__text_screen_gpu {
+    de_vec4 rect, uv, color, clip;
+} de__text_screen_gpu;
+typedef struct de__text_screen_glyph {
+    de__text_screen_gpu gpu;
+    de_font font;
+    u32 page;
+    de_view view;
+    u32 draw;
+} de__text_screen_glyph;
+_Static_assert(sizeof(de__text_screen_glyph) == 80, "screen glyph record");
+typedef struct de__text_screen_draw {
+    de_vec4 outline, shadow;
+    f32 outline_width, shadow_x, shadow_y, reserved;
+} de__text_screen_draw;
 typedef struct de__text_queue {
     u64 frame;
     bool valid;
-    u32 screen_count, world_count;
-    de__text_item *screen, *world;
+    u32 screen_count, world_count, screen_draw_count;
+    de__text_screen_glyph *screen;
+    de__text_screen_draw *screen_draws;
+    de__text_item *world;
 } de__text_queue;
 typedef struct de__text_page {
     de_font font;

@@ -1,0 +1,20 @@
+kind = "material"
+version = 1
+next_id = 8
+[[node]]
+id = "n1"
+type = "texture.triplanar"
+values = { texture = "checker", scale = 2.5, sharpness = 4.0 }
+[[node]]
+id = "n2"
+type = "param.float"
+values = { name = "rough", value = 0.6, min = 0.0, max = 1.0 }
+[[node]]
+id = "n3"
+type = "output.base"
+[[link]]
+from = "n1.rgb"
+to = "n3.base_color"
+[[link]]
+from = "n2.out"
+to = "n3.roughness"

@@ -75,7 +75,7 @@ public struct ResolveParams
     public uint debug_pos;         // test-only RGBA32F targets (flags DE_RESOLVE_DEBUG)
     public uint debug_uv;
     public uint flags;
-    public uint reserved;
+    public uint time_bits;         // asfloat: seconds since the renderer started (DENG-771)
 };
 
 /// The material of slot `slot`, or the engine's default (white, dielectric, roughness 0.5) for the
@@ -143,11 +143,11 @@ public float4 de_resolve_sample(DeGpuMaterial m, uint s, VertexAttribs v, Textur
     return de_material_sample(lod, v, t, set, fallback);
 }
 
-/// The vertex data of resolve point `r` seen from `eye`.
+/// The vertex data of resolve point `r` seen from `eye`; `time` is the view's frame time.
 #if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
 [ForceInline]
 #endif
-public VertexAttribs de_resolve_attribs(DeResolvePoint r, float3 eye, out TextureLodInfo lod)
+public VertexAttribs de_resolve_attribs(DeResolvePoint r, float3 eye, float time, out TextureLodInfo lod)
 {
     VertexAttribs v;
     v.position = de_resolve_world_pos(r);
@@ -160,6 +160,9 @@ public VertexAttribs de_resolve_attribs(DeResolvePoint r, float3 eye, out Textur
     v.uv[1] = de_resolve_uv(r, 1u, lod.dx[1], lod.dy[1]);
     v.has_tangent = de_vis_mesh_has_stream(r.mesh, DE_VIS_STREAM_TANGENT);
     v.object_scale = pow(abs(de_vis_transform_det(r.inst.transform)), 1.0 / 3.0); // DENG-301
+    v.object_position = float3(r.inst.transform[0].w, r.inst.transform[1].w, r.inst.transform[2].w);
+    de_resolve_world_pos_diff(r, v.position_dx, v.position_dy);
+    v.time = time;
     lod.sampler = 0u;
     lod.feedback = 0u;
     lod.feedback_capacity = 0u;
@@ -197,10 +200,11 @@ public void de_resolve_tiles<M : IMaterialModel>(uint3 group, uint t, ResolvePar
         if (!r.valid || de_resolve_model(r, sc) != pc.model)
             continue;
         TextureLodInfo lod;
-        VertexAttribs v = de_resolve_attribs(r, sc.camera_position.xyz, lod);
+        VertexAttribs v = de_resolve_attribs(r, sc.camera_position.xyz, asfloat(pc.time_bits), lod);
         float mip_scale=exp2(sc.temporal.x);
         lod.dx[0]*=mip_scale;lod.dy[0]*=mip_scale;
         lod.dx[1]*=mip_scale;lod.dy[1]*=mip_scale;
+        v.position_dx*=mip_scale;v.position_dy*=mip_scale;
         lod.sampler = pc.sampler;
         lod.feedback = pc.feedback;
         lod.feedback_capacity = pc.feedback_capacity;
