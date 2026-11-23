@@ -514,7 +514,7 @@ static void terrain_info(de__editor *ed, const de_ep_request *req, de_ep_arena *
         const char *mat =
             DE_HANDLE_VALID(l->material) ? de__ed_asset_path(ed, l->material.id) : NULL;
         layers[n].slot = slot;
-        layers[n].name = (de_ep_str){l->name, strnlen(l->name, sizeof l->name)};
+        layers[n].name = (de_ep_str){l->name, (uint32_t)strnlen(l->name, sizeof l->name)};
         layers[n].material = de_ep_cstr(mat != NULL ? mat : "");
         layers[n].tiling = l->tiling;
         layers[n].sharpness = l->sharpness;
@@ -854,7 +854,7 @@ static bool op_import(const de_ep_edit_op *o, DeTerrain *t, op_fail *f) {
         if (ok && mpack_node_type(root) == mpack_type_map) {
             const mpack_node_t fm = mpack_node_map_cstr_optional(root, "format");
             if (!mpack_node_is_missing(fm) && mpack_node_type(fm) == mpack_type_str) {
-                const size_t n = mpack_node_strlen(fm);
+                const uint32_t n = (uint32_t)mpack_node_strlen(fm);
                 const de_ep_str s = {mpack_node_str(fm), n};
                 format = format_named(s);
                 if (format == NULL)

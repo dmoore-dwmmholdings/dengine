@@ -141,8 +141,10 @@ static void put_float(value_writer *w, double v) {
     snprintf(text, sizeof text, "%.15g", v);
     if (strtod(text, NULL) != v)
         snprintf(text, sizeof text, "%.17g", v);
-    if (!strpbrk(text, ".eE"))
-        strcat(text, ".0");
+    if (!strpbrk(text, ".eE")) {
+        const size_t len = strlen(text);
+        snprintf(text + len, sizeof text - len, ".0");
+    }
     put_str(w, text);
 }
 static void put_datum(value_writer *w, const toml_datum_t *d, u32 depth) {
