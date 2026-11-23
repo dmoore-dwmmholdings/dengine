@@ -247,6 +247,8 @@ u32 de__ed_edit_run(de__editor *ed, de_ep_arena *a, u32 tx, u64 scene, const de_
 bool de__ed_asset_source(de__editor *ed, const char *id, void **data, u64 *size);
 /** The virtual path of asset `id`'s source file (DENG-798); false when the manifest has none. */
 bool de__ed_asset_source_vpath(de__editor *ed, const char *id, char *out, size_t cap);
+/** The asset's source path as the manifest lists it (relative to the asset root), or NULL. */
+const char *de__ed_asset_source_path(de__editor *ed, const char *id);
 
 /** One field to write into a prefab source (DENG-798): `path` is "Component.field", `val` the
  * editor's MessagePack value in prefab space. A `follow` edit is for a level that inherits the

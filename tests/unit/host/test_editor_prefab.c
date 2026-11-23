@@ -896,7 +896,7 @@ static void expect_keys(mpack_node_t map, const char *const *keys, u32 n) {
         EXPECT_TRUE(node_streq(mpack_node_map_key_at(map, i), keys[i]));
 }
 
-TEST_F(editor_prefab_overrides, results_and_error_data_have_the_1_18_shapes, safety_fx) {
+TEST_F(editor_prefab_overrides, results_and_error_data_have_the_1_19_shapes, safety_fx) {
     const pf_world p = prefab_world(f);
     const de_entity a = spawn_prefab(f, "props/crate");
     char response[2048];
@@ -916,7 +916,8 @@ TEST_F(editor_prefab_overrides, results_and_error_data_have_the_1_18_shapes, saf
     EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
     root = prefab_call(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.max"},
                        &tree, response);
-    static const char *const apply_keys[] = {"files", "tx", "revision", "prefabs", "entities"};
+    /* DENG-801: the generated ApplyResult writer; `files` (1.19) comes last. */
+    static const char *const apply_keys[] = {"tx", "revision", "prefabs", "entities", "files"};
     expect_keys(mpack_node_map_cstr(root, "result"), apply_keys, 5);
     EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
     ((THealth *)de_entity_get(f->engine.world, a, p.health))->max = 4;
@@ -964,6 +965,108 @@ TEST_F(editor_prefab_overrides, errors_are_structured, safety_fx) {
                  "play_mode");
     f->ed.mode = DE_EP_WORLD_MODE_EDIT;
     EXPECT_FLOAT_EQ(((THealth *)de_entity_get(f->engine.world, a, p.health))->max, 3, 0);
+}
+
+/* ---------- DENG-801: prefab.unpack (protocol 1.19) ---------- */
+
+TEST_F(editor_prefab_overrides, unpack_is_undoable_and_keeps_the_overrides, safety_fx) {
+    const pf_world p = prefab_world(f);
+    const de_entity a = spawn_prefab(f, "props/crate");
+    const de_entity other = spawn_prefab(f, "props/crate");
+    ((THealth *)de_entity_get(f->engine.world, a, p.health))->current = 33;
+    const u64 before = checksum(f);
+    const pf_found had = overrides_of(f, a, a, "THealth.current");
+    ASSERT_TRUE(had.found);
+    char response[2048];
+    mpack_tree_t tree;
+    mpack_node_t root = prefab_call(f, DE_EP_METHOD_PREFAB_UNPACK, a, (pf_call){0}, &tree,
+                                    response);
+    ASSERT_TRUE(mpack_node_map_contains_cstr(root, "result"));
+    mpack_node_t res = mpack_node_map_cstr(root, "result");
+    const u32 tx = mpack_node_u32(mpack_node_map_cstr(res, "tx"));
+    EXPECT_TRUE(tx != 0);
+    EXPECT_EQ(mpack_node_u64(mpack_node_map_cstr(res, "root")), a.bits);
+    EXPECT_EQ(mpack_node_u64(mpack_node_map_cstr(res, "revision")), had.revision);
+    EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
+    /* Plain entities now: same world, no instance record, the other instance untouched. */
+    EXPECT_EQ(checksum(f), before);
+    EXPECT_TRUE(de_entity_alive(f->engine.world, a));
+    EXPECT_FLOAT_EQ(((THealth *)de_entity_get(f->engine.world, a, p.health))->current, 33, 0);
+    prefab_fails(f, DE_EP_METHOD_PREFAB_OVERRIDES, a, (pf_call){0}, DE_EP_ERR_NOT_FOUND,
+                 "not_instance");
+    prefab_fails(f, DE_EP_METHOD_PREFAB_UNPACK, a, (pf_call){0}, DE_EP_ERR_NOT_FOUND,
+                 "not_instance");
+    EXPECT_FALSE(overrides_of(f, other, other, "THealth.current").found);
+    /* Undo: the record and the override are back, exactly. */
+    transaction(f, DE_EP_METHOD_EDIT_UNDO, tx);
+    EXPECT_EQ(checksum(f), before);
+    const pf_found back = overrides_of(f, a, a, "THealth.current");
+    EXPECT_TRUE(back.found);
+    EXPECT_EQ(back.revision, had.revision);
+    EXPECT_EQ(back.count, had.count);
+    EXPECT_STREQ(back.source, had.source);
+    /* ...so the override still applies and reverts. */
+    const u32 rv = prefab_ok(f, DE_EP_METHOD_PREFAB_REVERT_OVERRIDE, a,
+                             (pf_call){.path = "THealth.current"});
+    EXPECT_FLOAT_EQ(((THealth *)de_entity_get(f->engine.world, a, p.health))->current, 50, 0);
+    transaction(f, DE_EP_METHOD_EDIT_UNDO, rv);
+    /* Redo of the unpack, then undo again. */
+    transaction(f, DE_EP_METHOD_EDIT_REDO, tx);
+    EXPECT_EQ(checksum(f), before);
+    prefab_fails(f, DE_EP_METHOD_PREFAB_OVERRIDES, a, (pf_call){0}, DE_EP_ERR_NOT_FOUND,
+                 "not_instance");
+    transaction(f, DE_EP_METHOD_EDIT_UNDO, tx);
+    EXPECT_TRUE(overrides_of(f, a, a, "THealth.current").found);
+}
+
+TEST_F(editor_prefab_overrides, unpack_a_nesting_instance_drops_one_record, safety_fx) {
+    (void)prefab_world(f);
+    const de_entity s = spawn_prefab(f, "props/stack");
+    const de_entity inner = first_child(f, s);
+    const u64 before = checksum(f);
+    /* The nested crate is not an instance root of its own. */
+    prefab_fails(f, DE_EP_METHOD_PREFAB_UNPACK, inner, (pf_call){0}, DE_EP_ERR_NOT_FOUND,
+                 "not_instance");
+    const u32 tx = prefab_ok(f, DE_EP_METHOD_PREFAB_UNPACK, s, (pf_call){0});
+    EXPECT_EQ(checksum(f), before);
+    prefab_fails(f, DE_EP_METHOD_PREFAB_OVERRIDES, inner, (pf_call){0}, DE_EP_ERR_NOT_FOUND,
+                 "not_instance");
+    transaction(f, DE_EP_METHOD_EDIT_UNDO, tx);
+    EXPECT_EQ(overrides_of(f, s, s, "THealth.max").count, 0u);
+    EXPECT_EQ(checksum(f), before);
+}
+
+TEST_F(editor_prefab_overrides, unpack_errors_are_structured, safety_fx) {
+    (void)prefab_world(f);
+    const de_entity a = spawn_prefab(f, "props/crate");
+    const de_entity loose = de_entity_spawn(f->engine.world);
+    const de_entity leaf = first_child(f, a);
+    const de_ep_method unpack = DE_EP_METHOD_PREFAB_UNPACK;
+    prefab_fails(f, unpack, loose, (pf_call){0}, DE_EP_ERR_NOT_FOUND, "not_instance");
+    if (leaf.bits != 0) /* a child of an instance root is not a root */
+        prefab_fails(f, unpack, leaf, (pf_call){0}, DE_EP_ERR_NOT_FOUND, "not_instance");
+    prefab_fails(f, unpack, a, (pf_call){.has_revision = true, .revision = 99}, DE_EP_ERR_CONFLICT,
+                 "stale");
+    f->ed.mode = DE_EP_WORLD_MODE_PLAY;
+    prefab_fails(f, unpack, a, (pf_call){0}, DE_EP_ERR_WRONG_MODE, "play_mode");
+    f->ed.mode = DE_EP_WORLD_MODE_EDIT;
+    /* Nothing changed: the instance is still one, and the current revision passes the check. */
+    const u64 rev = overrides_of(f, a, a, "THealth.max").revision;
+    const u32 tx = prefab_ok(f, unpack, a, (pf_call){.has_revision = true, .revision = rev});
+    EXPECT_TRUE(tx != 0);
+}
+
+/* The 1.19 UnpackResult shape: tx, revision, root, in that order. */
+TEST_F(editor_prefab_overrides, unpack_result_has_the_1_19_shape, safety_fx) {
+    (void)prefab_world(f);
+    const de_entity a = spawn_prefab(f, "props/crate");
+    char response[2048];
+    mpack_tree_t tree;
+    mpack_node_t root = prefab_call(f, DE_EP_METHOD_PREFAB_UNPACK, a, (pf_call){0}, &tree,
+                                    response);
+    static const char *const keys[] = {"tx", "revision", "root"};
+    expect_keys(mpack_node_map_cstr(root, "result"), keys, 3);
+    EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
 }
 
 /* ---------- DENG-798: apply writes the prefab sources ---------- */
@@ -1050,7 +1153,10 @@ TEST_F(editor_prefab_source, apply_writes_the_source_and_keeps_comments_and_orde
     ASSERT_TRUE(mpack_node_map_contains_cstr(root, "result"));
     mpack_node_t files = mpack_node_map_cstr(mpack_node_map_cstr(root, "result"), "files");
     ASSERT_EQ(mpack_node_array_length(files), 1u); /* no variant or nesting prefab is loaded */
-    EXPECT_TRUE(node_streq(mpack_node_array_at(files, 0), "props/crate"));
+    /* The manifest's source path, one per entry of `prefabs` (DIDE-383). */
+    EXPECT_TRUE(node_streq(mpack_node_array_at(files, 0), "crate.prefab.toml"));
+    mpack_node_t prefabs = mpack_node_map_cstr(mpack_node_map_cstr(root, "result"), "prefabs");
+    EXPECT_EQ(mpack_node_array_length(prefabs), mpack_node_array_length(files));
     EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
     /* Only the value changes: the comment, the key order and the layout stay. */
     EXPECT_TRUE(text_eq(read_text(CRATE),
