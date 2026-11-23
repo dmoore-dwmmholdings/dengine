@@ -439,6 +439,10 @@ static void on_font_atlas(de__editor *ed, const de_ep_request *req, de_ep_arena 
     de_ep_write_response_asset_font_atlas(w, req->id, &result);
 }
 
+/* asset.importerSchema (DIDE-R156): one JSON Schema object per importer. The keys, enums, defaults
+ * and bounds mirror what the importers in tools/cook/importers read (texture_import.c,
+ * model_cook.c, anim_skeleton.c, sound_import.c); test_editor_asset_importer_schema checks them
+ * against the importers' own constants. A property with no default is "absent means automatic". */
 typedef struct schema_prop {
     const char *name, *type, *def, *values, *desc;
     f64 min, max;
@@ -446,7 +450,8 @@ typedef struct schema_prop {
 
 static const schema_prop k_texture[] = {
     {"usage", "string", "color", "color normal mask environment", "What the texture holds", 0, 0},
-    {"srgb", "boolean", NULL, NULL, "The colour channels are sRGB-encoded", 0, 0},
+    {"srgb", "boolean", NULL, NULL, "The colour channels are sRGB-encoded (absent: by usage)", 0,
+     0},
     {"mips", "boolean", "true", NULL, "The full mip chain", 0, 0},
     {"pixel_art", "boolean", "false", NULL, "No mips; nearest sampling", 0, 0},
     {"alpha_coverage", "number", NULL, NULL, "Alpha-test cutoff kept in every mip", 0, 1},
@@ -455,8 +460,14 @@ static const schema_prop k_texture[] = {
     {"compression", "string", "auto", "auto none bc1 bc3 bc4 bc5 bc6h bc7", "Block compression", 0,
      0},
     {"quality", "string", "normal", "fast normal high", "Encoder effort", 0, 0},
-    {"rdo_quality", "number", "0", NULL, "Rate-distortion lambda (0: off)", 0, 4},
+    {"rdo_quality", "number", "0", NULL, "Rate-distortion lambda (0: off)", 0, 100},
     {"rt_proxy", "boolean", "false", NULL, "Cook a silhouette proxy for sprite ray tracing", 0, 0},
+    {"rt_proxy_u", "number", "0", NULL, "Proxy region left edge (UV)", 0, 1},
+    {"rt_proxy_v", "number", "0", NULL, "Proxy region top edge (UV)", 0, 1},
+    {"rt_proxy_width", "number", "1", NULL, "Proxy region width (UV)", 0, 1},
+    {"rt_proxy_height", "number", "1", NULL, "Proxy region height (UV)", 0, 1},
+    {"rt_proxy_cutoff", "number", "0.5", NULL, "Proxy alpha cutoff", 0, 1},
+    {"max_decoded_mib", "integer", "1024", NULL, "Largest decoded image (MiB)", 1, 1048576},
 };
 static const schema_prop k_model[] = {
     {"import_meshes", "boolean", "true", NULL, "Generate mesh assets; false keeps hierarchy only",
@@ -468,7 +479,7 @@ static const schema_prop k_model[] = {
     {"import_animations", "boolean", "true", NULL,
      "Generate animation clips (requires import_skeletons)", 0, 0},
     {"import_prefab", "boolean", "true", NULL, "Generate the node hierarchy prefab", 0, 0},
-    {"scale", "number", "1", NULL, "Uniform scale", 0.0001, 10000},
+    {"scale", "number", "1", NULL, "Uniform scale", 0.0001, 999999},
     {"import_cameras", "boolean", "false", NULL, "Import cameras and lights", 0, 0},
     {"generate_lods", "boolean", "true", NULL, "Build the LOD chain", 0, 0},
     {"lod_error", "number", "0.01", NULL, "Screen-space error per LOD", 0, 1},
@@ -476,11 +487,26 @@ static const schema_prop k_model[] = {
     {"max_position_error", "number", "0.0005", NULL, "Largest position error (m)", 0, 1},
     {"axis_up", "string", "auto", "auto +x -x +y -y +z -z", "FBX up axis", 0, 0},
     {"axis_front", "string", "auto", "auto +x -x +y -y +z -z", "FBX front axis", 0, 0},
+    {"anim_sample_rate", "number", "30", NULL, "Animation sample rate (Hz)", 0, 1000},
+    {"anim_error", "number", "0.0001", NULL, "Animation position error (m)", 0, 1},
+    {"anim_error_angle", "number", "0.05", NULL, "Animation rotation error (degrees)", 0, 45},
+    {"anim_joint_names", "boolean", "true", NULL, "Keep joint names in clips", 0, 0},
+    {"max_decoded_mib", "integer", "1024", NULL, "Largest decoded source (MiB)", 1, 1048576},
 };
 static const schema_prop k_sound[] = {
-    {"streaming", "boolean", "false", NULL, "Stream from disk instead of decoding up front", 0, 0},
-    {"quality", "number", "5", NULL, "Codec quality", 0, 10},
-    {"loop", "boolean", "false", NULL, "Loop by default", 0, 0},
+    {"stream", "boolean", NULL, NULL,
+     "Stream from disk (absent: when longer than stream_above_seconds)", 0, 0},
+    {"stream_above_seconds", "number", "10", NULL, "Length above which a sound streams", 0, 0},
+    {"compression", "string", "pcm", "pcm adpcm", "Storage of a sound that does not stream", 0,
+     0},
+    {"codec", "string", NULL, "opus vorbis",
+     "Codec of a streamed sound (absent: Vorbis for stereo Ogg, else Opus)", 0, 0},
+    {"bitrate", "integer", "0", NULL, "Opus bitrate in bit/s (0: encoder default)", 0,
+     2147483647},
+    {"mono", "boolean", "false", NULL, "Mix down to one channel", 0, 0},
+    {"loop", "boolean", NULL, NULL, "Loop (absent: when the file has loop points)", 0, 0},
+    {"loop_start", "integer", "0", NULL, "First looped frame (0: the file's)", 0, 0},
+    {"loop_end", "integer", "0", NULL, "Frame after the loop (0: the file's, or the end)", 0, 0},
 };
 
 static void write_schema(mpack_writer_t *mw, const schema_prop *p, u32 n) {
@@ -504,6 +530,8 @@ static void write_schema(mpack_writer_t *mw, const schema_prop *p, u32 n) {
                 mpack_write_bool(mw, strcmp(p[i].def, "true") == 0);
             else if (strcmp(p[i].type, "string") == 0)
                 mpack_write_cstr(mw, p[i].def);
+            else if (strcmp(p[i].type, "integer") == 0)
+                mpack_write_i64(mw, strtoll(p[i].def, NULL, 10));
             else
                 mpack_write_double(mw, atof(p[i].def));
         }

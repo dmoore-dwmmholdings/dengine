@@ -565,6 +565,14 @@ if(NOT DE_IS_SHIPPING AND DE_BUILD_TOOLS AND TARGET de_tp_dide_protocol)
         DE_EDITOR_DEP_TMP="${CMAKE_CURRENT_BINARY_DIR}/dependency-tmp")
 endif()
 
+# DENG-578: asset.importerSchema keys and bounds match the cook importers (DIDE-R156).
+if(NOT DE_IS_SHIPPING AND DE_BUILD_TOOLS AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_asset_importer_schema SOURCES test_editor_asset_importer_schema.c
+        LIBS de_host de_cooker de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev)
+    target_include_directories(test_editor_asset_importer_schema PRIVATE
+        "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+endif()
+
 # DENG-692: actual legacy handler and owned requests with a controlled asynchronous backend.
 if(NOT DE_IS_SHIPPING AND TARGET de_render AND TARGET de_tp_dide_protocol)
     de_add_test(NAME editor_model_info_async SOURCES test_model_info_async.c
