@@ -340,7 +340,7 @@ TEST_F(editor_ui, layout_errors_match_the_contract, ui_ed_fx) {
                                                           .safe = {NAN, 0, 0, 0}})),
               DE_EP_ERR_INVALID_PARAMS);
     /* Malformed params. */
-    f->params[0] = (char)0xc1; /* never used in msgpack */
+    f->params[0] = '\xc1'; /* never used in msgpack */
     EXPECT_EQ(code_of(call(f, DE_EP_METHOD_UI_LAYOUT, 1)), DE_EP_ERR_INVALID_PARAMS);
     /* A game without a UI: no node can be found. */
     de_ui_destroy(f->engine.ui);
@@ -357,7 +357,7 @@ static const de_ep_method k_115[] = {DE_EP_METHOD_UI_NODE_CORNERS,  DE_EP_METHOD
                                      DE_EP_METHOD_LOC_PREVIEW_LOCALE};
 /* Calls `m` with an empty params map. */
 static mpack_node_t call_empty(ui_ed_fx *f, de_ep_method m) {
-    f->params[0] = (char)0x80;
+    f->params[0] = '\x80';
     return call(f, m, 1);
 }
 /* Calls `m` with {key: value}; value NULL sends an explicit nil. */

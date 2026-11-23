@@ -2038,9 +2038,9 @@ static void generate_source(mg *g, const char *name) {
          "        SurfaceData s = de_surface_default();\n");
     de_strbuf tmp;
     de_strbuf_init(&tmp, g->a);
-    for (u32 k = 0; k < g->order_count && !g->oom; ++k)
-        if (g->nodes[g->order[k]].reach)
-            emit_node(g, g->order[k], &tmp);
+    for (u32 oi = 0; oi < g->order_count && !g->oom; ++oi)
+        if (g->nodes[g->order[oi]].reach)
+            emit_node(g, g->order[oi], &tmp);
     de_strbuf_free(&tmp);
     emit(g, 0, "        s.model = m.model & (DE_GPU_MATERIAL_MODELS - 1u);\n");
     emitf(g, 0, "        s.features = 0x%xu;\n", g->r->features);

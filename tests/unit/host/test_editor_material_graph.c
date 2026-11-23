@@ -332,7 +332,7 @@ TEST(editor_material_graph, generate_rejects_bad_params) {
     run(&f, DE_EP_METHOD_MATERIAL_GRAPH_GENERATE);
     EXPECT_EQ(error_of(&f), DE_EP_ERR_INVALID_PARAMS);
     /* Not a map. */
-    f.params[0] = (char)0xc0; /* nil */
+    f.params[0] = '\xc0'; /* nil */
     f.params_size = 1;
     run(&f, DE_EP_METHOD_MATERIAL_GRAPH_GENERATE);
     EXPECT_EQ(error_of(&f), DE_EP_ERR_INVALID_PARAMS);

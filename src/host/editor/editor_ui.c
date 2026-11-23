@@ -137,7 +137,7 @@ static bool need_115(de__editor *ed, const de_ep_request *req, mpack_writer_t *w
 /* Reads params {key?: string | null}. The IDL says null ends a preview, as absence does, but the
  * generated reader only takes a string; this one takes nil as absent. False: malformed. */
 static bool opt_str_param(const de_ep_request *req, const char *key, bool *has, de_ep_str *out) {
-    static const char empty_map[1] = {(char)0x80};
+    static const char empty_map[1] = {'\x80'};
     mpack_reader_t r;
     if (req->params.len == 0)
         mpack_reader_init_data(&r, empty_map, 1);
