@@ -1,0 +1,11 @@
+[game]
+name = "Mesh Scene"
+
+[window]
+title = "Mesh Scene - 3D mesh for editor render-mode probes"
+width = 640
+height = 360
+surface = "auto"
+
+[timing]
+frame_cap_hz = 60
