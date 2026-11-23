@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.19"
-#define DE_EP_SCHEMA_HASH "88e385a14291c414"
+#define DE_EP_PROTOCOL_VERSION "1.20"
+#define DE_EP_SCHEMA_HASH "5ece11fddbb88fc6"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -106,6 +106,16 @@ typedef enum de_ep_material_graph_target_status {
 } de_ep_material_graph_target_status;
 const char *de_ep_material_graph_target_status_name(de_ep_material_graph_target_status v);
 bool de_ep_material_graph_target_status_parse(de_ep_str s, de_ep_material_graph_target_status *out);
+
+typedef enum de_ep_override_kind {
+    DE_EP_OVERRIDE_KIND_FIELD,
+    DE_EP_OVERRIDE_KIND_COMPONENT_ADDED,
+    DE_EP_OVERRIDE_KIND_COMPONENT_REMOVED,
+    DE_EP_OVERRIDE_KIND_ENTITY_ADDED,
+    DE_EP_OVERRIDE_KIND_ENTITY_REMOVED,
+} de_ep_override_kind;
+const char *de_ep_override_kind_name(de_ep_override_kind v);
+bool de_ep_override_kind_parse(de_ep_str s, de_ep_override_kind *out);
 
 typedef enum de_ep_ui_text_align {
     DE_EP_UI_TEXT_ALIGN_START,
@@ -653,9 +663,9 @@ struct de_ep_animation_preview_params {
 struct de_ep_apply_result {
     uint32_t tx; /* the edit transaction that holds the change; one undo step */
     uint64_t revision; /* the prefab revision after the change */
-    de_ep_list_str prefabs; /* the prefab definitions written */
+    de_ep_list_str prefabs; /* the prefab definitions written: the chain levels down to target, then the variants and nesting prefabs that follow them. Since DENG-807 the engine loads, before the plan, every manifest prefab whose base or nested chain reaches target, so a dependent that has no instance is listed too */
     de_ep_list_u64 entities; /* the instance entities whose base changed */
-    de_ep_list_str files; /* the .prefab.toml asset paths written, one per entry in prefabs, in the same order (protocol 1.19, DIDE-383) */
+    de_ep_list_str files; /* the manifest source path of each entry in prefabs (e.g. crate.prefab.toml), in the same order, unchanged prefabs included (protocol 1.19, DIDE-383) */
 };
 
 struct de_ep_archetype {
@@ -1384,13 +1394,19 @@ struct de_ep_net_sim_params {
 };
 
 struct de_ep_override {
-    de_ep_str path; /* Component.field */
-    de_ep_raw value; /* the instance's value */
-    uint64_t entity; /* the overridden entity (the query covers the entity's subtree) */
-    de_ep_raw base; /* the value the instance inherits */
+    de_ep_str path; /* Component.field for kind field, Component for the component kinds, empty for the entity kinds */
+    de_ep_raw value; /* the instance's value; for the structural kinds see OverrideKind */
+    uint64_t entity; /* the overridden entity (the query covers the entity's subtree); for entity_removed, the instance entity the removed one was under */
+    de_ep_raw base; /* the value the instance inherits; for the structural kinds see OverrideKind */
     de_ep_str source; /* the prefab that sets the inherited value (variant base or nesting prefab); one of chain */
     de_ep_list_str chain; /* the prefab chain, nearest first: the instance's prefab .. the root definition */
-    de_ep_list_u64 ids; /* the entity's prefab-local id in each chain level; as long as chain */
+    de_ep_list_u64 ids; /* the entity's prefab-local id in each chain level; as long as chain. For entity_added, the ids of parent; for entity_removed, of the removed entity */
+    bool has_kind;
+    de_ep_override_kind kind; /* what the override changes; absent means field (protocol 1.20, DIDE-387) */
+    bool has_parent;
+    uint64_t parent; /* entity_added and entity_removed: the instance entity the entity is or was under */
+    bool has_local;
+    uint64_t local; /* entity_removed: the removed entity's prefab-local id in chain[0] (ids[0]) */
 };
 
 /* The result of prefab.overrides. */
@@ -1404,9 +1420,13 @@ struct de_ep_override_list {
 /* The params of prefab.applyOverride and prefab.revertOverride. */
 struct de_ep_override_path_params {
     uint64_t entity;
-    de_ep_str path; /* Component.field */
+    de_ep_str path; /* Component.field for kind field, Component for the component kinds, empty for the entity kinds (the Override's path) */
     bool has_target;
     de_ep_str target; /* applyOverride only: the chain asset to write; absent means chain[0]. Not in the chain is INVALID_PARAMS reason target */
+    bool has_kind;
+    de_ep_override_kind kind; /* the Override's kind; absent means field (protocol 1.20, DIDE-387). A path or local that does not fit the kind is INVALID_PARAMS reason kind */
+    bool has_local;
+    uint64_t local; /* entity_removed only, and needed there: the Override's local; `entity` is then the instance entity it was under */
     bool has_revision;
     uint64_t revision; /* optimistic check against the prefab revision; a mismatch is CONFLICT reason stale */
     bool has_tx;
@@ -1455,7 +1475,7 @@ struct de_ep_pick_result {
     de_ep_list_ui_pick_hit ui_stack; /* ui.editor (protocol 1.15): every UI node under the point, topmost first; absent when there is none */
 };
 
-/* The error data of prefab.overrides, prefab.applyOverride, prefab.revertOverride and prefab.unpack. reason by code: not_found not_instance, no_field; invalid_params path, target, params; conflict stale, not_override; wrong_mode play_mode; unsupported no_definition, outside_prefab (an entity value refers outside the target prefab); busy memory, too_large. Edit errors pass through with reason edit. */
+/* The error data of prefab.overrides, prefab.applyOverride, prefab.revertOverride and prefab.unpack. reason by code: not_found not_instance, no_field, no_component (1.20: not a component type), no_entity (1.20: local is not an entity of chain[0], or the entity is not under the instance); invalid_params path, target, params, kind (1.20: path or local does not fit kind); conflict stale, not_override; wrong_mode play_mode; unsupported no_definition, outside_prefab (an entity value refers outside the target prefab), kind (1.20: the engine cannot apply or revert this kind at this level), dependent_cycle (applyOverride, DENG-807: the base and nested links of the prefabs that reach target form a cycle); internal dependent_unreadable (applyOverride, DENG-807: a manifest prefab that may be a dependent of target cannot be read or loaded); busy memory, too_large. dependent_cycle and dependent_unreadable are found before anything is written. Edit errors pass through with reason edit. */
 struct de_ep_prefab_error_data {
     de_ep_str reason;
     uint64_t revision; /* the current prefab revision */
@@ -1541,7 +1561,7 @@ struct de_ep_resource_list {
 /* The result of prefab.revertOverride. */
 struct de_ep_revert_result {
     uint32_t tx; /* the edit transaction that holds the set */
-    uint64_t revision; /* the prefab revision (a revert does not change it) */
+    uint64_t revision; /* the prefab revision after the revert (a field or component revert does not change it) */
 };
 
 struct de_ep_scene_info {
@@ -1555,7 +1575,7 @@ struct de_ep_scene_list {
     de_ep_list_scene_info scenes;
 };
 
-/* Loads the scene file at `path`, replacing the loaded scenes unless `additive`. A malformed scene text is an INVALID_PARAMS error whose `data` is `{reason, line, entity, component}`: `reason` is one of `syntax` (not TOML), `shape` (wrong table or field layout), `id` (a missing or bad scene ID), `duplicate` (a scene ID used twice), `parent` (a parent that is not in the text) or `value` (a component value of the wrong type); `line` is 1-based, and `entity` (scene ID) and `component` name the failing table where there is one, else null. The text is either the keyed `[entity.0x<16 hex>]` layout (components as sub-tables, sorted by scene ID) or the legacy `[[entity]]` array. Both methods exist since protocol 1.17; documenting the error data is not a protocol change. */
+/* Loads the scene file at `path`, replacing the loaded scenes unless `additive`. A malformed scene text is an INVALID_PARAMS error whose `data` is `{reason, line, entity, component}`: `reason` is one of `syntax` (not TOML), `shape` (wrong table or field layout), `id` (a missing or bad scene ID), `duplicate` (a scene ID used twice), `parent` (a parent that is not in the text) or `value` (a component value of the wrong type); `line` is 1-based, and `entity` (scene ID) and `component` name the failing table where there is one, else null. The text is either the keyed `[entity.0x<16 hex>]` layout (components as sub-tables, sorted by scene ID) or the legacy `[[entity]]` array. Both methods exist since protocol 1.17; documenting the error data is not a protocol change. A scene text may end with `[[prefab.nested]]` entries, one per prefab instance (DENG-799): `asset` is the prefab, `root` the scene ID of the instance root and `ids` a `[prefab-local ID, scene ID]` pair per entity of the instance, all IDs as `0x` and 16 hex digits. The method restores the instance links from them, and an entry that does not resolve is skipped with a warning. This is documentation of the text, not a wire change. */
 struct de_ep_scene_load_params {
     de_ep_str path;
     bool additive;
@@ -1565,12 +1585,13 @@ struct de_ep_scene_params {
     uint64_t scene;
 };
 
-/* Replaces scene `scene` with the entities in `text`. A malformed scene text is an INVALID_PARAMS error whose `data` is `{reason, line, entity, component}`: `reason` is one of `syntax` (not TOML), `shape` (wrong table or field layout), `id` (a missing or bad scene ID), `duplicate` (a scene ID used twice), `parent` (a parent that is not in the text) or `value` (a component value of the wrong type); `line` is 1-based, and `entity` (scene ID) and `component` name the failing table where there is one, else null. The text is either the keyed `[entity.0x<16 hex>]` layout (components as sub-tables, sorted by scene ID) or the legacy `[[entity]]` array. Both methods exist since protocol 1.17; documenting the error data is not a protocol change. */
+/* Replaces scene `scene` with the entities in `text`. A malformed scene text is an INVALID_PARAMS error whose `data` is `{reason, line, entity, component}`: `reason` is one of `syntax` (not TOML), `shape` (wrong table or field layout), `id` (a missing or bad scene ID), `duplicate` (a scene ID used twice), `parent` (a parent that is not in the text) or `value` (a component value of the wrong type); `line` is 1-based, and `entity` (scene ID) and `component` name the failing table where there is one, else null. The text is either the keyed `[entity.0x<16 hex>]` layout (components as sub-tables, sorted by scene ID) or the legacy `[[entity]]` array. Both methods exist since protocol 1.17; documenting the error data is not a protocol change. A scene text may end with `[[prefab.nested]]` entries, one per prefab instance (DENG-799): `asset` is the prefab, `root` the scene ID of the instance root and `ids` a `[prefab-local ID, scene ID]` pair per entity of the instance, all IDs as `0x` and 16 hex digits. The method restores the instance links from them, and an entry that does not resolve is skipped with a warning. This is documentation of the text, not a wire change. */
 struct de_ep_scene_reload_params {
     uint64_t scene;
     de_ep_str text;
 };
 
+/* The text of a scene as `scene.serialize` returns it: the entities in scene-ID order, then one `[[prefab.nested]]` entry per prefab instance whose root the scene saves (DENG-799), in root scene-ID order. An entry is `asset = "props/crate"` (the prefab), `root = "0x<16 hex>"` (the scene ID of the instance root) and `ids = [["0x<16 hex>", "0x<16 hex>"], ...]` (a `[prefab-local ID, scene ID]` pair per entity of the instance, in prefab-local order). An unpacked instance has no entry. The same scene gives the same bytes. This documents the text; the wire format and the protocol version do not change. */
 struct de_ep_scene_text {
     de_ep_str text;
 };

@@ -2621,6 +2621,19 @@ static bool load_dependents(de__editor *ed, const de_ep_request *req, mpack_writ
     return true;
 }
 
+/* Protocol 1.20 (DIDE-387): an override has a `kind`; absent means `field`. The engine applies
+ * and reverts field overrides only. The structural kinds (component_added, component_removed,
+ * entity_added, entity_removed) are DENG-810 and DENG-811, so until then they get a structured
+ * UNSUPPORTED error with reason `kind`. Returns true when the request was refused. */
+static bool reject_structural_kind(const de_ep_override_path_params *q, const de_ep_request *req,
+                                   mpack_writer_t *w) {
+    if (!q->has_kind || q->kind == DE_EP_OVERRIDE_KIND_FIELD)
+        return false;
+    prefab_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "kind",
+                 "override kind %s is not supported yet", de_ep_override_kind_name(q->kind));
+    return true;
+}
+
 /* prefab.applyOverride: the instance's value becomes the value of `target` (default: the
  * instance's prefab) and of every level between. The change flows on to the variants and
  * nesting prefabs that did not set the field themselves, and to every instance that had the old
@@ -2632,7 +2645,7 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
         prefab_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "params", "bad params");
         return;
     }
-    if (reject_request(ed, req, w, &q))
+    if (reject_request(ed, req, w, &q) || reject_structural_kind(&q, req, w))
         return;
     char *path = de__ed_cstr(a, q.path);
     ed_kind entity = {0};
@@ -2855,7 +2868,7 @@ static void on_revert(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
         prefab_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "params", "bad params");
         return;
     }
-    if (reject_request(ed, req, w, &q))
+    if (reject_request(ed, req, w, &q) || reject_structural_kind(&q, req, w))
         return;
     char *path = de__ed_cstr(a, q.path);
     ed_kind entity = {0};

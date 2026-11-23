@@ -610,9 +610,9 @@ notes = "Joe-Kuo D(6) numeric inputs for the generated 1024-dimensional PT matri
 # cache before offline verification (see docs/building.md).
 [[lib]]
 name = "dide_protocol"
-version = "1.19-96c310787fb6"
-url = "https://api.github.com/repos/dmoore-dwmmholdings/dide/tarball/96c310787fb6b1c9c6e86cdf23f6800a5fa0d64a"
-sha256 = "7e9e05f4f92d8f39d5a55a81b8707fe5a96970f917fe01f3d78f609513667979"
+version = "1.20-4664d8fccfbd"
+url = "https://api.github.com/repos/dmoore-dwmmholdings/dide/tarball/4664d8fccfbddbaf7490c1d288633aaaaa932761"
+sha256 = "96b7ff45b5cb1b28315c7750e162cc914577936f7c7b0b58a899fd6c1f61bf3e"
 license = "MIT"
 strip = 3
 license_file = "third_party/mpack/LICENSE"
@@ -629,5 +629,7 @@ local = ["CMakeLists.txt", "patches/**"]
 # PrefabErrorData; DIDE-R37).
 # DENG-801: pinned at DIDE main 96c3107 (protocol 1.19, DIDE-383: prefab.unpack, ApplyResult.files;
 # DIDE-R37).
+# DENG-809: pinned at DIDE main 4664d8f (protocol 1.20, DIDE-387: optional override kind/parent/local;
+# DIDE-385: Windows named-pipe readiness via overlapped read).
 patches = ["patches/0001-raw-values-preserve-reader-tracking.patch"]
 notes = "Dev-only: linked by the host's editor service (src/host/editor), never in Shipping."

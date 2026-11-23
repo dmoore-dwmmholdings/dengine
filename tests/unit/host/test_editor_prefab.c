@@ -544,7 +544,7 @@ static de_entity first_child(safety_fx *f, de_entity e) {
 /* One prefab call with {entity, path?, target?, revision?, tx?}. The response is parsed into
  * `tree` over `response`; the caller destroys the tree. */
 typedef struct pf_call {
-    const char *path, *target;
+    const char *path, *target, *kind; /* kind: protocol 1.20 override kind, NULL = absent */
     bool has_revision;
     u64 revision;
     u32 tx;
@@ -561,6 +561,10 @@ static mpack_node_t prefab_call(safety_fx *f, de_ep_method method, de_entity e, 
     if (c.path != NULL) {
         mpack_write_cstr(&w, "path");
         mpack_write_cstr(&w, c.path);
+    }
+    if (c.kind != NULL) {
+        mpack_write_cstr(&w, "kind");
+        mpack_write_cstr(&w, c.kind);
     }
     if (c.target != NULL) {
         mpack_write_cstr(&w, "target");
@@ -935,6 +939,27 @@ TEST_F(editor_prefab_overrides, results_and_error_data_have_the_1_19_shapes, saf
     static const char *const data_keys[] = {"reason", "revision"};
     expect_keys(mpack_node_map_cstr(mpack_node_map_cstr(root, "error"), "data"), data_keys, 2);
     EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
+}
+
+/* DENG-809: protocol 1.20 override kinds. A missing kind or kind "field" behaves as before; the
+ * structural kinds are not implemented (DENG-810, DENG-811) and answer UNSUPPORTED reason kind,
+ * without changing the world. */
+TEST_F(editor_prefab_overrides, structural_kinds_are_unsupported, safety_fx) {
+    const pf_world p = prefab_world(f);
+    const de_entity a = spawn_prefab(f, "props/crate");
+    ((THealth *)de_entity_get(f->engine.world, a, p.health))->max = 3;
+    static const char *const kinds[] = {"component_added", "component_removed", "entity_added",
+                                        "entity_removed"};
+    const de_ep_method methods[] = {DE_EP_METHOD_PREFAB_APPLY_OVERRIDE,
+                                    DE_EP_METHOD_PREFAB_REVERT_OVERRIDE};
+    for (u32 m = 0; m < 2; ++m)
+        for (u32 k = 0; k < 4; ++k)
+            prefab_fails(f, methods[m], a, (pf_call){.path = "THealth", .kind = kinds[k]},
+                         DE_EP_ERR_UNSUPPORTED, "kind");
+    /* The refused calls changed nothing, and an explicit field kind still applies. */
+    EXPECT_FLOAT_EQ(((THealth *)de_entity_get(f->engine.world, a, p.health))->max, 3.0f, 1e-6f);
+    EXPECT_TRUE(prefab_ok(f, DE_EP_METHOD_PREFAB_REVERT_OVERRIDE, a,
+                          (pf_call){.path = "THealth.max", .kind = "field"}) != 0);
 }
 
 TEST_F(editor_prefab_overrides, errors_are_structured, safety_fx) {
