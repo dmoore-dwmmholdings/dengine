@@ -45,6 +45,10 @@ static void safety_fx_setup(safety_fx *f) {
     f->ed.note_cap = sizeof f->note;
 }
 static void copy_remove(safety_fx *f);
+#if !DE_HAS_COOKER
+/* The writable fixture copy is made only by the cooker-dependent tests. */
+static void copy_remove(safety_fx *f) { (void)f; }
+#endif
 static void safety_fx_teardown(safety_fx *f) {
     for (u32 i = 0; i < f->ed.reset_count; ++i)
         f->ed.resets[i](&f->ed);
@@ -1970,9 +1974,6 @@ TEST_F(editor_prefab_links, an_unpacked_instance_saves_no_link, safety_fx) {
     EXPECT_EQ(overrides_all(f, entity_of(f, 1, b_sid), got), 0);
     EXPECT_STREQ(scene_text(f, 1), saved);
 }
-#endif
-
-#endif
 
 /* ---------- DENG-810: structural overrides of components (SPEC 9.2, DIDE-R37) ---------- */
 
@@ -2694,3 +2695,7 @@ TEST_F(editor_prefab_entities, errors_are_structured_and_write_nothing, safety_f
     EXPECT_TRUE(overrides_of(f, a, a, "").found);
     EXPECT_TRUE(overrides_of(f, b, n, "").found);
 }
+
+#endif /* DE_HAS_COOKER */
+
+#endif /* !DE_SHIPPING */
