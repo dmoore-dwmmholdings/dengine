@@ -806,12 +806,153 @@ DE_API void de_asset_set_budgets(de_asset_system *s, const de_asset_budgets *b);
  * eviction leaves unreferenced. Resident bundle members and referenced assets stay. Main thread.
  */
 DE_API void de_asset_flush_unused(de_asset_system *s); /* evict every zero-ref asset now */
+/* ---------- World streaming (DENG-271) ----------
+ *
+ * A streamed world is declared in the manifest:
+ *
+ *     [worlds.<name>]
+ *     scenes = ["levels/island"]   # scene assets the world cook splits into cells (required)
+ *     cells_dir = "worlds/<name>"  # where `de-cook world` writes the cells (default shown)
+ *     cell_size = 256              # metres; only 256 is accepted
+ *     load_radius = 512.0          # a cell starts loading inside this distance of a source
+ *     unload_radius = 640.0        # and unloads outside this one (> load_radius; default 1.25x)
+ *     max_loads_per_frame = 4      # cell loads started per de_world_partition_update, 1..64
+ *     [worlds.<name>.proxy]
+ *     enabled = true               # far proxies for unloaded cells
+ *     triangle_ratio = 0.05        # proxy simplification target, (0, 1]
+ *     fade_seconds = 0.5           # proxy-to-cell crossfade, [0, 60]
+ *
+ * `de-cook world <assets.toml> --world <name>` splits the scenes into 256 m cells on the x/y
+ * plane (Z is up): cell (cx, cy) covers [cx*256, cx*256+256) x [cy*256, cy*256+256) and its
+ * origin is (cx*256, cy*256, 0). Each root entity goes to the cell that holds its position, with
+ * its position stored relative to that origin; children follow their root. Every non-empty cell
+ * becomes a scene asset "world/<name>/cell_<cx>_<cy>" and a bundle of the same name, listed in a
+ * generated `cells.toml` that the project includes. The output is byte-identical for the same
+ * input.
+ */
+/** Most streaming sources the asset system keeps; extra ones are ignored. */
+#define DE_ASSET_MAX_STREAMING_SOURCES 16u
+
+/** A point that wants the world around it loaded: a camera, a player, a cutscene target. */
 typedef struct de_streaming_source {
     f64 x, y, z;
-    f32 radius;
+    f32 radius; /**< 0 = the world's load_radius */
 } de_streaming_source;
+/**
+ * Replaces the streaming sources (count 0 clears them; at most DE_ASSET_MAX_STREAMING_SOURCES
+ * are kept). The world partition reads them at its next update. Copies; no allocation. Main
+ * thread.
+ */
 DE_API void de_asset_set_streaming_sources(de_asset_system *s, const de_streaming_source *src,
                                            u32 count);
+/** The current streaming sources; returns the count and sets `*out` (may be NULL). */
+DE_API u32 de_asset_get_streaming_sources(const de_asset_system *s,
+                                          const de_streaming_source **out);
+
+/** `[worlds.<name>]` with defaults applied. Strings live until the next manifest load. */
+typedef struct de_asset_world_info {
+    const char *name;
+    const char *cells_dir;
+    u32 cell_size;
+    f32 load_radius, unload_radius;
+    u32 max_loads_per_frame;
+    u32 scene_count;
+    bool proxy_enabled;
+    f32 proxy_triangle_ratio, proxy_fade_seconds;
+} de_asset_world_info;
+/** Looks up a world of the active manifest. DE_ERR_NOT_FOUND when there is none. */
+DE_API de_result de_asset_world_info_get(const de_asset_system *s, const char *name,
+                                         de_asset_world_info *out);
+/** Bundles of the active manifest, in declaration order (0 without a manifest). */
+DE_API u32 de_asset_bundle_count(const de_asset_system *s);
+/** The name of bundle `index`, or NULL when out of range. Lives until the next manifest load. */
+DE_API const char *de_asset_bundle_name(const de_asset_system *s, u32 index);
+
+/* ---- World partition (src/world/streaming) ----
+ *
+ * Streams the cells of one world around the streaming sources. Each update: gather sources
+ * (every entity with DeStreamingSource and DeGlobalTransform, else DeTransform, plus the ones
+ * set with de_asset_set_streaming_sources), start loads for unloaded cells inside the load
+ * radius, nearest first (ties by cx then cy) and at most `max_loads_per_frame`, unload loaded
+ * cells outside the unload radius, and instantiate cells whose bundle became READY. A loaded
+ * cell is one entity with DeTransform at the cell origin (in f64) and DeWorldCell, holding the
+ * cell's entities as children, so transform propagation composes the large offset in double.
+ * The update allocates nothing in steady state; loads and instantiation allocate in the asset
+ * system and the ECS. Main thread, outside ECS systems.
+ */
+typedef struct de_world_partition de_world_partition;
+
+/** Component: makes an entity a streaming source. A zeroed one uses the world's load_radius. */
+typedef struct DeStreamingSource {
+    f32 radius; /**< 0 = the world's load_radius */
+} DeStreamingSource;
+/** Component on a loaded cell's root entity. */
+typedef struct DeWorldCell {
+    i32 cx, cy;
+} DeWorldCell;
+
+typedef struct de_world_partition_desc {
+    const de_allocator *allocator; /**< NULL = de_heap_allocator() */
+    /** Overrides of the manifest values; 0 keeps the manifest's. */
+    f32 load_radius, unload_radius;
+    u32 max_loads_per_frame;
+    /** Most cells loaded or loading at once (0 = 256). Loads stop at the cap. */
+    u32 max_resident_cells;
+    /** Called after a cell is instantiated (`root` is its entity) and before it is despawned. */
+    void (*on_cell)(void *user, i32 cx, i32 cy, de_entity root, bool loaded);
+    void *user;
+} de_world_partition_desc;
+
+typedef enum de_world_cell_state {
+    DE_WORLD_CELL_UNLOADED = 0,
+    DE_WORLD_CELL_LOADING = 1,
+    DE_WORLD_CELL_LOADED = 2,
+    DE_WORLD_CELL_FAILED = 3
+} de_world_cell_state;
+
+typedef struct de_world_partition_stats {
+    u32 cell_count;     /**< cells the world has (non-empty, from the manifest bundles) */
+    u32 cells_loaded;   /**< instantiated */
+    u32 cells_loading;  /**< bundle requested, not READY yet */
+    u32 loads_started;  /**< in the last update */
+    u32 unloads;        /**< in the last update */
+    u64 total_loads, total_unloads;
+} de_world_partition_stats;
+
+/**
+ * Opens world `name` of the active manifest of `assets` in ECS world `world`. Registers
+ * DeStreamingSource and DeWorldCell in `world` (if missing). `desc` may be NULL.
+ * DE_ERR_NOT_FOUND when the manifest has no such world.
+ */
+DE_API de_result de_world_partition_open(de_asset_system *assets, de_world *world,
+                                         const char *name, const de_world_partition_desc *desc,
+                                         de_world_partition **out);
+/** Despawns every loaded cell, releases every request, frees the partition. NULL is a no-op. */
+DE_API void de_world_partition_close(de_world_partition *p);
+/** One streaming step; `dt` (seconds) advances the far-proxy crossfades. */
+DE_API de_result de_world_partition_update(de_world_partition *p, f32 dt);
+DE_API de_world_partition_stats de_world_partition_get_stats(const de_world_partition *p);
+/** State of cell (cx, cy); UNLOADED for a cell the world does not have. */
+DE_API de_world_cell_state de_world_partition_cell_state(const de_world_partition *p, i32 cx,
+                                                         i32 cy);
+/** The cell that holds world position (x, y): floor(x / 256), floor(y / 256). */
+DE_API void de_world_cell_of(f64 x, f64 y, i32 *cx, i32 *cy);
+
+/**
+ * Far proxy of cell (cx, cy): visible while the cell is not loaded and for `fade_seconds` after
+ * it loads, with `alpha` going 1 -> 0 over the fade (the cell's own alpha is 1 - alpha). Returns
+ * false when the world has no such cell or proxies are disabled.
+ */
+DE_API bool de_world_partition_proxy(const de_world_partition *p, i32 cx, i32 cy, bool *visible,
+                                     f32 *alpha);
+
+/**
+ * Cell origins relative to the camera, for the GPU (SPEC §5.5): `out[i]` gets
+ * (origin(cells[2i], cells[2i+1]) - camera) computed in f64, then rounded to f32. `cells` holds
+ * `count` (cx, cy) pairs. No allocation.
+ */
+DE_API void de_world_cell_origins_relative(const i32 *cells, u32 count, de_dvec3 camera,
+                                           de_vec3 *out);
 
 typedef struct de_asset_stats {
     u32 loads_in_flight, uploads_in_flight, assets_resident;

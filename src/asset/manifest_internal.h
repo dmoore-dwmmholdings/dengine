@@ -101,6 +101,21 @@ typedef struct de__manifest_bundle {
     de__manifest_priority priority;
 } de__manifest_bundle;
 
+/** `[worlds.<name>]` (DENG-271): one streamed world. Every field has its default when unset. */
+typedef struct de__manifest_world {
+    const char *name;
+    const char *file; /**< normalised vpath of the manifest file that declared it */
+    u32 line;
+    const char *const *scenes; /**< scene asset IDs the world cook splits into cells */
+    u32 scene_count;
+    const char *cells_dir; /**< relative to asset_root; "" = "worlds/<name>" */
+    u32 cell_size;         /**< metres; only 256 is accepted */
+    f32 load_radius, unload_radius;
+    u32 max_loads_per_frame;
+    bool proxy_enabled;
+    f32 proxy_triangle_ratio, proxy_fade_seconds;
+} de__manifest_world;
+
 typedef struct de__manifest {
     const char *root;       /**< normalised vpath of the root manifest */
     const char *asset_root; /**< `[project] asset_root`; "" when not set */
@@ -114,6 +129,8 @@ typedef struct de__manifest {
     u32 asset_count;
     const de__manifest_bundle *bundles;
     u32 bundle_count;
+    const de__manifest_world *worlds; /**< DENG-271: declaration order */
+    u32 world_count;
     const de__manifest_issue *issues; /**< file order, then key order */
     u32 issue_count;
     u32 error_count, warning_count, info_count;
@@ -159,6 +176,8 @@ void de__manifest_destroy(de__manifest *m);
 const de__manifest_asset *de__manifest_find_asset(const de__manifest *m, const char *id);
 /** The bundle with this name, or NULL. Linear. */
 const de__manifest_bundle *de__manifest_find_bundle(const de__manifest *m, const char *name);
+/** The world named `name`, or NULL (DENG-271). */
+const de__manifest_world *de__manifest_find_world(const de__manifest *m, const char *name);
 /** The defaults of `type`, or NULL. Linear. */
 const de__manifest_defaults *de__manifest_find_defaults(const de__manifest *m, const char *type);
 /** The setting `key` in a sorted settings list, or NULL. */

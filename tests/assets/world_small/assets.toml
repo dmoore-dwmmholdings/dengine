@@ -1,0 +1,19 @@
+# DENG-271 fixture: a small streamed world (tests/unit/streaming/test_world_cook.c).
+# `de-cook world assets.toml --world small` writes assets/worlds/small/ (committed as the golden
+# output); the include below then declares its cell scenes and bundles.
+[project]
+asset_root = "assets"
+include = ["assets/worlds/small/cells.toml"]
+
+[assets]
+"levels/small_terrain" = { type = "scene", source = "scenes/terrain.scene.toml" }
+"levels/small_props"   = { type = "scene", source = "scenes/props.scene.toml" }
+
+[worlds.small]
+scenes = ["levels/small_terrain", "levels/small_props"]
+load_radius = 384.0
+unload_radius = 512.0
+max_loads_per_frame = 2
+
+[worlds.small.proxy]
+fade_seconds = 0.25

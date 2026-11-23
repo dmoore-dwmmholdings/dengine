@@ -263,3 +263,15 @@ target_sources(de_cooker PRIVATE importers/aseprite/aseprite_import.c
 target_sources(de_cooker PRIVATE importers/navmesh/navmesh_import.h
     importers/navmesh/navmesh_import.c)
 target_link_libraries(de_cooker PRIVATE de_nav_build)
+
+# DENG-271: `de-cook world` (world_cells.c): splits the scenes of a [worlds.<name>] world into
+# 256 m streaming cells (cell_<x>_<y>.scene.toml) and writes their cells.toml. A library, so
+# tests/unit/streaming/ runs it in-process. Reads the manifest internals through the src/ root and
+# shares the cell math of src/world/streaming/streaming_internal.h (header-only).
+add_library(de_cook_world STATIC world_cells.c world_cells.h)
+target_include_directories(de_cook_world PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
+    PRIVATE "${DE_ROOT_DIR}/src")
+target_link_libraries(de_cook_world PUBLIC de_cook_check
+    PRIVATE de_asset de_reflect de_core de_platform de_tp_tomlc17 de_build_flags)
+set_target_properties(de_cook_world PROPERTIES FOLDER "dengine/tools")
+target_link_libraries(de-cook PRIVATE de_cook_world)

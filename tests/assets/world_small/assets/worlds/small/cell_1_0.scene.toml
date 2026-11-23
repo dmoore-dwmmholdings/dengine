@@ -1,0 +1,7 @@
+# world/small/cell_1_0: cell (1, 0) of world "small" (de-cook world)
+
+[entity.0x0000000000000002]
+[entity.0x0000000000000002.DeTransform]
+position = [44.5, 12.25, 1.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]

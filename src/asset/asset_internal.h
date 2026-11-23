@@ -106,6 +106,10 @@ struct de_asset_system {
     de__asset_destroy_observer *destroy_observers;
     /* DENG-721: loader user storage must survive the last unload, in either owner order. */
     de__asset_destroy_observer *destroy_finalizers;
+
+    /* ---- DENG-271: streaming sources (world_stream.c) ------------------------------------ */
+    de_streaming_source stream_sources[DE_ASSET_MAX_STREAMING_SOURCES];
+    u32 stream_source_count;
 };
 
 /** Main thread; observer is zero-initialized and not already registered. No allocation. */

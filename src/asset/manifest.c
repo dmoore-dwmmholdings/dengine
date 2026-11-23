@@ -162,6 +162,7 @@ typedef struct mf_parser {
     de_array defaults; /* mf_defaults_b, arena */
     de_array assets;   /* de__manifest_asset, arena; settings = own keys until finalize */
     de_array bundles;  /* de__manifest_bundle, arena */
+    de_array worlds;   /* de__manifest_world, arena (DENG-271) */
     de_array issues;   /* de__manifest_issue, arena */
 
     de_hashmap asset_ids;    /* de_hash64_str(id) -> u32 index into assets, tmp */
@@ -892,6 +893,198 @@ static bool mf_bundles(mf_parser *p, const toml_datum_t *t) {
     return true;
 }
 
+/* ---- [worlds.<name>] (DENG-271) ---------------------------------------------------------- */
+
+/* A number (integer or float) as a double; false when `v` is not a number. */
+static bool mf_number(const toml_datum_t *v, double *out) {
+    if (v->type == TOML_INT64) {
+        *out = (double)v->u.int64;
+        return true;
+    }
+    if (v->type == TOML_FP64) {
+        *out = v->u.fp64;
+        return true;
+    }
+    return false;
+}
+
+static bool mf_world_proxy(mf_parser *p, de__manifest_world *w, const toml_datum_t *t,
+                           bool *valid) {
+    if (t->type != TOML_TABLE) {
+        *valid = false;
+        return MF_ERROR(p, mf_line(t), "expected a table, found %s", mf_type_name(t->type));
+    }
+    for (int32_t i = 0; i < t->u.tab.size; ++i) {
+        const toml_datum_t *v = &t->u.tab.value[i];
+        if (!mf_kp_push(p, t->u.tab.key[i], (size_t)t->u.tab.len[i]))
+            return false;
+        bool ok = true;
+        double d = 0.0;
+        if (mf_key_is(t, i, "enabled")) {
+            if (v->type != TOML_BOOLEAN) {
+                *valid = false;
+                ok = MF_ERROR(p, mf_line(v), "expected a boolean, found %s", mf_type_name(v->type));
+            } else {
+                w->proxy_enabled = v->u.boolean;
+            }
+        } else if (mf_key_is(t, i, "triangle_ratio")) {
+            if (!mf_number(v, &d) || !(d > 0.0 && d <= 1.0)) {
+                *valid = false;
+                ok = MF_ERROR(p, mf_line(v), "triangle_ratio is a number in (0, 1]");
+            } else {
+                w->proxy_triangle_ratio = (f32)d;
+            }
+        } else if (mf_key_is(t, i, "fade_seconds")) {
+            if (!mf_number(v, &d) || !(d >= 0.0 && d <= 60.0)) {
+                *valid = false;
+                ok = MF_ERROR(p, mf_line(v), "fade_seconds is a number in [0, 60]");
+            } else {
+                w->proxy_fade_seconds = (f32)d;
+            }
+        } else {
+            ok = MF_WARNING(p, mf_line(v), "unknown key in world proxy \"%s\"; ignored", w->name);
+        }
+        mf_kp_pop(p);
+        if (!ok)
+            return false;
+    }
+    return true;
+}
+
+static bool mf_world(mf_parser *p, const char *name, size_t name_len, const toml_datum_t *t) {
+    int line = mf_line(t);
+    if (name_len == 0)
+        return MF_ERROR(p, line, "empty world name");
+    if (t->type != TOML_TABLE)
+        return MF_ERROR(p, line, "a world is a table; found %s", mf_type_name(t->type));
+    const char *name_copy = mf_strndup(p, name, name_len);
+    if (name_copy == NULL)
+        return false;
+    for (size_t i = 0; i < name_len; ++i) {
+        char c = name_copy[i];
+        bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+        if (!ok)
+            return MF_ERROR(p, line,
+                            "world name \"%s\": use lower-case letters, digits, '_' and '-'",
+                            name_copy);
+    }
+    for (u32 i = 0; i < p->worlds.count; ++i) {
+        const de__manifest_world *first = &DE_ARRAY_AT(&p->worlds, de__manifest_world, i);
+        if (strcmp(first->name, name_copy) == 0)
+            return MF_ERROR(p, line, "duplicate world \"%s\": declared in %s (line %u) and in %s",
+                            name_copy, first->file, first->line, p->cur_file);
+    }
+    de__manifest_world w = {0};
+    w.name = name_copy;
+    w.file = p->cur_file;
+    w.line = line > 0 ? (u32)line : 0u;
+    w.cells_dir = "";
+    w.cell_size = 256;
+    w.load_radius = 512.0f;
+    w.unload_radius = 640.0f;
+    w.max_loads_per_frame = 4;
+    w.proxy_enabled = true;
+    w.proxy_triangle_ratio = 0.05f;
+    w.proxy_fade_seconds = 0.5f;
+    bool broken = false, has_scenes = false, has_unload = false;
+    for (int32_t i = 0; i < t->u.tab.size; ++i) {
+        const toml_datum_t *v = &t->u.tab.value[i];
+        if (!mf_kp_push(p, t->u.tab.key[i], (size_t)t->u.tab.len[i]))
+            return false;
+        bool ok = true, valid = true;
+        double d = 0.0;
+        if (mf_key_is(t, i, "scenes")) {
+            ok = mf_string_array(p, v, &w.scenes, &w.scene_count, &valid);
+            has_scenes = true;
+        } else if (mf_key_is(t, i, "cells_dir")) {
+            if (v->type != TOML_STRING || v->u.str.len == 0 || v->u.str.ptr[0] == '/' ||
+                strstr(v->u.str.ptr, "..") != NULL || strchr(v->u.str.ptr, '\\') != NULL) {
+                valid = false;
+                ok = MF_ERROR(p, mf_line(v),
+                              "cells_dir is a relative path inside the asset root, without ..");
+            } else {
+                w.cells_dir = mf_strndup(p, v->u.str.ptr, (size_t)v->u.str.len);
+                ok = w.cells_dir != NULL;
+            }
+        } else if (mf_key_is(t, i, "cell_size")) {
+            if (v->type != TOML_INT64 || v->u.int64 != 256) {
+                valid = false;
+                ok = MF_ERROR(p, mf_line(v), "cell_size must be 256 (metres)");
+            }
+        } else if (mf_key_is(t, i, "load_radius")) {
+            if (!mf_number(v, &d) || !(d > 0.0 && d <= 1.0e6)) {
+                valid = false;
+                ok = MF_ERROR(p, mf_line(v), "load_radius is a number in (0, 1e6] metres");
+            } else {
+                w.load_radius = (f32)d;
+            }
+        } else if (mf_key_is(t, i, "unload_radius")) {
+            if (!mf_number(v, &d) || !(d > 0.0 && d <= 1.0e6)) {
+                valid = false;
+                ok = MF_ERROR(p, mf_line(v), "unload_radius is a number in (0, 1e6] metres");
+            } else {
+                w.unload_radius = (f32)d;
+                has_unload = true;
+            }
+        } else if (mf_key_is(t, i, "max_loads_per_frame")) {
+            if (v->type != TOML_INT64 || v->u.int64 < 1 || v->u.int64 > 64) {
+                valid = false;
+                ok = MF_ERROR(p, mf_line(v), "max_loads_per_frame is an integer in [1, 64]");
+            } else {
+                w.max_loads_per_frame = (u32)v->u.int64;
+            }
+        } else if (mf_key_is(t, i, "proxy")) {
+            ok = mf_world_proxy(p, &w, v, &valid);
+        } else {
+            ok = MF_WARNING(p, mf_line(v), "unknown key in world \"%s\"; ignored", name_copy);
+        }
+        broken |= !valid;
+        mf_kp_pop(p);
+        if (!ok)
+            return false;
+    }
+    if (!has_scenes || (w.scene_count == 0 && !broken)) {
+        broken = true;
+        if (!MF_ERROR(p, line, "world \"%s\" needs a non-empty scenes = [...] list", name_copy))
+            return false;
+    }
+    if (!has_unload)
+        w.unload_radius = w.load_radius * 1.25f;
+    if (!broken && !(w.unload_radius > w.load_radius)) {
+        broken = true;
+        if (!MF_ERROR(p, line, "world \"%s\": unload_radius must be greater than load_radius",
+                      name_copy))
+            return false;
+    }
+    if (broken)
+        return true; /* reported; not added */
+    if (w.cells_dir[0] == '\0') {
+        char buf[DE_FS_PATH_MAX];
+        int n = snprintf(buf, sizeof buf, "worlds/%s", name_copy);
+        if (n < 0 || (size_t)n >= sizeof buf)
+            return MF_ERROR(p, line, "world name \"%s\" is too long", name_copy);
+        w.cells_dir = mf_strdup(p, buf);
+        if (w.cells_dir == NULL)
+            return false;
+    }
+    return de_array_push(&p->worlds, &w) == DE_OK;
+}
+
+static bool mf_worlds(mf_parser *p, const toml_datum_t *t) {
+    if (t->type != TOML_TABLE)
+        return MF_ERROR(p, mf_line(t), "expected a table of [worlds.<name>] tables, found %s",
+                        mf_type_name(t->type));
+    for (int32_t i = 0; i < t->u.tab.size; ++i) {
+        if (!mf_kp_push(p, t->u.tab.key[i], (size_t)t->u.tab.len[i]))
+            return false;
+        bool ok = mf_world(p, t->u.tab.key[i], (size_t)t->u.tab.len[i], &t->u.tab.value[i]);
+        mf_kp_pop(p);
+        if (!ok)
+            return false;
+    }
+    return true;
+}
+
 /* ---- Files and includes ------------------------------------------------------------------ */
 
 /* The line in a tomlc17 error message ("(line 12) ..."), or 0. */
@@ -1019,6 +1212,8 @@ static bool mf_walk(mf_parser *p, const toml_datum_t *top, const toml_datum_t **
             ok = mf_assets(p, v);
         else if (mf_key_is(top, i, "bundles"))
             ok = mf_bundles(p, v);
+        else if (mf_key_is(top, i, "worlds"))
+            ok = mf_worlds(p, v);
         else if (mf_is_variants(top, i))
             ok = mf_note_variants(p, v);
         else
@@ -1164,6 +1359,8 @@ static bool mf_finalize(mf_parser *p) {
     m->asset_count = p->assets.count;
     m->bundles = (const de__manifest_bundle *)p->bundles.data;
     m->bundle_count = p->bundles.count;
+    m->worlds = (const de__manifest_world *)p->worlds.data;
+    m->world_count = p->worlds.count;
     m->issues = (const de__manifest_issue *)p->issues.data;
     m->issue_count = p->issues.count;
     if (m->asset_root == NULL)
@@ -1217,6 +1414,7 @@ de_result de__manifest_parse(const de__manifest_parse_desc *d, de__manifest **ou
     DE_ARRAY_INIT_TAG(&p.defaults, mf_defaults_b, &p.aa, DE_MEM_ASSET);
     DE_ARRAY_INIT_TAG(&p.assets, de__manifest_asset, &p.aa, DE_MEM_ASSET);
     DE_ARRAY_INIT_TAG(&p.bundles, de__manifest_bundle, &p.aa, DE_MEM_ASSET);
+    DE_ARRAY_INIT_TAG(&p.worlds, de__manifest_world, &p.aa, DE_MEM_ASSET);
     DE_ARRAY_INIT_TAG(&p.issues, de__manifest_issue, &p.aa, DE_MEM_ASSET);
     de_strbuf_init(&p.keypath, p.tmp);
     p.keypath.tag = DE_MEM_ASSET;
@@ -1339,4 +1537,13 @@ const char *de__manifest_source_for(const de__manifest *m, const de__manifest_as
             --len; /* the separator */
     }
     return asset->source;
+}
+
+const de__manifest_world *de__manifest_find_world(const de__manifest *m, const char *name) {
+    if (m == NULL || name == NULL)
+        return NULL;
+    for (u32 i = 0; i < m->world_count; ++i)
+        if (strcmp(m->worlds[i].name, name) == 0)
+            return &m->worlds[i];
+    return NULL;
 }
