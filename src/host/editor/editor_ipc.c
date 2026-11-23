@@ -1,6 +1,7 @@
 /* editor_ipc.c: the editor service's IPC thread and its two queues (DENG-784). See editor_ipc.h. */
 #include "host/editor/editor_ipc.h"
 #include "host/editor/editor_crash.h"
+#include "host/editor/editor_internal.h" /* de__ed_error for `busy` */
 
 #include <dengine/de_memory.h>
 #include <dengine/de_platform.h>
@@ -9,6 +10,10 @@
 #include "platform/de_atomic.h"
 
 #include <string.h>
+
+#ifndef _WIN32
+#include <sys/socket.h>
+#endif
 
 /* The thread waits this long in recv while connected: the most a frame's reply waits to be sent.
  * A small read is answered as soon as it arrives (recv returns on data). */
@@ -117,6 +122,7 @@ struct de__ed_ipc {
     const char *broken; /* the link failed or the frame dropped it: close at the next step */
     u64 rival_since_ns;
     u32 epoch;
+    u32 in_flight; /* requests posted to the frame this epoch and not yet answered */
     u64 next_seq;
     char *recv;
     unsigned char *small_arena;
@@ -196,10 +202,14 @@ static void flush_out(de__ed_ipc *ipc) {
                           ipc->broken == NULL && r->epoch == ipc->epoch;
         if (r->seq > ipc->next_seq)
             ipc->next_seq = r->seq;
-        if (live && r->type == REC_DROP)
+        if (live && r->type == REC_DROP) {
             ipc->broken = "closed by the engine";
-        else if (live && r->type == REC_SEND)
+        } else if (live && r->type == REC_SEND) {
+            /* The frame answers each posted request with exactly one response. */
+            if (r->kind == DE_EP_KIND_RESPONSE && ipc->in_flight > 0)
+                --ipc->in_flight;
             (void)send_now(ipc, r->kind, ipc_payload(r), (size_t)r->len);
+        }
         de_mutex_lock(&ipc->mu);
         ring_pop(&ipc->out);
         de_cond_signal(&ipc->out_room);
@@ -232,6 +242,14 @@ static void rival_pump(de__ed_ipc *ipc) {
             return;
         ipc->rival_open = true;
         ipc->rival_since_ns = de_time_now_ns();
+    }
+    /* The live client may have closed and reconnected inside one receive timeout. Its close is
+     * already visible on the live socket, so do not answer `conflict`: mark the link broken and let
+     * the loop adopt this client as the new link with its hello still unread. */
+    char probe;
+    if (recv(ipc->conn.fd, &probe, 1, MSG_PEEK | MSG_DONTWAIT) == 0) {
+        ipc->broken = "closed";
+        return;
     }
     u8 kind = 0;
     size_t len = 0;
@@ -294,6 +312,18 @@ static void on_request(de__ed_ipc *ipc, const de_ep_request *req, size_t len) {
     } else {
         (void)mpack_writer_destroy(&w);
     }
+    /* IPC "Limits": "A request over a limit gets `busy` with `data: { retryAfterMs }`." Only
+     * requests that wait for the frame are in flight; the fast path above answers at once. */
+    if (ipc->in_flight >= DE_EP_LIMIT_REQUESTS_IN_FLIGHT) {
+        mpack_writer_init(&w, ipc->small_out, IPC_SMALL_CAP);
+        de__ed_error(&w, req->id, DE_EP_ERR_BUSY, "%u requests in flight",
+                     (unsigned)DE_EP_LIMIT_REQUESTS_IN_FLIGHT);
+        const size_t used = mpack_writer_buffer_used(&w);
+        if (mpack_writer_destroy(&w) == mpack_ok)
+            (void)send_now(ipc, DE_EP_KIND_RESPONSE, ipc->small_out, used);
+        return;
+    }
+    ++ipc->in_flight;
     (void)post(ipc, REC_REQUEST, NULL, 0, 0, false, ipc->recv, len);
 }
 
@@ -311,22 +341,34 @@ static i32 ipc_main(void *user) {
             continue;
         }
         if (!linked) {
-            if (de_ep_accept(&ipc->listener, &ipc->conn, (u32)ipc->desc.max_frame,
-                             IPC_ACCEPT_TIMEOUT_MS) == DE_EP_IO_OK) {
+            /* An IDE that connected while the old link was still up, and has not been answered
+             * `conflict` yet, is the next link (DENG-555: a reconnect right after a drop). */
+            bool adopted = false;
+            if (ipc->rival_open) {
+                ipc->conn = ipc->rival;
+                ipc->rival_open = false;
+                adopted = true;
+            }
+            if (adopted || de_ep_accept(&ipc->listener, &ipc->conn, (u32)ipc->desc.max_frame,
+                                        IPC_ACCEPT_TIMEOUT_MS) == DE_EP_IO_OK) {
                 ++ipc->epoch;
+                ipc->in_flight = 0; /* the frame drops the old epoch's requests */
                 ipc->authed = false;
                 ipc->broken = NULL;
                 de_atomic_store_u32(&ipc->linked, 1, DE_ATOMIC_RELEASE);
             }
             continue;
         }
-        rival_pump(ipc);
+        /* The live link is read before a second client is looked at, so an IDE that closes and
+         * reconnects at once is seen as gone, not answered `conflict` (DENG-555). */
         u8 kind = 0;
         size_t len = 0;
         const de_ep_io io = de_ep_recv(&ipc->conn, ipc->recv, ipc->desc.max_frame, &kind, &len,
                                        IPC_RECV_TIMEOUT_MS);
-        if (io == DE_EP_IO_TIMEOUT)
+        if (io == DE_EP_IO_TIMEOUT) {
+            rival_pump(ipc);
             continue;
+        }
         if (io != DE_EP_IO_OK) {
             ipc->broken = io == DE_EP_IO_CLOSED ? "closed" : "read failed";
             continue;
@@ -340,6 +382,8 @@ static i32 ipc_main(void *user) {
             on_hello(ipc, &req);
         else
             on_request(ipc, &req, len);
+        if (ipc->broken == NULL)
+            rival_pump(ipc); /* a busy link still answers a second client */
     }
     /* Stopping: send what the frame queued (a goodbye reply), then close. */
     flush_out(ipc);
