@@ -1467,8 +1467,43 @@ static u32 chain_of(ed_def *d, u64 sid, const char *path, ed_level *out) {
     return n;
 }
 
-/* Whether `path` names a field, and whether that field holds an entity. */
-static bool path_field(de__editor *ed, const char *path, bool *entity) {
+/* The shape of a field value, so entity ids nested in structs and arrays can be found. `has`:
+ * the value holds an entity id somewhere. `owner` and `index` place `f` in its struct type (an
+ * array's element needs them); owner 0 is an element or a path's leaf. */
+typedef struct ed_kind {
+    const de_type_registry *r;
+    de_type_id owner;
+    u32 index;
+    de_field_info f;
+    bool has;
+} ed_kind;
+
+#define ED_KIND_DEPTH 8u
+
+static bool kind_has_entity(const de_type_registry *r, de_type_id owner, u32 index,
+                            const de_field_info *f, u32 depth) {
+    if (depth > ED_KIND_DEPTH)
+        return false;
+    if (f->kind == DE_FK_ENTITY)
+        return true;
+    if (f->kind == DE_FK_STRUCT && f->attrs.nested_type != NULL) {
+        const de_type_id nt = de_type_find(r, f->attrs.nested_type);
+        u32 n = 0;
+        const de_field_info *fs = nt.id ? de_type_fields(r, nt, &n) : NULL;
+        for (u32 i = 0; i < n && fs != NULL; ++i)
+            if (kind_has_entity(r, nt, i, &fs[i], depth + 1))
+                return true;
+        return false;
+    }
+    if (f->kind == DE_FK_FIXED_ARRAY && owner.id) {
+        const de_field_info *el = de_type_array_element(r, owner, index);
+        return el != NULL && kind_has_entity(r, (de_type_id){0}, 0, el, depth + 1);
+    }
+    return false;
+}
+
+/* Whether `path` names a field, and the shape of the field's value. */
+static bool path_field(de__editor *ed, const char *path, ed_kind *entity) {
     const char *dot = strchr(path, '.');
     if (dot == NULL)
         return false;
@@ -1482,7 +1517,16 @@ static bool path_field(de__editor *ed, const char *path, bool *entity) {
         de_error_clear();
         return false;
     }
-    *entity = f->kind == DE_FK_ENTITY;
+    *entity = (ed_kind){.r = ed->e->types, .f = *f};
+    /* A whole top-level field has an index in its component's type. */
+    u32 n = 0;
+    const de_field_info *fs = de_type_fields(ed->e->types, type, &n);
+    for (u32 i = 0; i < n && fs != NULL; ++i)
+        if (strcmp(fs[i].name, dot + 1) == 0) {
+            entity->owner = type;
+            entity->index = i;
+        }
+    entity->has = kind_has_entity(entity->r, entity->owner, entity->index, f, 0);
     return true;
 }
 
@@ -1490,45 +1534,147 @@ static bool raw_eq(de_ep_raw x, de_ep_raw y) {
     return x.len == y.len && memcmp(x.ptr, y.ptr, x.len) == 0;
 }
 
-/* `raw` with its entity id mapped from from[i] to to[i]. A value that is no entity, or a NULL
- * `from` (same ids), passes unchanged; 0 (no entity) stays 0. False: the id isn't in `from`.
- * Entity ids inside structs are not mapped. */
-static bool remap(de_ep_arena *a, bool entity, de_ep_raw raw, const u64 *from, const u64 *to,
+typedef struct ed_map {
+    const u64 *from, *to;
+    u32 n;
+} ed_map;
+
+/* Copies `n` unchanged. */
+static bool node_copy(mpack_writer_t *w, mpack_node_t n) {
+    switch (mpack_node_type(n)) {
+    case mpack_type_nil: mpack_write_nil(w); return true;
+    case mpack_type_bool: mpack_write_bool(w, mpack_node_bool(n)); return true;
+    case mpack_type_int: mpack_write_i64(w, mpack_node_i64(n)); return true;
+    case mpack_type_uint: mpack_write_u64(w, mpack_node_u64(n)); return true;
+    case mpack_type_float: mpack_write_float(w, mpack_node_float(n)); return true;
+    case mpack_type_double: mpack_write_double(w, mpack_node_double(n)); return true;
+    case mpack_type_str: mpack_write_str(w, mpack_node_str(n), (u32)mpack_node_strlen(n)); return true;
+    case mpack_type_bin: mpack_write_bin(w, mpack_node_data(n), (u32)mpack_node_bin_size(n)); return true;
+    case mpack_type_array: {
+        const u32 len = (u32)mpack_node_array_length(n);
+        mpack_start_array(w, len);
+        for (u32 i = 0; i < len; ++i)
+            if (!node_copy(w, mpack_node_array_at(n, i)))
+                return false;
+        mpack_finish_array(w);
+        return true;
+    }
+    case mpack_type_map: {
+        const u32 len = (u32)mpack_node_map_count(n);
+        mpack_start_map(w, len);
+        for (u32 i = 0; i < len; ++i)
+            if (!node_copy(w, mpack_node_map_key_at(n, i)) ||
+                !node_copy(w, mpack_node_map_value_at(n, i)))
+                return false;
+        mpack_finish_map(w);
+        return true;
+    }
+    default: return false;
+    }
+}
+
+/* Writes `n`, a value of field `f`, with its entity ids mapped. Mirrors de__ed_write_field. */
+static bool node_remap(mpack_writer_t *w, mpack_node_t n, const ed_kind *k, de_type_id owner,
+                       u32 index, const de_field_info *f, const ed_map *m, u32 depth) {
+    if (depth > ED_KIND_DEPTH || !kind_has_entity(k->r, owner, index, f, 0))
+        return node_copy(w, n);
+    if (f->kind == DE_FK_ENTITY) {
+        if (mpack_node_type(n) != mpack_type_uint && mpack_node_type(n) != mpack_type_int)
+            return false;
+        const u64 v = mpack_node_u64(n);
+        if (v == 0) {
+            mpack_write_u64(w, 0);
+            return true;
+        }
+        for (u32 i = 0; i < m->n; ++i)
+            if (m->from[i] == v) {
+                mpack_write_u64(w, m->to[i]);
+                return true;
+            }
+        return false;
+    }
+    if (f->kind == DE_FK_STRUCT) {
+        const de_type_id nt = de_type_find(k->r, f->attrs.nested_type);
+        u32 nf = 0;
+        const de_field_info *fs = de_type_fields(k->r, nt, &nf);
+        if (mpack_node_type(n) != mpack_type_map || fs == NULL)
+            return false;
+        const u32 len = (u32)mpack_node_map_count(n);
+        mpack_start_map(w, len);
+        for (u32 i = 0; i < len; ++i) {
+            mpack_node_t key = mpack_node_map_key_at(n, i), val = mpack_node_map_value_at(n, i);
+            if (!node_copy(w, key))
+                return false;
+            u32 j = 0;
+            while (j < nf && !(mpack_node_type(key) == mpack_type_str &&
+                               mpack_node_strlen(key) == strlen(fs[j].name) &&
+                               memcmp(mpack_node_str(key), fs[j].name, strlen(fs[j].name)) == 0))
+                ++j;
+            if (!(j < nf ? node_remap(w, val, k, nt, j, &fs[j], m, depth + 1) : node_copy(w, val)))
+                return false;
+        }
+        mpack_finish_map(w);
+        return true;
+    }
+    if (f->kind == DE_FK_FIXED_ARRAY) {
+        const de_field_info *el = de_type_array_element(k->r, owner, index);
+        if (mpack_node_type(n) != mpack_type_array || el == NULL)
+            return false;
+        const u32 len = (u32)mpack_node_array_length(n);
+        mpack_start_array(w, len);
+        for (u32 i = 0; i < len; ++i)
+            if (!node_remap(w, mpack_node_array_at(n, i), k, (de_type_id){0}, 0, el, m, depth + 1))
+                return false;
+        mpack_finish_array(w);
+        return true;
+    }
+    return node_copy(w, n);
+}
+
+/* `raw` with its entity ids mapped from from[i] to to[i], also those inside struct and array
+ * fields. A value without entities, or a NULL `from` (same ids), passes unchanged; 0 (no
+ * entity) stays 0. False: an id isn't in `from`. */
+static bool remap(de_ep_arena *a, ed_kind entity, de_ep_raw raw, const u64 *from, const u64 *to,
                   u32 n, de_ep_raw *out) {
     *out = raw;
-    if (!entity || from == NULL)
+    if (!entity.has || from == NULL)
         return true;
-    mpack_reader_t r;
-    mpack_reader_init_data(&r, raw.ptr, raw.len);
-    const u64 v = mpack_expect_u64(&r);
-    if (mpack_reader_destroy(&r) != mpack_ok)
+    if (raw.len > 65536)
         return false;
-    if (v == 0)
-        return true;
-    for (u32 i = 0; i < n; ++i)
-        if (from[i] == v) {
-            char *b = (char *)de__ed_alloc(a, 16);
-            if (b == NULL)
-                return false;
-            mpack_writer_t w;
-            mpack_writer_init(&w, b, 16);
-            mpack_write_u64(&w, to[i]);
-            out->ptr = b;
-            out->len = mpack_writer_buffer_used(&w);
-            return mpack_writer_destroy(&w) == mpack_ok;
-        }
-    return false;
+    const size_t cap = (size_t)raw.len * 9 + 16;
+    char *b = (char *)de__ed_alloc(a, cap);
+    if (b == NULL)
+        return false;
+    mpack_tree_t tree;
+    mpack_tree_init_data(&tree, raw.ptr, raw.len);
+    mpack_tree_parse(&tree);
+    mpack_writer_t w;
+    mpack_writer_init(&w, b, cap);
+    const ed_map m = {from, to, n};
+    const bool ok = mpack_tree_error(&tree) == mpack_ok &&
+                    node_remap(&w, mpack_tree_root(&tree), &entity, entity.owner, entity.index,
+                               &entity.f, &m, 0);
+    if (!ok)
+        mpack_writer_flag_error(&w, mpack_error_data); /* open containers are dropped */
+    const size_t used = mpack_writer_buffer_used(&w);
+    const bool wok = mpack_writer_destroy(&w) == mpack_ok;
+    const bool tok = mpack_tree_destroy(&tree) == mpack_ok;
+    if (!ok || !wok || !tok)
+        return false;
+    out->ptr = b;
+    out->len = used;
+    return true;
 }
 
 /* Level k's value of `path`, in the ids of level k + 1. */
-static bool down_one(de_ep_arena *a, bool entity, const ed_level *lv, u32 k, de_ep_raw raw,
+static bool down_one(de_ep_arena *a, ed_kind entity, const ed_level *lv, u32 k, de_ep_raw raw,
                      de_ep_raw *out) {
     const ed_nest *n = lv[k + 1].via;
     return remap(a, entity, raw, n ? n->outer : NULL, n ? n->inner : NULL, n ? n->count : 0, out);
 }
 
 /* Whether level k sets `path` itself: its value differs from the level below's (exact bytes). */
-static bool level_owns(de_ep_arena *a, bool entity, const ed_level *lv, u32 count, u32 k,
+static bool level_owns(de_ep_arena *a, ed_kind entity, const ed_level *lv, u32 count, u32 k,
                        const char *path) {
     if (k + 1 >= count)
         return true;
@@ -1845,7 +1991,7 @@ static void prefab_error(mpack_writer_t *w, u64 id, de_ep_error code, const char
 
 /* A malformed path is INVALID_PARAMS; one that names no field is NOT_FOUND. */
 static bool path_check(de__editor *ed, const de_ep_request *req, mpack_writer_t *w,
-                       const char *path, de_ep_str raw, bool *entity) {
+                       const char *path, de_ep_str raw, ed_kind *entity) {
     if (path == NULL || raw.len == 0 || raw.len >= sizeof(((ed_base *)0)->path) ||
         strchr(path, '.') == NULL || strlen(path) != raw.len) {
         prefab_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "path", "bad path %.*s",
@@ -1896,7 +2042,7 @@ static void on_overrides(de__editor *ed, const de_ep_request *req, de_ep_arena *
         row->b = b;
         row->cur = cur;
         u64 sid = 0;
-        bool entity = false;
+        ed_kind entity = {0};
         row->levels = local_sid_of(inst, b->entity, &sid) && path_field(ed, b->path, &entity)
                           ? chain_of(def, sid, b->path, row->lv)
                           : 0;
@@ -2022,7 +2168,7 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
     if (reject_request(ed, req, w, &q))
         return;
     char *path = de__ed_cstr(a, q.path);
-    bool entity = false;
+    ed_kind entity = {0};
     if (!path_check(ed, req, w, path, q.path, &entity))
         return;
     ed_instance *inst = instance_of(ed, q.entity);
@@ -2253,7 +2399,7 @@ static void on_revert(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
     if (reject_request(ed, req, w, &q))
         return;
     char *path = de__ed_cstr(a, q.path);
-    bool entity = false;
+    ed_kind entity = {0};
     if (!path_check(ed, req, w, path, q.path, &entity))
         return;
     ed_instance *inst = instance_of(ed, q.entity);
