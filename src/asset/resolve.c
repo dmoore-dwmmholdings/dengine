@@ -746,6 +746,46 @@ void de__resolved_destroy(de__resolved *r) {
     DE_FREE(a, keep, sizeof *keep);
 }
 
+/* DENG-271: each [worlds.<name>] scene is a valid, declared asset ID of type "scene". */
+static bool rs_worlds(rs_state *st, de_strbuf *kp) {
+    const de__manifest *m = st->m;
+    de__resolved *r = st->r;
+    for (u32 wi = 0; wi < m->world_count; ++wi) {
+        const de__manifest_world *w = &m->worlds[wi];
+        const char *k = rs_kp(kp, "worlds", w->name, "scenes", NULL);
+        if (k == NULL)
+            return false;
+        for (u32 e = 0; e < w->scene_count; ++e) {
+            const char *entry = w->scenes[e];
+            const char *why = de__asset_id_check(entry, strlen(entry));
+            if (why != NULL) {
+                if (!rs_issue(r, DE_ASSET_ISSUE_ERROR, w->file, k, w->line,
+                              "world \"%s\": \"%s\" is not a valid asset ID: %s", w->name, entry,
+                              why))
+                    return false;
+                continue;
+            }
+            de_asset_id id = de__asset_id_make(rs_hash(st, entry));
+            u32 ai = rs_lookup_path(r, id, entry);
+            if (ai == RS_NONE) {
+                if (!rs_issue(r, DE_ASSET_ISSUE_ERROR, w->file, k, w->line,
+                              "world \"%s\": scene \"%s\" is not declared in [assets]", w->name,
+                              entry))
+                    return false;
+                continue;
+            }
+            const char *type = m->assets[ai].type;
+            if (type == NULL || strcmp(type, "scene") != 0) {
+                if (!rs_issue(r, DE_ASSET_ISSUE_ERROR, w->file, k, w->line,
+                              "world \"%s\": \"%s\" has type \"%s\"; a world lists scenes", w->name,
+                              entry, type != NULL ? type : ""))
+                    return false;
+            }
+        }
+    }
+    return true;
+}
+
 de_result de__manifest_resolve(const de__manifest *m, const de__resolve_desc *d,
                                de__resolved **out) {
     if (out == NULL)
@@ -782,7 +822,7 @@ de_result de__manifest_resolve(const de__manifest *m, const de__resolve_desc *d,
         r->warning_count = m->warning_count;
         r->info_count = m->info_count;
     }
-    ok = ok && rs_assets(&st, &kp) && rs_bundles(&st, &kp, &path);
+    ok = ok && rs_assets(&st, &kp) && rs_bundles(&st, &kp, &path) && rs_worlds(&st, &kp);
 
     rs_arena_clear(&st.scratch); /* kp and path live in it */
     if (!ok) {

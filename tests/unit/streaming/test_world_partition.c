@@ -1,0 +1,540 @@
+/*
+ * test_world_partition.c: the world partition (DENG-271, src/world/streaming/world_partition.c)
+ * over a real asset system in SOURCE mode: the cell scenes are imported in-process, so these
+ * tests need the cooker (DE_HAS_COOKER: Debug and Dev with tools) and skip elsewhere.
+ *
+ *   stream_path   a synthetic 10 km world (3 rows of 40 cells), cooked by `de-cook world` into
+ *                 the build tree; a camera flies along it. Loads start nearest first, never more
+ *                 than max_loads_per_frame per frame, and memory returns to the baseline.
+ *   hysteresis    world_small: a cell loads inside load_radius, stays loaded up to
+ *                 unload_radius, and does not reload until it is inside load_radius again.
+ *   far_origin    world_small: the entity at (100000, 100000.125, 3) lands within 1 mm.
+ *   proxy_fade    world_small: the far proxy shows for unloaded cells and fades out on load.
+ *   no_alloc      steady update frames allocate nothing.
+ */
+#include "de_test.h"
+#include <dengine/de_asset.h>
+#include <dengine/de_base.h>
+#include <dengine/de_ecs.h>
+#include <dengine/de_memory.h>
+#include <dengine/de_platform.h>
+#include <dengine/de_reflect.h>
+#include <dengine/de_task.h>
+#include "world/streaming/streaming_internal.h"
+
+#if defined(DE_STREAMING_HAS_WORLD_COOK)
+#include "cook/world_cells.h"
+#endif
+
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifndef DE_HAS_COOKER
+#define DE_HAS_COOKER 0
+#endif
+
+#define FIXTURE DE_STREAMING_FIXTURE_DIR
+#define TMP DE_STREAMING_TMP_DIR
+#define NO_COOKER_MSG "this build does not link the cooker (DE_HAS_COOKER: Debug and Dev with tools)"
+
+/* ---- Fixture -------------------------------------------------------------------------------- */
+
+#define MAX_EVENTS 512
+
+typedef struct cell_event {
+    i32 cx, cy;
+    bool loaded;
+    de_entity root;
+} cell_event;
+
+typedef struct wp_fx {
+    de_tracking_allocator t_asset, t_world, t_part;
+    de_allocator a_asset, a_world, a_part;
+    de_type_registry *reg;
+    de_task_system *tasks;
+    de_asset_system *s;
+    de_world *w;
+    de_world_partition *p;
+    cell_event ev[MAX_EVENTS];
+    u32 ev_count;
+} wp_fx;
+
+static void on_cell(void *user, i32 cx, i32 cy, de_entity root, bool loaded) {
+    wp_fx *f = (wp_fx *)user;
+    if (f->ev_count < MAX_EVENTS)
+        f->ev[f->ev_count++] = (cell_event){cx, cy, loaded, root};
+}
+
+static void wp_fx_setup(wp_fx *f) {
+    memset(f, 0, sizeof *f);
+    de_log_desc ld;
+    memset(&ld, 0, sizeof ld);
+    ld.no_console_sink = true;
+    ASSERT_EQ(de_log_init(&ld), DE_OK);
+    de_fp_env_init_thread();
+    f->a_asset = de_tracking_allocator_init(&f->t_asset, NULL, DE_MEM_ASSET);
+    f->a_world = de_tracking_allocator_init(&f->t_world, NULL, DE_MEM_ECS);
+    f->a_part = de_tracking_allocator_init(&f->t_part, NULL, DE_MEM_ASSET);
+    ASSERT_EQ(de_type_registry_create(NULL, &f->reg), DE_OK);
+    ASSERT_EQ(de_task_system_create(&(de_task_system_desc){.worker_count = 2}, &f->tasks), DE_OK);
+}
+
+static void wp_fx_teardown(wp_fx *f) {
+    de_world_partition_close(f->p);
+    if (f->w != NULL)
+        de_world_destroy(f->w);
+    if (f->s != NULL)
+        de_asset_system_destroy(f->s);
+    de_task_system_destroy(f->tasks);
+    de_type_registry_destroy(f->reg);
+    EXPECT_EQ(de_tracking_allocator_stats(&f->t_asset).bytes_live, 0u);
+    EXPECT_EQ(de_tracking_allocator_stats(&f->t_world).bytes_live, 0u);
+    EXPECT_EQ(de_tracking_allocator_stats(&f->t_part).bytes_live, 0u);
+    de_log_shutdown();
+}
+
+/* World first (it registers the ECS built-in types the scene importer reads), then the asset
+ * system on `manifest`, then the partition on world `name`. */
+static void wp_open(wp_fx *f, const char *manifest, const char *name, u32 max_resident) {
+    ASSERT_EQ(de_world_create(&(de_world_desc){.allocator = &f->a_world, .types = f->reg}, &f->w),
+              DE_OK);
+    ASSERT_TRUE(DE_HANDLE_VALID(de_builtin_components(f->w).transform));
+    de_asset_system_desc d = {.allocator = &f->a_asset,
+                              .tasks = f->tasks,
+                              .io_threads = 1,
+                              .cache_dir = "nocache:/decache",
+                              .types = f->reg};
+    ASSERT_EQ(de_asset_system_create(&d, &f->s), DE_OK);
+    ASSERT_EQ(de_asset_manifest_load(f->s, manifest), DE_OK);
+    de_world_partition_desc pd = {.allocator = &f->a_part,
+                                  .max_resident_cells = max_resident,
+                                  .on_cell = on_cell,
+                                  .user = f};
+    ASSERT_EQ(de_world_partition_open(f->s, f->w, name, &pd, &f->p), DE_OK);
+}
+
+static void set_camera(wp_fx *f, f64 x, f64 y) {
+    de_streaming_source src = {x, y, 0.0, 0.0f};
+    de_asset_set_streaming_sources(f->s, &src, 1);
+}
+
+/* The asset update plus DE_SCHEDULE_FIRST, as the host runs them: the de.asset_events system
+ * sends (and frees) the queued asset events there. */
+static void asset_pump(wp_fx *f) {
+    de_asset_system_update(f->s, f->w);
+    (void)de_world_run_schedule(f->w, DE_SCHEDULE_FIRST, 0.0f, 0.0f);
+}
+
+/* One frame: the asset system applies finished loads, then the partition updates. */
+static de_world_partition_stats frame(wp_fx *f, f32 dt) {
+    asset_pump(f);
+    EXPECT_EQ(de_world_partition_update(f->p, dt), DE_OK);
+    return de_world_partition_get_stats(f->p);
+}
+
+/* Frames until nothing is loading (at most ~10 s). */
+static de_world_partition_stats settle(wp_fx *f, f32 dt) {
+    de_world_partition_stats st = frame(f, dt);
+    for (u32 i = 0; i < 10000 && (st.cells_loading > 0 || st.loads_started > 0); ++i) {
+        de_sleep_ns(1000000ull);
+        st = frame(f, dt);
+    }
+    return st;
+}
+
+static void mount_once(const char *root, const char *dir, u32 flags) {
+    if (!de_path_exists(root)) /* best effort: tests mount each root once per process */
+        (void)de_fs_mount(root, dir, flags, 0);
+}
+
+/* ---- world_small ----------------------------------------------------------------------------- */
+
+static bool g_small_mounted;
+static void small_open(wp_fx *f, u32 max_resident) {
+    if (!g_small_mounted) {
+        ASSERT_EQ(de_fs_mount("wsmall", FIXTURE, DE_MOUNT_READ_ONLY, 0), DE_OK);
+        g_small_mounted = true;
+    }
+    wp_open(f, "wsmall:/assets.toml", "small", max_resident);
+}
+
+TEST_F(streaming, world_partition_open, wp_fx) {
+    small_open(f, 0);
+    de_world_partition_stats st = de_world_partition_get_stats(f->p);
+    EXPECT_EQ(st.cell_count, 4u);
+    EXPECT_EQ(st.cells_loaded, 0u);
+    de_asset_world_info info;
+    ASSERT_EQ(de_asset_world_info_get(f->s, "small", &info), DE_OK);
+    EXPECT_EQ(info.cell_size, 256u);
+    EXPECT_FLOAT_EQ(info.load_radius, 384.0f, 0.0f);
+    EXPECT_FLOAT_EQ(info.unload_radius, 512.0f, 0.0f);
+    EXPECT_EQ(info.max_loads_per_frame, 2u);
+    EXPECT_EQ(info.scene_count, 2u);
+    EXPECT_TRUE(info.proxy_enabled);
+    EXPECT_FLOAT_EQ(info.proxy_fade_seconds, 0.25f, 1e-6f);
+    EXPECT_EQ(de_asset_world_info_get(f->s, "nope", &info), DE_ERR_NOT_FOUND);
+    de_world_partition *q = NULL;
+    EXPECT_NE(de_world_partition_open(f->s, f->w, "nope", NULL, &q), DE_OK);
+    EXPECT_TRUE(q == NULL);
+    /* No sources: nothing loads. */
+    st = frame(f, 0.016f);
+    EXPECT_EQ(st.loads_started, 0u);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_UNLOADED);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 7, 7), DE_WORLD_CELL_UNLOADED); /* no such cell */
+}
+
+/* ---- test_world_partition_hysteresis --------------------------------------------------------- */
+
+TEST_F(streaming, world_partition_hysteresis, wp_fx) {
+#if !DE_HAS_COOKER
+    SKIP(NO_COOKER_MSG);
+#endif
+    small_open(f, 0);
+    /* Middle of cell (0, 0): (0, 0) and (1, 0) (128 m away) load; (-1, -3) is 652 m away. */
+    set_camera(f, 128.0, 128.0);
+    de_world_partition_stats st = settle(f, 0.016f);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_LOADED);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 1, 0), DE_WORLD_CELL_LOADED);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, -1, -3), DE_WORLD_CELL_UNLOADED);
+    EXPECT_EQ(st.cells_loaded, 2u);
+    /* x = -150: (1, 0) is 406 m away, between the radii: it stays. */
+    set_camera(f, -150.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 1, 0), DE_WORLD_CELL_LOADED);
+    /* x = -300: 556 m, past unload_radius: it goes. */
+    set_camera(f, -300.0, 128.0);
+    st = frame(f, 0.016f);
+    EXPECT_EQ(st.unloads, 1u);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 1, 0), DE_WORLD_CELL_UNLOADED);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_LOADED);
+    /* Back to x = -150: 406 m is outside load_radius, so it does not reload. */
+    set_camera(f, -150.0, 128.0);
+    for (u32 i = 0; i < 20; ++i)
+        st = frame(f, 0.016f);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 1, 0), DE_WORLD_CELL_UNLOADED);
+    /* x = 0: 256 m, inside load_radius: it reloads. */
+    set_camera(f, 0.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 1, 0), DE_WORLD_CELL_LOADED);
+    EXPECT_EQ(st.total_unloads, 1u);
+    EXPECT_EQ(st.total_loads, 3u);
+    /* An entity with DeStreamingSource is a source too: clear the asset-system ones, put an
+     * entity at (-1, -3)'s centre. */
+    de_asset_set_streaming_sources(f->s, NULL, 0);
+    de_component c_src = de_component_find(f->w, "DeStreamingSource");
+    ASSERT_TRUE(DE_HANDLE_VALID(c_src));
+    de_entity cam = de_entity_spawn(f->w);
+    de_transform *tf = (de_transform *)de_entity_add(f->w, cam, de_builtin_components(f->w).transform);
+    ASSERT_TRUE(tf != NULL);
+    tf->position = (de_dvec3){-128.0, -640.0, 0.0};
+    tf->rotation.w = 1.0f;
+    tf->scale.x = tf->scale.y = tf->scale.z = 1.0f;
+    DeStreamingSource *ss = (DeStreamingSource *)de_entity_add(f->w, cam, c_src);
+    ASSERT_TRUE(ss != NULL);
+    ss->radius = 100.0f;
+    st = settle(f, 0.016f);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, -1, -3), DE_WORLD_CELL_LOADED);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_UNLOADED);
+    EXPECT_EQ(st.cells_loaded, 1u);
+}
+
+/* ---- test_world_partition_far_origin --------------------------------------------------------- */
+
+/* Finds, below `e`, an entity whose global position is nearest `want`; returns its distance. */
+static f64 nearest_global(de_world *w, de_entity e, de_dvec3 want, de_component gt) {
+    f64 best = 1e300;
+    for (de_entity c = de_entity_children_first(w, e); c.bits != 0;
+         c = de_entity_children_next(w, c)) {
+        const de_transform *g = (const de_transform *)de_entity_get_const(w, c, gt);
+        if (g != NULL) {
+            f64 dx = g->position.x - want.x, dy = g->position.y - want.y,
+                dz = g->position.z - want.z;
+            f64 d = sqrt(dx * dx + dy * dy + dz * dz);
+            if (d < best)
+                best = d;
+        }
+        f64 sub = nearest_global(w, c, want, gt);
+        if (sub < best)
+            best = sub;
+    }
+    return best;
+}
+
+TEST_F(streaming, world_partition_far_origin, wp_fx) {
+#if !DE_HAS_COOKER
+    SKIP(NO_COOKER_MSG);
+#endif
+    small_open(f, 0);
+    set_camera(f, 100000.0, 100000.0);
+    de_world_partition_stats st = settle(f, 0.016f);
+    EXPECT_EQ(st.cells_loaded, 1u);
+    ASSERT_EQ(de_world_partition_cell_state(f->p, 390, 390), DE_WORLD_CELL_LOADED);
+    ASSERT_TRUE(f->ev_count == 1u && f->ev[0].loaded);
+    EXPECT_EQ(f->ev[0].cx, 390);
+    EXPECT_EQ(f->ev[0].cy, 390);
+    de_entity root = f->ev[0].root;
+    /* The cell root sits at the cell origin and carries DeWorldCell. */
+    de_builtin_component_ids b = de_builtin_components(f->w);
+    const de_transform *rt = (const de_transform *)de_entity_get_const(f->w, root, b.transform);
+    ASSERT_TRUE(rt != NULL);
+    EXPECT_FLOAT_EQ(rt->position.x, 99840.0, 0.0);
+    EXPECT_FLOAT_EQ(rt->position.y, 99840.0, 0.0);
+    const DeWorldCell *wc =
+        (const DeWorldCell *)de_entity_get_const(f->w, root, de_component_find(f->w, "DeWorldCell"));
+    ASSERT_TRUE(wc != NULL);
+    EXPECT_EQ(wc->cx, 390);
+    EXPECT_EQ(wc->cy, 390);
+    /* After the transform pass the entity is where the source scene put it, within 1 mm. */
+    de_world_run_schedule(f->w, DE_SCHEDULE_POST_UPDATE, 0.0f, 0.0f);
+    f64 d = nearest_global(f->w, root, (de_dvec3){100000.0, 100000.125, 3.0}, b.global_transform);
+    EXPECT_TRUE(d < 0.001);
+    if (!(d < 0.001))
+        printf("  far entity off by %.9f m\n", d);
+    /* Camera-relative: the cell origin relative to a camera at the entity, plus the local
+     * offset, is ~0 in f32. */
+    const i32 cell[2] = {390, 390};
+    de_vec3 rel;
+    de_world_cell_origins_relative(cell, 1, (de_dvec3){100000.0, 100000.125, 3.0}, &rel);
+    EXPECT_TRUE(fabsf(rel.x + 160.0f) < 0.001f);
+    EXPECT_TRUE(fabsf(rel.y + 160.125f) < 0.001f);
+}
+
+/* ---- far proxies ----------------------------------------------------------------------------- */
+
+TEST_F(streaming, world_partition_proxy_fade, wp_fx) {
+#if !DE_HAS_COOKER
+    SKIP(NO_COOKER_MSG);
+#endif
+    small_open(f, 0);
+    bool vis = false;
+    f32 alpha = 0.0f;
+    /* Before any update every cell shows its proxy. */
+    EXPECT_TRUE(de_world_partition_proxy(f->p, 0, 0, &vis, &alpha));
+    EXPECT_TRUE(vis);
+    EXPECT_FLOAT_EQ(alpha, 1.0f, 0.0);
+    EXPECT_FALSE(de_world_partition_proxy(f->p, 5, 5, &vis, &alpha)); /* no such cell */
+    EXPECT_FALSE(vis);
+    /* Load (0, 0) with frames of dt = 0 so the fade has not started when it lands. */
+    set_camera(f, 128.0, 128.0);
+    de_world_partition_stats st = settle(f, 0.0f);
+    ASSERT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_LOADED);
+    (void)st;
+    EXPECT_TRUE(de_world_partition_proxy(f->p, 0, 0, &vis, &alpha));
+    EXPECT_TRUE(vis);
+    EXPECT_FLOAT_EQ(alpha, 1.0f, 0.0);
+    /* 0.25 s fade: 0.1 s steps go 0.6, 0.2, then off. */
+    frame(f, 0.1f);
+    de_world_partition_proxy(f->p, 0, 0, &vis, &alpha);
+    EXPECT_TRUE(vis);
+    EXPECT_FLOAT_EQ(alpha, 0.6f, 1e-5f);
+    frame(f, 0.1f);
+    de_world_partition_proxy(f->p, 0, 0, &vis, &alpha);
+    EXPECT_FLOAT_EQ(alpha, 0.2f, 1e-5f);
+    frame(f, 0.1f);
+    de_world_partition_proxy(f->p, 0, 0, &vis, &alpha);
+    EXPECT_FALSE(vis);
+    /* The far cell still shows its proxy. */
+    de_world_partition_proxy(f->p, 390, 390, &vis, &alpha);
+    EXPECT_TRUE(vis);
+    EXPECT_FLOAT_EQ(alpha, 1.0f, 0.0);
+    /* Fly away: (0, 0) unloads and its proxy is back at once. */
+    set_camera(f, 5000.0, 5000.0);
+    frame(f, 0.1f);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_UNLOADED);
+    de_world_partition_proxy(f->p, 0, 0, &vis, &alpha);
+    EXPECT_TRUE(vis);
+    EXPECT_FLOAT_EQ(alpha, 1.0f, 0.0);
+}
+
+/* ---- test_world_partition_stream_path -------------------------------------------------------- */
+
+#define PATH_CELLS_X 40 /* 40 * 256 m = 10.24 km */
+#define PATH_ROWS 3     /* cy = -1, 0, 1 */
+
+#if defined(DE_STREAMING_HAS_WORLD_COOK)
+static void path_cook_sink(void *user, de_cook_stream stream, const char *text, size_t len) {
+    (void)user;
+    if (stream == DE_COOK_STDERR)
+        printf("%.*s", (int)len, text);
+}
+#endif
+
+/* Writes the synthetic world under <TMP>/path10k and cooks it. False when it cannot. */
+static bool path_world_make(void) {
+#if defined(DE_STREAMING_HAS_WORLD_COOK)
+    static bool made;
+    if (made)
+        return true;
+    if (de_fs_mount("wptmp", TMP, DE_MOUNT_WRITABLE, 0) != DE_OK)
+        return false;
+    bool ok = de_dir_create("wptmp:/path10k/assets/scenes") == DE_OK;
+    static const char manifest[] =
+        "# DENG-271 test world: 3 rows of 40 cells along x (test_world_partition.c).\n"
+        "[project]\nasset_root = \"assets\"\ninclude = [\"assets/worlds/path/cells.toml\"]\n"
+        "[assets]\n\"levels/path\" = { type = \"scene\", source = \"scenes/path.scene.toml\" }\n"
+        "[worlds.path]\nscenes = [\"levels/path\"]\nload_radius = 384.0\n"
+        "unload_radius = 512.0\nmax_loads_per_frame = 2\n";
+    ok = ok && de_file_write_all_atomic("wptmp:/path10k/assets.toml", manifest,
+                                        sizeof manifest - 1) == DE_OK;
+    /* Two entities per cell. */
+    size_t cap = 256u * PATH_CELLS_X * PATH_ROWS * 2u, len = 0;
+    char *scene = (char *)malloc(cap);
+    ok = ok && scene != NULL;
+    u32 id = 1;
+    for (i32 cx = 0; ok && cx < PATH_CELLS_X; ++cx)
+        for (i32 cy = -1; cy <= 1; ++cy)
+            for (i32 k = 0; k < 2; ++k) {
+                int n = snprintf(scene + len, cap - len,
+                                 "[entity.0x%016x.DeTransform]\nposition = [%d.5, %d.25, 0.0]\n"
+                                 "rotation = [0.0, 0.0, 0.0, 1.0]\nscale = [1.0, 1.0, 1.0]\n",
+                                 id++, cx * 256 + 40 + k * 100, cy * 256 + 60 + k * 50);
+                ok = n > 0 && (size_t)n < cap - len;
+                len += ok ? (size_t)n : 0;
+            }
+    ok = ok && de_file_write_all_atomic("wptmp:/path10k/assets/scenes/path.scene.toml", scene,
+                                        len) == DE_OK;
+    free(scene);
+    if (ok) {
+        const char *argv[] = {TMP "/path10k/assets.toml", "--world", "path"};
+        de_cook_io io = {path_cook_sink, NULL};
+        ok = de_cook_world_main(3, argv, &io) == DE_COOK_EXIT_OK;
+    }
+    made = ok;
+    return ok;
+#else
+    return false;
+#endif
+}
+
+TEST_F(streaming, world_partition_stream_path, wp_fx) {
+#if !DE_HAS_COOKER || !defined(DE_STREAMING_HAS_WORLD_COOK)
+    SKIP(NO_COOKER_MSG);
+#endif
+    if (!path_world_make())
+        SKIP("cannot write the 10 km test world in the build tree");
+    mount_once("wpath", TMP "/path10k", DE_MOUNT_READ_ONLY);
+    wp_open(f, "wpath:/assets.toml", "path", 0);
+    de_world_partition_stats st = de_world_partition_get_stats(f->p);
+    ASSERT_EQ(st.cell_count, (u32)(PATH_CELLS_X * PATH_ROWS));
+    const u32 cap = 2; /* max_loads_per_frame of the world */
+
+    /* Memory: a first flight sizes the asset system's tables (they grow and are kept), so the
+     * baseline is taken after it, back out of range with every cell unloaded. The measured
+     * flight below must return to the same bytes with nothing resident. */
+    for (f64 x = 0.0; x <= 10000.0; x += 100.0) {
+        set_camera(f, x, 128.0);
+        settle(f, 0.016f);
+    }
+    set_camera(f, -5000.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(st.cells_loaded, 0u);
+    asset_pump(f);
+    de_asset_flush_unused(f->s);
+    asset_pump(f);
+    EXPECT_EQ(de_asset_get_stats(f->s).assets_resident, 0u);
+    de_tracking_stats base_asset = de_tracking_allocator_stats(&f->t_asset);
+    u64 base_loads = de_world_partition_get_stats(f->p).total_loads;
+    f->ev_count = 0;
+
+    i32 prev[PATH_CELLS_X][PATH_ROWS];
+    memset(prev, 0, sizeof prev);
+    u32 max_started = 0, max_resident = 0, order_violations = 0, far_unloads = 0;
+    /* Fly x = 0 .. 10000 m along y = 128, 25 m per frame (400 frames, 90 km/h at 60 fps). */
+    for (u32 fi = 0; fi <= 400; ++fi) {
+        f64 cx = (f64)fi * 25.0, cy = 128.0;
+        set_camera(f, cx, cy);
+        if (fi % 4 == 0)
+            de_sleep_ns(500000ull); /* let some loads land between frames */
+        st = frame(f, 0.016f);
+        if (st.loads_started > max_started)
+            max_started = st.loads_started;
+        if (st.cells_loaded + st.cells_loading > max_resident)
+            max_resident = st.cells_loaded + st.cells_loading;
+        /* Cells that started loading this frame, and unloaded candidates still waiting. */
+        f64 newest_far = -1.0, waiting_near = 1e300;
+        for (i32 x = 0; x < PATH_CELLS_X; ++x)
+            for (i32 r = 0; r < PATH_ROWS; ++r) {
+                de_world_cell_state s = de_world_partition_cell_state(f->p, x, r - 1);
+                f64 d2 = de__cell_dist2(x, r - 1, cx, cy);
+                if (s == DE_WORLD_CELL_LOADING && prev[x][r] == DE_WORLD_CELL_UNLOADED &&
+                    d2 > newest_far)
+                    newest_far = d2;
+                if (s == DE_WORLD_CELL_UNLOADED && d2 <= 384.0 * 384.0 && d2 < waiting_near)
+                    waiting_near = d2;
+                if (s == DE_WORLD_CELL_UNLOADED && prev[x][r] != DE_WORLD_CELL_UNLOADED &&
+                    d2 <= 512.0 * 512.0)
+                    ++far_unloads; /* unloaded while inside unload_radius */
+                prev[x][r] = (i32)s;
+            }
+        /* Distance order: no cell left waiting is nearer than one started this frame. */
+        if (newest_far >= 0.0 && waiting_near < newest_far)
+            ++order_violations;
+    }
+    EXPECT_LE(max_started, cap);
+    EXPECT_GT(max_started, 0u);
+    EXPECT_EQ(order_violations, 0u);
+    EXPECT_EQ(far_unloads, 0u);
+    /* Within 512 m of a point on y = 128 there are at most 5 columns x 3 rows. */
+    EXPECT_LE(max_resident, 15u);
+    st = settle(f, 0.016f);
+    EXPECT_GT(st.total_loads - base_loads, (u64)(PATH_CELLS_X * PATH_ROWS) / 2u);
+    EXPECT_GT(st.total_unloads, 0u);
+    /* Every load_started reported is a load or a pending load: none lost. */
+    EXPECT_EQ(st.cells_loading, 0u);
+
+    /* Fly far away: everything unloads and the asset memory returns to the baseline. */
+    set_camera(f, -5000.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(st.cells_loaded, 0u);
+    EXPECT_EQ(st.total_loads, st.total_unloads);
+    asset_pump(f);
+    de_asset_flush_unused(f->s);
+    asset_pump(f);
+    EXPECT_EQ(de_asset_get_stats(f->s).assets_resident, 0u);
+    /* Every block allocated during the flight is freed. The bytes may differ by a table's
+     * capacity, which grows to the high-water mark of overlapping loads (timing dependent). */
+    de_tracking_stats end_asset = de_tracking_allocator_stats(&f->t_asset);
+    EXPECT_EQ(end_asset.blocks_live, base_asset.blocks_live);
+    EXPECT_TRUE(end_asset.bytes_live <= base_asset.bytes_live + 4096u);
+    if (end_asset.blocks_live != base_asset.blocks_live ||
+        end_asset.bytes_live > base_asset.bytes_live + 4096u)
+        printf("  asset bytes live %llu (baseline %llu), blocks %llu (baseline %llu)\n",
+               (unsigned long long)end_asset.bytes_live,
+               (unsigned long long)base_asset.bytes_live,
+               (unsigned long long)end_asset.blocks_live,
+               (unsigned long long)base_asset.blocks_live);
+    /* The loaded/unloaded events pair up. */
+    u32 loads = 0, unloads = 0;
+    for (u32 i = 0; i < f->ev_count; ++i)
+        f->ev[i].loaded ? ++loads : ++unloads;
+    EXPECT_EQ(loads, unloads);
+}
+
+/* ---- no per-frame allocation ----------------------------------------------------------------- */
+
+TEST_F(streaming, world_partition_no_alloc, wp_fx) {
+#if !DE_HAS_COOKER
+    SKIP(NO_COOKER_MSG);
+#endif
+    small_open(f, 0);
+    set_camera(f, 128.0, 128.0);
+    settle(f, 0.016f);
+    for (u32 i = 0; i < 30; ++i) /* finish the proxy fades */
+        frame(f, 0.016f);
+    /* Steady frames, then frames with the camera moving inside one cell (no load or unload). */
+    de_tracking_stats a0 = de_tracking_allocator_stats(&f->t_asset);
+    de_tracking_stats w0 = de_tracking_allocator_stats(&f->t_world);
+    de_tracking_stats p0 = de_tracking_allocator_stats(&f->t_part);
+    for (u32 i = 0; i < 200; ++i) {
+        set_camera(f, 100.0 + (f64)(i % 50), 128.0);
+        EXPECT_EQ(de_world_partition_update(f->p, 0.016f), DE_OK);
+    }
+    de_tracking_stats a1 = de_tracking_allocator_stats(&f->t_asset);
+    de_tracking_stats w1 = de_tracking_allocator_stats(&f->t_world);
+    de_tracking_stats p1 = de_tracking_allocator_stats(&f->t_part);
+    EXPECT_EQ(a1.alloc_count + a1.realloc_count, a0.alloc_count + a0.realloc_count);
+    EXPECT_EQ(w1.alloc_count + w1.realloc_count, w0.alloc_count + w0.realloc_count);
+    EXPECT_EQ(p1.alloc_count + p1.realloc_count, p0.alloc_count + p0.realloc_count);
+}

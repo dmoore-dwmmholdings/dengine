@@ -92,3 +92,7 @@ target_sources(de_asset PRIVATE blob_type.c scene/scene_format.h scene/scene_typ
 
 # DENG-696: detached before/after importer cooks; cooker-free builds keep typed stubs.
 target_sources(de_asset PRIVATE cook_preview.c cook_preview_internal.h)
+
+# DENG-271: streaming sources, [worlds.<name>] info and bundle enumeration for the world
+# partition (src/world/streaming).
+target_sources(de_asset PRIVATE world_stream.c)

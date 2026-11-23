@@ -5,6 +5,7 @@
  *   de-cook --check <assets.toml> [options]    validate a manifest (check.c, DENG-145)
  *   de-cook cook <assets.toml> [options]       cook a project into a pack (cook_cmd.c, DENG-213)
  *   de-cook shader <source.slang> [options]   inspect generated code/reflection (DENG-664)
+ *   de-cook world <assets.toml> --world <n>   split a world into streaming cells (DENG-271)
  *
  * Later commands are further entries of `commands`.
  */
@@ -19,6 +20,7 @@
 #include "check.h"
 #include "cook_cmd.h"
 #include "shader_cmd.h"
+#include "world_cells.h"
 
 static void write_std(void *user, de_cook_stream stream, const char *text, size_t len) {
     (void)user;
@@ -35,6 +37,7 @@ static const command commands[] = {
     {"--check", de_cook_check_main},
     {"cook", de_cook_cook_main},
     {"shader", de_cook_shader_main},
+    {"world", de_cook_world_main},
 };
 
 static void usage(const de_cook_io *io, de_cook_stream stream) {
@@ -45,6 +48,7 @@ static void usage(const de_cook_io *io, de_cook_stream stream) {
         "  --check    validate an asset manifest (assets.toml)\n"
         "  cook       cook a project into a .dpak pack\n"
         "  shader     inspect one Slang shader (code, reflection, diagnostics)\n"
+        "  world      split a [worlds.<name>] world into 256 m streaming cells\n"
         "\n"
         "`de-cook <command> --help` describes a command.\n"
         "\n";

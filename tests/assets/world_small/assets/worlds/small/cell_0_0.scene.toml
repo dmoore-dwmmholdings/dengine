@@ -1,0 +1,26 @@
+# world/small/cell_0_0: cell (0, 0) of world "small" (de-cook world)
+
+[entity.0x0000000000000001]
+[entity.0x0000000000000001.DeTransform]
+position = [10.0, 20.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+
+[entity.0x0000000000000020]
+[entity.0x0000000000000020.DeTransform]
+position = [255.75, 5.0, 0.0]
+rotation = [0.0, 0.0, 0.7071068, 0.7071068]
+scale = [1.0, 1.0, 1.0]
+
+[entity.0x0000000000000021]
+parent = "0x0000000000000020"
+[entity.0x0000000000000021.DeTransform]
+position = [1.0, 0.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.5, 0.5, 0.5]
+
+[entity.0x0000000000000022]
+[entity.0x0000000000000022.DeTransform]
+position = [12.0, 30.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
