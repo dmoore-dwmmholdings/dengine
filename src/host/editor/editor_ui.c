@@ -439,6 +439,8 @@ static bool locales_state(de_text_system *text, de_ep_arena *a, de_ep_loc_locale
     out->fallback = de_ep_cstr(st->fallback);
     out->generation = st->generation;
     out->previewing = st->previewing;
+    out->has_pseudo = true; /* protocol 1.21 */
+    out->pseudo = st->pseudo;
     if (count == 0)
         return true;
     de_loc_locale_info *infos = (de_loc_locale_info *)de__ed_alloc(a, sizeof *infos * count);
@@ -825,9 +827,169 @@ static void h_ui_measure_text(de__editor *ed, const de_ep_request *req, de_ep_ar
     de_ep_write_response_ui_measure_text(w, req->id, &res);
 }
 
+static bool g_pseudo_by_ide; /* the IDE turned pseudo-localization on (loc.pseudo or the console) */
+
+/* ---------- Protocol 1.21 (DENG-820): loc.pseudo and ui.textOverflow ---------- */
+
+static bool need_121(de__editor *ed, const de_ep_request *req, mpack_writer_t *w,
+                     const char *method) {
+    if (de__ed_protocol_at_least(ed, 1, 21))
+        return true;
+    de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "%s: needs protocol 1.21 (agreed %u.%u)",
+                 method, (unsigned)ed->proto_major, (unsigned)ed->proto_minor);
+    return false;
+}
+
+/* Reads params {key?: bool | null} (as_bool) or {key?: u64 | null}. The generated readers take
+ * only the value, so nil is read as absent here. False: malformed. */
+static bool opt_scalar_param(const de_ep_request *req, const char *key, bool as_bool, bool *has,
+                             u64 *out) {
+    static const char empty_map[1] = {'\x80'};
+    mpack_reader_t r;
+    if (req->params.len == 0)
+        mpack_reader_init_data(&r, empty_map, 1);
+    else
+        mpack_reader_init_data(&r, req->params.ptr, req->params.len);
+    *has = false;
+    *out = 0;
+    const size_t key_len = strlen(key);
+    const u32 n = mpack_expect_map(&r);
+    for (u32 i = 0; i < n && mpack_reader_error(&r) == mpack_ok; ++i) {
+        const u32 kl = mpack_expect_str(&r);
+        const char *kp = kl ? mpack_read_bytes_inplace(&r, kl) : "";
+        mpack_done_str(&r);
+        if (mpack_reader_error(&r) != mpack_ok)
+            break;
+        if (kl != key_len || memcmp(kp, key, key_len) != 0) {
+            mpack_discard(&r);
+            continue;
+        }
+        mpack_tag_t tag = mpack_peek_tag(&r);
+        if (mpack_tag_type(&tag) == mpack_type_nil) {
+            mpack_discard(&r);
+            *has = false;
+            *out = 0;
+            continue;
+        }
+        const u64 v = as_bool ? (u64)mpack_expect_bool(&r) : mpack_expect_u64(&r);
+        if (mpack_reader_error(&r) == mpack_ok) {
+            *has = true;
+            *out = v;
+        }
+    }
+    mpack_done_map(&r);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+/* loc.pseudo: absent or null only reads the state; a bool turns pseudo-localization on or off
+ * (de_loc_pseudo). The switch is asynchronous like loc.previewLocale: `pseudo` is the requested
+ * state, `generation` changes when it is published. A disconnect turns it off again when the IDE
+ * turned it on (ui_reset). */
+static void h_loc_pseudo(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                         mpack_writer_t *w) {
+    if (!need_121(ed, req, w, "loc.pseudo"))
+        return;
+    de_ep_loc_pseudo_params q = {0};
+    u64 enabled = 0;
+    if (!opt_scalar_param(req, "enabled", true, &q.has_enabled, &enabled)) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "loc.pseudo: bad params");
+        return;
+    }
+    q.enabled = enabled != 0;
+    de_text_system *text = ed->e->text;
+    if (text == NULL && q.has_enabled) {
+        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "loc.pseudo: no text system");
+        return;
+    }
+    if (text != NULL && q.has_enabled) {
+        de_loc_pseudo(text, q.enabled);
+        g_pseudo_by_ide = q.enabled;
+    }
+    de_ep_loc_locales res;
+    if (!locales_state(text, a, &res)) {
+        ui_busy(w, req->id, "loc.pseudo");
+        return;
+    }
+    de_ep_write_response_loc_pseudo(w, req->id, &res);
+}
+
+/* ui.textOverflow: de_ui_find_text_overflow over `root`, or every UI tree. */
+static void h_ui_text_overflow(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                               mpack_writer_t *w) {
+    if (!need_121(ed, req, w, "ui.textOverflow"))
+        return;
+    de_ep_ui_text_overflow_params q = {0};
+    if (!opt_scalar_param(req, "root", false, &q.has_root, &q.root)) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "ui.textOverflow: bad params");
+        return;
+    }
+    de_ui *ui = ed->e->ui;
+    de_ep_ui_text_overflow res = {0};
+    if (q.has_root && q.root == 0) {
+        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "ui.textOverflow: 0 is not a UI node");
+        return;
+    }
+    u32 count = 0;
+    de_result r = DE_OK;
+    if (ui != NULL)
+        r = de_ui_find_text_overflow(ui, (de_entity){q.has_root ? q.root : 0}, NULL, 0, &count);
+    else if (q.has_root) {
+        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "ui.textOverflow: %llu is not a UI node",
+                     (unsigned long long)q.root);
+        return;
+    }
+    if (r == DE_ERR_NOT_FOUND) {
+        de_error_clear();
+        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "ui.textOverflow: %llu is not a UI node",
+                     (unsigned long long)q.root);
+        return;
+    }
+    if (r == DE_ERR_INVALID_ARGUMENT) { /* no text system: nothing can be measured */
+        de_error_clear();
+        r = DE_OK;
+        count = 0;
+    }
+    if (r != DE_OK) {
+        de_error_clear();
+        de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "ui.textOverflow: cannot check the text");
+        return;
+    }
+    if (count > 0) {
+        de_ui_text_overflow *found = (de_ui_text_overflow *)de__ed_alloc(a, sizeof *found * count);
+        de_ep_ui_text_overflow_entry *items =
+            (de_ep_ui_text_overflow_entry *)de__ed_alloc(a, sizeof *items * count);
+        f32 *sizes = (f32 *)de__ed_alloc(a, sizeof(f32) * 4u * count);
+        u32 got = 0;
+        if (found == NULL || items == NULL || sizes == NULL) {
+            ui_busy(w, req->id, "ui.textOverflow");
+            return;
+        }
+        if (de_ui_find_text_overflow(ui, (de_entity){q.has_root ? q.root : 0}, found, count,
+                                     &got) != DE_OK) {
+            de_error_clear();
+            de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "ui.textOverflow: cannot check the text");
+            return;
+        }
+        count = got < count ? got : count;
+        for (u32 i = 0; i < count; ++i) {
+            f32 *s = sizes + 4u * i;
+            s[0] = found[i].text_size.x;
+            s[1] = found[i].text_size.y;
+            s[2] = found[i].box_size.x;
+            s[3] = found[i].box_size.y;
+            items[i] = (de_ep_ui_text_overflow_entry){.entity = found[i].entity.bits,
+                                                      .overflow_x = found[i].overflow_x,
+                                                      .overflow_y = found[i].overflow_y,
+                                                      .text_size = {s, 2},
+                                                      .box_size = {s + 2, 2}};
+        }
+        res.overflows = (de_ep_list_ui_text_overflow_entry){items, count};
+    }
+    de_ep_write_response_ui_text_overflow(w, req->id, &res);
+}
+
 /* ---- DENG-585: pseudo-localization and text overflow through console.exec ----
- * Protocol 1.20 has no structured method for either (an IDL gap, reported on DENG-585), so the
- * IDE reaches them through console.exec, which returns what the command logs:
+ * Protocol 1.21 has loc.pseudo and ui.textOverflow for both; the commands stay for console.exec, which returns what the command logs:
  * - `editor.locPseudo [on|off]` turns pseudo-localization on or off (de_loc_pseudo) and logs
  *   `pseudo=<0|1> published=<0|1> generation=<n>`. Without an argument it only logs the state.
  *   The switch is asynchronous: published follows after the next locale generation.
@@ -837,7 +999,6 @@ static void h_ui_measure_text(de__editor *ed, const de_ep_request *req, de_ep_ar
  *   UI_OVERFLOW_LINES lines; count is the full number.
  * A disconnect turns pseudo-localization off when the IDE turned it on. */
 #define UI_OVERFLOW_LINES 256u
-static bool g_pseudo_by_ide;
 
 static de_log_category ui_log(void) {
     return de_log_register_category("editor.ui", DE_LOG_INFO);
@@ -934,6 +1095,8 @@ void de__ed_ui_register(de__editor *ed) {
     de__ed_on(ed, DE_EP_METHOD_LOC_LOCALES, h_loc_locales);
     de__ed_on(ed, DE_EP_METHOD_LOC_STRINGS, h_loc_strings);
     de__ed_on(ed, DE_EP_METHOD_LOC_PREVIEW_LOCALE, h_loc_preview_locale);
+    de__ed_on(ed, DE_EP_METHOD_LOC_PSEUDO, h_loc_pseudo);
+    de__ed_on(ed, DE_EP_METHOD_UI_TEXT_OVERFLOW, h_ui_text_overflow);
     de__ed_on_reset(ed, ui_reset);
     g_pseudo_by_ide = false;
     /* Registered again by a second registration (the command keeps one editor pointer). */

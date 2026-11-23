@@ -191,7 +191,7 @@ TEST_F(editor_ui, advertises_ui_editor_and_registers_ui_layout, ui_ed_fx) {
         found = found || strcmp(f->ed.caps[i], "ui.editor") == 0;
     EXPECT_TRUE(found);
     EXPECT_TRUE(f->ed.handlers[DE_EP_METHOD_UI_LAYOUT] != NULL);
-    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.20"); /* pinned dide 4664d8f (DENG-809) */
+    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.21"); /* pinned dide e8fb2a88 (DENG-820) */
 }
 
 TEST_F(editor_ui, layout_reports_pre_order_rects_at_the_preview_viewport, ui_ed_fx) {
@@ -572,6 +572,80 @@ TEST_F(editor_ui, locales_strings_and_preview, ui_ed_fx) {
     ASSERT_EQ(de_loc_get_locale_state(f->engine.text, &want), DE_OK);
     EXPECT_FALSE(want.previewing);
 }
+
+/* ---- DENG-820: protocol 1.21 loc.pseudo and ui.textOverflow ---- */
+static mpack_node_t call_pseudo(ui_ed_fx *f, int enabled) { /* -1 absent, -2 nil, else a bool */
+    mpack_writer_t w;
+    mpack_writer_init(&w, f->params, sizeof f->params);
+    if (enabled == -2) {
+        mpack_start_map(&w, 1);
+        mpack_write_cstr(&w, "enabled");
+        mpack_write_nil(&w);
+        mpack_finish_map(&w);
+    } else {
+        de_ep_write_loc_pseudo_params(
+            &w, &(de_ep_loc_pseudo_params){.has_enabled = enabled >= 0, .enabled = enabled > 0});
+    }
+    const size_t size = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    return call(f, DE_EP_METHOD_LOC_PSEUDO, size);
+}
+static mpack_node_t call_overflow(ui_ed_fx *f, bool has_root, u64 root) {
+    mpack_writer_t w;
+    mpack_writer_init(&w, f->params, sizeof f->params);
+    de_ep_write_ui_text_overflow_params(
+        &w, &(de_ep_ui_text_overflow_params){.has_root = has_root, .root = root});
+    const size_t size = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    return call(f, DE_EP_METHOD_UI_TEXT_OVERFLOW, size);
+}
+TEST_F(editor_ui, pseudo_and_overflow_are_registered_and_gated_on_protocol_1_21, ui_ed_fx) {
+    EXPECT_TRUE(f->ed.handlers[DE_EP_METHOD_LOC_PSEUDO] != NULL);
+    EXPECT_TRUE(f->ed.handlers[DE_EP_METHOD_UI_TEXT_OVERFLOW] != NULL);
+    f->ed.proto_minor = 20;
+    EXPECT_EQ(code_of(call_empty(f, DE_EP_METHOD_LOC_PSEUDO)), DE_EP_ERR_UNSUPPORTED);
+    EXPECT_EQ(code_of(call_empty(f, DE_EP_METHOD_UI_TEXT_OVERFLOW)), DE_EP_ERR_UNSUPPORTED);
+    f->ed.proto_minor = 21;
+    EXPECT_EQ(code_of(call_empty(f, DE_EP_METHOD_LOC_PSEUDO)), 0);
+    EXPECT_EQ(code_of(call_empty(f, DE_EP_METHOD_UI_TEXT_OVERFLOW)), 0);
+}
+
+TEST_F(editor_ui, loc_pseudo_reads_sets_and_reports_in_loc_locales, ui_ed_fx) {
+    f->ed.proto_minor = 21;
+    /* No text system: a read is empty and off; turning it on is not_found. */
+    mpack_node_t r = res(call_pseudo(f, -1));
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "pseudo")));
+    EXPECT_EQ(code_of(call_pseudo(f, 1)), DE_EP_ERR_NOT_FOUND);
+
+    ASSERT_EQ(de_text_create(NULL, NULL, &f->engine.text), DE_OK);
+    r = res(call_pseudo(f, -1));
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "pseudo")));
+    r = res(call_empty(f, DE_EP_METHOD_LOC_LOCALES));
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "pseudo")));
+#if DE_NAME_LOOKUP
+    de_loc_locale_state st;
+    r = res(call_pseudo(f, 1)); /* the requested state at once; published follows a generation */
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(r, "pseudo")));
+    ASSERT_EQ(de_loc_get_locale_state(f->engine.text, &st), DE_OK);
+    EXPECT_TRUE(st.pseudo);
+    EXPECT_EQ(mpack_node_u64(mpack_node_map_cstr(r, "generation")), st.generation);
+    r = res(call_pseudo(f, -1)); /* only reads */
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(r, "pseudo")));
+    r = res(call_pseudo(f, -2)); /* nil only reads too */
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(r, "pseudo")));
+    r = res(call_empty(f, DE_EP_METHOD_LOC_LOCALES));
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(r, "pseudo")));
+    r = res(call_str(f, DE_EP_METHOD_LOC_PREVIEW_LOCALE, "locale", NULL));
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(r, "pseudo")));
+    for (u32 i = 0; i < f->ed.reset_count; ++i) /* a disconnect ends what the IDE turned on */
+        f->ed.resets[i](&f->ed);
+    ASSERT_EQ(de_loc_get_locale_state(f->engine.text, &st), DE_OK);
+    EXPECT_FALSE(st.pseudo);
+    r = res(call_pseudo(f, 0));
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "pseudo")));
+#endif
+}
+
 
 TEST_F(editor_ui, node_corners_on_a_world_panel, ui_ed_fx) {
     const de_entity panel = panel_at(f, (de_dvec3){100000, 0, 0});
@@ -1068,6 +1142,57 @@ TEST_F(editor_ui, text_metrics_retries_with_a_larger_buffer, ui_ed_fx) {
     mpack_node_t lines = mpack_node_map_cstr(r, "lines");
     ASSERT_EQ(mpack_node_array_length(lines), 301u); /* a final empty line after the last break */
     EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(mpack_node_array_at(lines, 300), "end")), (u32)n);
+    text_env_down(f, &t);
+}
+
+TEST_F(editor_ui, text_overflow_lists_overflowing_text_in_pre_order, ui_ed_fx) {
+    f->ed.proto_minor = 21;
+    text_env t;
+    text_env_up(f, &t);
+    const de_entity root = node(f, (de_entity){0});
+    node_edit(f, root)->direction = DE_UI_COLUMN;
+    const de_entity tight = sized(f, root, 40, 30);
+    const de_entity roomy = sized(f, root, 390, 30);
+    node_edit(f, tight)->shrink = 0;
+    node_edit(f, roomy)->shrink = 0;
+    const de_entity labels[2] = {tight, roomy};
+    for (u32 i = 0; i < 2; ++i) {
+        DeUiText *label = de_entity_add(f->engine.world, labels[i], f->engine.ui->ids.text);
+        label->style.font = t.fonts.latin;
+        label->style.size_px = 20;
+        memcpy(label->text, "Overflowing", 12);
+    }
+    frame(f);
+    de_ui_text_overflow want[4];
+    u32 n = 0;
+    ASSERT_EQ(de_ui_find_text_overflow(f->engine.ui, (de_entity){0}, want, 4, &n), DE_OK);
+    ASSERT_EQ(n, 1u);
+
+    mpack_node_t r = res(call_overflow(f, false, 0));
+    mpack_node_t list = mpack_node_map_cstr(r, "overflows");
+    ASSERT_EQ(mpack_node_array_length(list), 1u);
+    mpack_node_t e = mpack_node_array_at(list, 0);
+    EXPECT_EQ(mpack_node_u64(mpack_node_map_cstr(e, "entity")), tight.bits);
+    EXPECT_EQ(mpack_node_bool(mpack_node_map_cstr(e, "overflowX")), want[0].overflow_x);
+    EXPECT_EQ(mpack_node_bool(mpack_node_map_cstr(e, "overflowY")), want[0].overflow_y);
+    EXPECT_TRUE(want[0].overflow_y);
+    mpack_node_t ts = mpack_node_map_cstr(e, "textSize");
+    mpack_node_t bs = mpack_node_map_cstr(e, "boxSize");
+    ASSERT_EQ(mpack_node_array_length(ts), 2u);
+    ASSERT_EQ(mpack_node_array_length(bs), 2u);
+    EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_array_at(ts, 0)), want[0].text_size.x, 0.001f);
+    EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_array_at(ts, 1)), want[0].text_size.y, 0.001f);
+    EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_array_at(bs, 0)), want[0].box_size.x, 0.001f);
+    EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_array_at(bs, 1)), want[0].box_size.y, 0.001f);
+
+    /* A root scopes the check; the fitting label has none, and an unknown root is not_found. */
+    r = res(call_overflow(f, true, root.bits));
+    EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(r, "overflows")), 1u);
+    r = res(call_overflow(f, true, roomy.bits));
+    EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(r, "overflows")), 0u);
+    EXPECT_EQ(code_of(call_overflow(f, true, 0xffu)), DE_EP_ERR_NOT_FOUND);
+    EXPECT_EQ(code_of(call_overflow(f, true, 0)), DE_EP_ERR_NOT_FOUND);
+    de_error_clear();
     text_env_down(f, &t);
 }
 
