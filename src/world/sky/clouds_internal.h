@@ -25,8 +25,9 @@
  *                       sample it through LightingInputs.cloud_shadow (de_input_cloud_shadow).
  *   clouds.march        after sky.render: half width x half height (a quarter of the pixels),
  *                       one of the four pixels of each 2 x 2 block per frame (Bayer order),
- *                       blue-noise (interleaved gradient) start jitter, up to 128 primary steps
- *                       and 6 light steps, Beer-Powder, a dual-lobe Henyey-Greenstein phase,
+ *                       interleaved-gradient-noise start jitter (blue noise: DENG-852), up to
+ *                       128 primary steps and 6 light steps, Beer-Powder, a dual-lobe
+ *                       Henyey-Greenstein phase,
  *                       multi-scattering octaves, the sky's SH ambient. Out: premultiplied
  *                       in-scatter (rgb) and transmittance (a), and the in-scatter-weighted
  *                       distance.
