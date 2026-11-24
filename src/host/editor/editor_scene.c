@@ -831,6 +831,18 @@ static void despawn_scene(de__editor *ed, u64 scene) {
     de__ed_world_touch(ed);
 }
 
+bool de__ed_scene_active_path(de__editor *ed, char *out, size_t cap) {
+    (void)ed;
+    for (u32 i = 0; i < ED_MAX_SCENES; ++i) {
+        const ed_scene *s = &g_scene.scenes[i];
+        if (s->id == 0 || !s->active || s->id == ED_GAME_SCENE || s->path[0] == '\0')
+            continue;
+        const int n = snprintf(out, cap, "%s", s->path);
+        return n > 0 && (size_t)n < cap;
+    }
+    return false;
+}
+
 static bool read_file(const char *path, char **text, size_t *len) {
     const de_allocator *al = de_heap_allocator();
     if (strstr(path, ":/") != NULL && path[1] != ':') {

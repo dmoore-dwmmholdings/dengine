@@ -244,8 +244,32 @@ bool de__nav_tiles_read(const u8 *data, u64 size, u32 *agent_count, const char *
 bool de__nav_tiles_agent_at(const u8 *data, u64 size, u32 index, de__nav_tiles_agent *out);
 /** Record `k` of an agent from de__nav_tiles_agent_at. */
 void de__nav_tiles_record(const de__nav_tiles_agent *ag, u32 k, de__nav_tile_record *out);
-/** The tiles file beside settings file `toml_vpath`: ".toml" becomes ".tiles" (else appended). */
+/** The tiles file beside settings file `toml_vpath`: ".toml" becomes ".tiles" (else appended).
+ *  DENG-877: the legacy project-level file, read when a scene has no tiles file of its own. */
 bool de__nav_tiles_path(const char *toml_vpath, char *out, size_t cap);
+
+/* ---- DENG-877: tile input fingerprints (the editor's and de_nav_settings_check_tiles') ---- */
+
+/** The editor's tile grid: tile (x, y) covers bmin + [x, y] * tile_size along world X and Y. */
+typedef struct de__nav_fp_grid {
+    f64 bmin_x, bmin_y;
+    f32 tile_size;
+    u32 tiles_x, tiles_y;
+} de__nav_fp_grid;
+
+/** The grid of settings `s`: bounds min x and y, the tile size, ceil(extent / tile size) tiles
+ *  (at least 1) per axis, as the editor makes it. */
+void de__nav_fp_grid_of(const de_nav_settings *s, de__nav_fp_grid *out);
+/** The fingerprint every tile starts from: agent `a`'s settings, the tile size and the areas
+ *  (`areas`, `area_count`, sorted by id, as the editor keeps them). */
+u64 de__nav_fp_seed(const de_nav_agent_settings *a, f32 tile_size,
+                    const de_nav_area_settings *areas, u32 area_count);
+/** Fills `fp` (tiles_x * tiles_y entries, y * tiles_x + x) with the input fingerprint of every
+ *  tile of `g`: `seed`, then each triangle, obstacle, area volume and off-mesh link of `soup`
+ *  (origin 0, unclipped) whose xz box, grown by `a`'s radius and 4 cells, meets the tile. This is
+ *  the `fp` of the nav.tiles records (docs/formats/nav_tiles.md). */
+void de__nav_fp_tiles(const de__nav_fp_grid *g, const de_nav_agent_settings *a, u64 seed,
+                      const de__nav_soup *soup, u64 *fp);
 
 /* ---- Source format (the `navmesh` importer) -------------------------------------------------- */
 

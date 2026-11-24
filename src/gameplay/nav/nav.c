@@ -622,6 +622,111 @@ de_result de_nav_settings_load_tiles(de_nav *n, const char *vpath, const char *a
     return r;
 }
 
+/* DENG-877: the file against the settings and the world. */
+static bool same_build(const de_navmesh_build_desc *a, const de_navmesh_build_desc *b) {
+    return a->tile_size == b->tile_size && a->cell_size == b->cell_size &&
+           a->cell_height == b->cell_height && a->agent_radius == b->agent_radius &&
+           a->agent_height == b->agent_height && a->agent_max_climb == b->agent_max_climb &&
+           a->agent_max_slope_rad == b->agent_max_slope_rad &&
+           a->collision_mask == b->collision_mask;
+}
+
+static de_result check_agent(de_nav *n, const de_nav_settings *s, u32 ai,
+                             const de__nav_tiles_agent *g, de_nav_tiles_check *out) {
+    de__nav_fp_grid grid;
+    de__nav_fp_grid_of(s, &grid);
+    out->tiles = grid.tiles_x * grid.tiles_y;
+    out->saved = g->record_count;
+    out->grid_match = g->bmin_x == grid.bmin_x && g->bmin_y == grid.bmin_y &&
+                      g->tile_size == grid.tile_size && g->tiles_x == grid.tiles_x &&
+                      g->tiles_y == grid.tiles_y;
+    if (out->grid_match && g->dnav_size > 0) {
+        de__nav_container_info info;
+        de_navmesh_build_desc d;
+        out->grid_match = de__nav_container_read(g->dnav, g->dnav_size, &info, NULL) &&
+                          de_nav_settings_build_desc(s, ai, &d) == DE_OK &&
+                          same_build(&info.desc, &d);
+    }
+    if (!out->grid_match) {
+        /* Another grid: the records do not name this grid's tiles. */
+        out->stale = g->record_count;
+        out->missing = out->tiles;
+        return DE_OK;
+    }
+    /* The areas in id order, as the editor hashes them. */
+    de_nav_area_settings areas[DE_NAV_MAX_AREAS];
+    u32 area_count = 0;
+    for (u32 id = 0; id < DE_NAV_MAX_AREAS; ++id)
+        for (u32 i = 0; i < s->area_count; ++i)
+            if (s->areas[i].id == id)
+                areas[area_count++] = s->areas[i];
+    const de_nav_agent_settings *a = &s->agents[ai];
+    u64 *fp = (u64 *)DE_ALLOC(n->alloc, sizeof(u64) * out->tiles, 16, DE_MEM_GENERAL);
+    if (fp == NULL)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de_nav_settings_check_tiles");
+    de__nav_soup soup;
+    const de_dvec3 zero = {0, 0, 0};
+    de__nav_soup_init(&soup, n->alloc, zero);
+    de__nav_gather_input(n, &soup, a->collision_mask);
+    de_result r = DE_OK;
+    if (soup.failed) {
+        r = DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de_nav_settings_check_tiles: input");
+    } else {
+        de__nav_fp_tiles(&grid, a, de__nav_fp_seed(a, s->tile_size, areas, area_count), &soup,
+                         fp);
+        for (u32 k = 0; k < g->record_count; ++k) {
+            de__nav_tile_record rec;
+            de__nav_tiles_record(g, k, &rec);
+            if (rec.fp != fp[rec.tile])
+                ++out->stale;
+        }
+        out->missing = out->tiles - g->record_count;
+    }
+    de__nav_soup_free(&soup);
+    DE_FREE(n->alloc, fp, sizeof(u64) * out->tiles);
+    return r;
+}
+
+de_result de_nav_settings_check_tiles(de_nav *n, const de_nav_settings *s, const char *vpath,
+                                      const char *agent, de_nav_tiles_check *out) {
+    if (n == NULL || s == NULL || vpath == NULL || agent == NULL || out == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_nav_settings_check_tiles: NULL argument");
+    memset(out, 0, sizeof *out);
+    if (de_nav_settings_validate(s) != DE_OK)
+        return DE_ERR_INVALID_ARGUMENT; /* the message is in the error context */
+    u32 ai = s->agent_count;
+    for (u32 i = 0; i < s->agent_count && ai == s->agent_count; ++i)
+        if (strcmp(s->agents[i].name, agent) == 0)
+            ai = i;
+    if (ai == s->agent_count)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_nav_settings_check_tiles: no agent type %s",
+                       agent);
+    void *data = NULL;
+    u64 size = 0;
+    const de_result rd = de_file_read_all(vpath, de_heap_allocator(), &data, &size);
+    if (rd != DE_OK)
+        return rd;
+    const u8 *bytes = (const u8 *)data;
+    u32 count = 0;
+    const char *why = NULL;
+    de_result r = DE_ERR_NOT_FOUND;
+    if (!de__nav_tiles_read(bytes, size, &count, &why)) {
+        r = DE_FAIL(DE_ERR_PARSE, "%s: %s", vpath, why != NULL ? why : "malformed");
+    } else {
+        for (u32 i = 0; i < count; ++i) {
+            de__nav_tiles_agent g;
+            if (!de__nav_tiles_agent_at(bytes, size, i, &g) || strcmp(g.name, agent) != 0)
+                continue;
+            r = check_agent(n, s, ai, &g, out);
+            break;
+        }
+        if (r == DE_ERR_NOT_FOUND)
+            r = DE_FAIL(DE_ERR_NOT_FOUND, "%s: no agent type %s", vpath, agent);
+    }
+    DE_FREE(de_heap_allocator(), data, (size_t)size + 1);
+    return r;
+}
+
 void de_nav_add_navmesh(de_nav *n, de_navmesh mesh) {
     if (n == NULL)
         return;

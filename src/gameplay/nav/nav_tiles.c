@@ -240,3 +240,143 @@ bool de__nav_tiles_path(const char *toml_vpath, char *out, size_t cap) {
     const int w = snprintf(out, cap, "%.*s.tiles", (int)keep, toml_vpath);
     return w > 0 && (size_t)w < cap;
 }
+
+/* ---- DENG-877: per-scene file name ----------------------------------------------------------- */
+
+bool de_nav_scene_tiles_path(const char *scene_vpath, char *out, size_t cap) {
+    if (scene_vpath == NULL || scene_vpath[0] == '\0' || out == NULL || cap == 0)
+        return false;
+    const size_t n = strlen(scene_vpath);
+    const size_t keep = n > 6 && strcmp(scene_vpath + n - 6, ".scene") == 0 ? n - 6 : n;
+    const int w = snprintf(out, cap, "%.*s.nav.tiles", (int)keep, scene_vpath);
+    return w > 0 && (size_t)w < cap;
+}
+
+/* ---- DENG-877: fingerprints ------------------------------------------------------------------ */
+
+static u64 fp_fnv(u64 h, const void *p, size_t n) {
+    const unsigned char *b = (const unsigned char *)p;
+    for (size_t i = 0; i < n; ++i) {
+        h ^= b[i];
+        h *= 0x100000001b3ull;
+    }
+    return h;
+}
+
+/* floor without libm: exact (a whole f64 above 2^52 in magnitude is its own floor; NaN stays). */
+static f64 fp_floor(f64 v) {
+    if (!(v > -4503599627370496.0 && v < 4503599627370496.0))
+        return v;
+    const f64 t = (f64)(i64)v;
+    return t > v ? t - 1.0 : t;
+}
+
+static f64 fp_ceil(f64 v) {
+    if (!(v > -4503599627370496.0 && v < 4503599627370496.0))
+        return v;
+    const f64 t = (f64)(i64)v;
+    return t < v ? t + 1.0 : t;
+}
+
+void de__nav_fp_grid_of(const de_nav_settings *s, de__nav_fp_grid *out) {
+    const f64 ts = s->tile_size;
+    const f64 x = fp_ceil((s->bounds_max[0] - s->bounds_min[0]) / ts);
+    const f64 y = fp_ceil((s->bounds_max[1] - s->bounds_min[1]) / ts);
+    out->bmin_x = s->bounds_min[0];
+    out->bmin_y = s->bounds_min[1];
+    out->tile_size = s->tile_size;
+    out->tiles_x = x < 1.0 ? 1u : (u32)x;
+    out->tiles_y = y < 1.0 ? 1u : (u32)y;
+}
+
+/* The inclusive tile range a world box [x0, x1] x [y0, y1] meets; false when it meets none. */
+static bool fp_range(const de__nav_fp_grid *g, f64 x0, f64 y0, f64 x1, f64 y1, i32 *ix0, i32 *iy0,
+                     i32 *ix1, i32 *iy1) {
+    const f64 ts = g->tile_size;
+    const f64 a = fp_floor((x0 - g->bmin_x) / ts), b = fp_floor((y0 - g->bmin_y) / ts);
+    const f64 c = fp_floor((x1 - g->bmin_x) / ts), d = fp_floor((y1 - g->bmin_y) / ts);
+    if (c < 0 || d < 0 || a >= (f64)g->tiles_x || b >= (f64)g->tiles_y)
+        return false;
+    *ix0 = a < 0 ? 0 : (i32)a;
+    *iy0 = b < 0 ? 0 : (i32)b;
+    *ix1 = c >= (f64)g->tiles_x ? (i32)g->tiles_x - 1 : (i32)c;
+    *iy1 = d >= (f64)g->tiles_y ? (i32)g->tiles_y - 1 : (i32)d;
+    return true;
+}
+
+/* Folds element hash `eh` into the tiles a Recast-space xz box (origin 0) meets. */
+static void fp_fold(const de__nav_fp_grid *g, u64 *fp, f64 margin, f32 rx0, f32 rz0, f32 rx1,
+                    f32 rz1, u64 eh) {
+    /* Recast x = world x, Recast z = -world y. */
+    i32 ix0, iy0, ix1, iy1;
+    if (!fp_range(g, (f64)rx0 - margin, -(f64)rz1 - margin, (f64)rx1 + margin, -(f64)rz0 + margin,
+                  &ix0, &iy0, &ix1, &iy1))
+        return;
+    for (i32 y = iy0; y <= iy1; ++y)
+        for (i32 x = ix0; x <= ix1; ++x) {
+            u64 *h = &fp[(u32)y * g->tiles_x + (u32)x];
+            *h = (*h ^ eh) * 0x100000001b3ull;
+        }
+}
+
+static void fp_floats(const de__nav_fp_grid *g, u64 *fp, f64 margin, const f32 *v, u32 n,
+                      const f32 *xz, u32 corners) {
+    f32 x0 = xz[0], x1 = xz[0], z0 = xz[1], z1 = xz[1];
+    for (u32 c = 1; c < corners; ++c) {
+        const f32 x = xz[c * 2], z = xz[c * 2 + 1];
+        x0 = x < x0 ? x : x0;
+        x1 = x > x1 ? x : x1;
+        z0 = z < z0 ? z : z0;
+        z1 = z > z1 ? z : z1;
+    }
+    fp_fold(g, fp, margin, x0, z0, x1, z1, fp_fnv(0xcbf29ce484222325ull, v, sizeof(f32) * n));
+}
+
+u64 de__nav_fp_seed(const de_nav_agent_settings *a, f32 tile_size,
+                    const de_nav_area_settings *areas, u32 area_count) {
+    /* The byte order of DENG-864's editor hash (six f32 settings, the mask, the tile size, then
+     * id and cost per area), so files saved before DENG-877 keep their fingerprints. */
+    const f32 s[6] = {a->radius,    a->height,    a->max_slope_deg,
+                      a->step_height, a->cell_size, a->cell_height};
+    u64 h = 0xcbf29ce484222325ull;
+    h = fp_fnv(h, s, sizeof s);
+    h = fp_fnv(h, &a->collision_mask, sizeof a->collision_mask);
+    h = fp_fnv(h, &tile_size, sizeof tile_size);
+    for (u32 i = 0; i < area_count; ++i) {
+        h = fp_fnv(h, &areas[i].id, sizeof(u32));
+        h = fp_fnv(h, &areas[i].cost, sizeof(f32));
+    }
+    return h;
+}
+
+void de__nav_fp_tiles(const de__nav_fp_grid *g, const de_nav_agent_settings *a, u64 seed,
+                      const de__nav_soup *soup, u64 *fp) {
+    const u32 tc = g->tiles_x * g->tiles_y;
+    for (u32 t = 0; t < tc; ++t)
+        fp[t] = seed;
+    if (soup == NULL)
+        return;
+    const f64 margin = (f64)a->radius + 4.0 * (f64)a->cell_size;
+    for (u32 k = 0; k < soup->tri_count; ++k) {
+        f32 v[9], xz[6];
+        for (u32 c = 0; c < 3; ++c) {
+            const f32 *p = &soup->verts[(u32)soup->tris[k * 3 + c] * 3];
+            v[c * 3] = p[0], v[c * 3 + 1] = p[1], v[c * 3 + 2] = p[2];
+            xz[c * 2] = p[0], xz[c * 2 + 1] = p[2];
+        }
+        fp_floats(g, fp, margin, v, 9, xz, 3);
+    }
+    for (u32 k = 0; k < soup->obstacle_count; ++k) {
+        const f32 *o = &soup->obstacles[k * DE__NAV_RC_OBSTACLE_FLOATS];
+        fp_floats(g, fp, margin, o, DE__NAV_RC_OBSTACLE_FLOATS, o, 4);
+    }
+    for (u32 k = 0; k < soup->area_vol_count; ++k) {
+        const f32 *o = &soup->area_vols[k * DE__NAV_RC_AREA_VOL_FLOATS];
+        fp_floats(g, fp, margin, o, DE__NAV_RC_AREA_VOL_FLOATS, o, 4);
+    }
+    for (u32 k = 0; k < soup->offmesh_count; ++k) {
+        const f32 *o = &soup->offmesh[k * DE__NAV_RC_OFFMESH_FLOATS];
+        const f32 xz[2] = {o[0], o[2]}; /* built into the tile of its start */
+        fp_floats(g, fp, margin, o, DE__NAV_RC_OFFMESH_FLOATS, xz, 1);
+    }
+}
