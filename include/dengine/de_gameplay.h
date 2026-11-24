@@ -39,6 +39,63 @@ DE_API void de_nav_update(de_nav *n);
 DE_API de_result de_nav_use_assets(de_nav *n, de_asset_system *assets);
 DE_API de_navmesh de_asset_navmesh(de_asset_system *s, de_asset_id id);
 
+/* ---- DENG-833: project nav settings ----
+ * The settings the editor's `nav.configure` writes and the game runtime reads: agent types, area
+ * names and costs, bounds, tile size and auto rebake, in the project file `nav.toml` (TOML,
+ * `[[agent]]`, `[[area]]`, `[bounds]`). The editor loads it at start and rewrites it on every
+ * `nav.configure`; the runtime loads the same file and bakes with it. Baked tiles are not stored
+ * (the `navmesh` asset holds cooked tiles). Main thread only. */
+#define DE_NAV_MAX_AGENTS     4u
+#define DE_NAV_MAX_AREAS      16u
+#define DE_NAV_AGENT_NAME_MAX 32u
+#define DE_NAV_AREA_NAME_MAX  63u
+
+typedef struct de_nav_agent_settings {
+    char name[DE_NAV_AGENT_NAME_MAX + 1];
+    f32 radius, height, max_slope_deg, step_height, cell_size, cell_height;
+    u32 collision_mask;
+} de_nav_agent_settings;
+
+typedef struct de_nav_area_settings {
+    u32 id; /* 0..15; area 0 is walkable ground */
+    char name[DE_NAV_AREA_NAME_MAX + 1];
+    f32 cost; /* >= 1 */
+} de_nav_area_settings;
+
+typedef struct de_nav_settings {
+    u32 agent_count;
+    de_nav_agent_settings agents[DE_NAV_MAX_AGENTS];
+    u32 area_count;
+    de_nav_area_settings areas[DE_NAV_MAX_AREAS];
+    f64 bounds_min[3], bounds_max[3]; /* world box to bake; Z up */
+    f32 tile_size;                    /* meters; divides 256 */
+    bool auto_rebake;
+} de_nav_settings;
+
+/** The defaults: one `humanoid` agent, areas ground/road/water/jump, bounds -32..32 (x, y) and
+ *  -2..10 (z), tile size 8, auto rebake on. */
+DE_API void de_nav_settings_default(de_nav_settings *out);
+/** Checks the limits `nav.configure` enforces. DE_ERR_INVALID_ARGUMENT with a message in the
+ *  error context when `s` is out of range. */
+DE_API de_result de_nav_settings_validate(const de_nav_settings *s);
+/** Parses `nav.toml` text. Keys that are absent keep their default. DE_ERR_PARSE when the text
+ *  is not valid TOML or a value is out of range. */
+DE_API de_result de_nav_settings_parse(const char *text, u64 len, de_nav_settings *out);
+/** Writes `s` as nav.toml text into `buf` (NUL-terminated) and gives its length in `*len`.
+ *  DE_ERR_OUT_OF_MEMORY when `cap` is too small, DE_ERR_INVALID_ARGUMENT when `s` is invalid. */
+DE_API de_result de_nav_settings_format(const de_nav_settings *s, char *buf, size_t cap,
+                                        size_t *len);
+/** Reads `vpath`. DE_ERR_NOT_FOUND when the file does not exist (`*out` is then the defaults). */
+DE_API de_result de_nav_settings_load(const char *vpath, de_nav_settings *out);
+/** Writes `vpath` atomically. */
+DE_API de_result de_nav_settings_save(const char *vpath, const de_nav_settings *s);
+/** The build description of agent `agent` (tile size and slope converted). */
+DE_API de_result de_nav_settings_build_desc(const de_nav_settings *s, u32 agent,
+                                            de_navmesh_build_desc *out);
+/** Runtime nav setup: rebuilds every tile of the bounds for agent `agent` of `s` (background, as
+ *  de_nav_rebuild_tiles). Call it once per agent type after the world is attached. */
+DE_API de_result de_nav_settings_bake(de_nav *n, const de_nav_settings *s, u32 agent);
+
 /* ---- DENG-77: queries, off-mesh links, dynamic obstacles ----
  * Queries run on the main thread or on a frame worker of the nav's task system (one Detour
  * query object per frame worker, made with the first navmesh); not on background workers, and

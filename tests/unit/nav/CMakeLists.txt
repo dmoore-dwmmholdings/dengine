@@ -48,3 +48,9 @@ if(TARGET test_nav2d_grid)
     target_include_directories(test_nav2d_grid PRIVATE "${DE_ROOT_DIR}/src"
         "${DE_ROOT_DIR}/tests/unit")
 endif()
+
+# The project nav settings file nav.toml (DENG-833). CTest names nav_settings.<test>.
+de_add_test(NAME nav_settings
+    SOURCES test_nav_settings.c
+    LIBS de_nav de_nav_build de_asset de_ecs de_reflect de_task de_platform de_core
+    TIMEOUT 60)
