@@ -284,15 +284,20 @@ static inline bool de__ttile_parse(const void *data, u64 size, de__ttile_view *o
  *   24 A x u64: the scene IDs of the cell's entities that are a reference's source or target,
  *      ascending
  *   then R records of DE__XREF_REC bytes: u64 source scene ID (an entity of this cell), u64
- *      target scene ID, i32 target cx, i32 target cy, the component type name and the field
- *      name, each NUL-padded to DE__XREF_NAME bytes. Ordered by source, component, field.
+ *      target scene ID, i32 target cx, i32 target cy, the component type name (NUL-padded to
+ *      DE__XREF_NAME bytes) and the field path (NUL-padded to DE__XREF_PATH bytes). Ordered by
+ *      source, component, path.
+ * The path is a de_reflect_resolve_path path inside the component: a field name ("target"), an
+ * array element ("targets[2]") or a field of a nested struct or array element ("slots[1].who").
+ * Version 1 (DENG-858) had a 48-byte field name and no nested paths; it is no longer read.
  * Scene IDs are the world's (`de-cook world` keeps them unique across the world).
  */
 #define DE__XREF_MAGIC   "DEXR"
-#define DE__XREF_VERSION 1u
+#define DE__XREF_VERSION 2u
 #define DE__XREF_HEADER  24u
 #define DE__XREF_NAME    48u
-#define DE__XREF_REC     (24u + 2u * DE__XREF_NAME)
+#define DE__XREF_PATH    96u
+#define DE__XREF_REC     (24u + DE__XREF_NAME + DE__XREF_PATH)
 
 /** Writes "xref_<cx>_<cy>", the leaf of a cell's reference table. */
 static inline bool de__xref_leaf(char *buf, size_t cap, i32 cx, i32 cy) {
@@ -321,10 +326,10 @@ typedef struct de__xref_view {
 typedef struct de__xref_rec {
     u64 source, target;
     i32 tcx, tcy;
-    const char *component, *field;
+    const char *component, *path;
 } de__xref_rec;
 
-/** Parses a table; false when it is not a version 1 table, its size does not match or a name
+/** Parses a table; false when it is not a version 2 table, its size does not match or a name
  * is not NUL-terminated. */
 static inline bool de__xref_parse(const void *data, u64 size, de__xref_view *out) {
     const u8 *b = (const u8 *)data;
@@ -342,7 +347,7 @@ static inline bool de__xref_parse(const void *data, u64 size, de__xref_view *out
     for (u32 i = 0; i < v.ref_count; ++i) {
         const u8 *r = v.refs + (u64)DE__XREF_REC * i;
         if (memchr(r + 24, 0, DE__XREF_NAME) == NULL || r[24] == 0 ||
-            memchr(r + 24 + DE__XREF_NAME, 0, DE__XREF_NAME) == NULL ||
+            memchr(r + 24 + DE__XREF_NAME, 0, DE__XREF_PATH) == NULL ||
             r[24 + DE__XREF_NAME] == 0)
             return false;
     }
@@ -362,7 +367,7 @@ static inline de__xref_rec de__xref_at(const de__xref_view *v, u32 i) {
     o.tcx = (i32)de__ttile_u32(r + 16);
     o.tcy = (i32)de__ttile_u32(r + 20);
     o.component = (const char *)(r + 24);
-    o.field = (const char *)(r + 24 + DE__XREF_NAME);
+    o.path = (const char *)(r + 24 + DE__XREF_NAME);
     return o;
 }
 

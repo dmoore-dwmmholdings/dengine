@@ -23,9 +23,9 @@
  * streaming_internal.h); the target's cell gets a table too, listing the target as an anchor.
  * The world partition resolves the references at runtime. The match is by value: the cook has
  * no type registry, so a string field that happens to hold another cell's scene ID is taken for
- * a reference (with 64-bit IDs that does not happen by chance). A reference nested in an array
- * or an inline table cannot be recorded: it is written unchanged with a warning (the cell's
- * scene import then makes it null).
+ * a reference (with 64-bit IDs that does not happen by chance). DENG-874: a reference nested in an
+ * array or an inline table is recorded too, with its path ("targets[2]", "slots[1].who"); an
+ * integer scene ID is not detected (that needs the reflected registry, which the cook lacks).
  */
 #include "world_cells.h"
 #include "world_proxy.h"
@@ -569,9 +569,14 @@ static void wc_free_order(wc_run *run, u32 *o, const toml_datum_t *t) {
     DE_FREE(run->a, o, sizeof *o * (t->u.tab.size ? (u32)t->u.tab.size : 1u));
 }
 
-static bool wc_value(wc_run *run, de_strbuf *b, const toml_datum_t *v, const char *src);
+static u32 wc_xref_target(const wc_run *run, const wc_ent *e, const toml_datum_t *v);
+/* `e` (may be NULL): the entity whose value this is; a cross-cell reference in it is written as
+ * "0x0" (DENG-858, DENG-874: also inside arrays and tables). */
+static bool wc_value_e(wc_run *run, de_strbuf *b, const toml_datum_t *v, const char *src,
+                       const wc_ent *e);
 
-static bool wc_inline_table(wc_run *run, de_strbuf *b, const toml_datum_t *t, const char *src) {
+static bool wc_inline_table(wc_run *run, de_strbuf *b, const toml_datum_t *t, const char *src,
+                            const wc_ent *e) {
     if (t->u.tab.size == 0)
         return de_strbuf_append_cstr(b, "{}") == DE_OK;
     u32 *o = wc_key_order(run, t);
@@ -582,15 +587,18 @@ static bool wc_inline_table(wc_run *run, de_strbuf *b, const toml_datum_t *t, co
         if (i > 0)
             ok = de_strbuf_append_cstr(b, ", ") == DE_OK;
         ok = ok && wc_key(b, t->u.tab.key[o[i]]) && de_strbuf_append_cstr(b, " = ") == DE_OK &&
-             wc_value(run, b, &t->u.tab.value[o[i]], src);
+             wc_value_e(run, b, &t->u.tab.value[o[i]], src, e);
     }
     wc_free_order(run, o, t);
     return ok && de_strbuf_append_cstr(b, " }") == DE_OK;
 }
 
-static bool wc_value(wc_run *run, de_strbuf *b, const toml_datum_t *v, const char *src) {
+static bool wc_value_e(wc_run *run, de_strbuf *b, const toml_datum_t *v, const char *src,
+                       const wc_ent *e) {
     switch (v->type) {
     case TOML_STRING:
+        if (wc_xref_target(run, e, v) != UINT32_MAX)
+            return de_strbuf_append_cstr(b, "\"0x0\"") == DE_OK;
         return wc_str(b, v->u.str.ptr, (size_t)v->u.str.len);
     case TOML_INT64:
         return de_strbuf_appendf(b, "%lld", (long long)v->u.int64) == DE_OK;
@@ -603,20 +611,23 @@ static bool wc_value(wc_run *run, de_strbuf *b, const toml_datum_t *v, const cha
         for (int32_t i = 0; ok && i < v->u.arr.size; ++i) {
             if (i > 0)
                 ok = de_strbuf_append_cstr(b, ", ") == DE_OK;
-            ok = ok && wc_value(run, b, &v->u.arr.elem[i], src);
+            ok = ok && wc_value_e(run, b, &v->u.arr.elem[i], src, e);
         }
         return ok && de_strbuf_append_char(b, ']') == DE_OK;
     }
     case TOML_TABLE:
-        return wc_inline_table(run, b, v, src);
+        return wc_inline_table(run, b, v, src, e);
     default:
         wc_msg(run, "error", src, v->lineno, "dates and times are not supported in world scenes");
         return de_strbuf_append_cstr(b, "\"\"") == DE_OK;
     }
 }
 
+static bool wc_value(wc_run *run, de_strbuf *b, const toml_datum_t *v, const char *src) {
+    return wc_value_e(run, b, v, src, NULL);
+}
+
 /* One component table. For a root's DeTransform, `origin` (non-NULL) is subtracted from x/y. */
-static u32 wc_xref_target(const wc_run *run, const wc_ent *e, const toml_datum_t *v);
 
 static bool wc_component(wc_run *run, de_strbuf *b, const wc_ent *e, const char *hex,
                          const char *name, const toml_datum_t *t, const f64 *origin,
@@ -645,10 +656,8 @@ static bool wc_component(wc_run *run, de_strbuf *b, const wc_ent *e, const char 
                      de_strbuf_append_cstr(b, ", ") == DE_OK && wc_f64(b, p[1]) &&
                      de_strbuf_append_cstr(b, ", ") == DE_OK && wc_f64(b, p[2]) &&
                      de_strbuf_append_char(b, ']') == DE_OK;
-        } else if (wc_xref_target(run, e, v) != UINT32_MAX) {
-            ok = ok && de_strbuf_append_cstr(b, "\"0x0\"") == DE_OK; /* DENG-858: in the table */
         } else {
-            ok = ok && wc_value(run, b, v, src);
+            ok = ok && wc_value_e(run, b, v, src, e); /* DENG-858: references go to the table */
         }
         ok = ok && de_strbuf_append_char(b, '\n') == DE_OK;
     }
@@ -1217,7 +1226,8 @@ static bool wc_tiles_list(const wc_run *run, const char *world, const char *cell
 typedef struct wc_xref {
     u64 src, dst;
     i32 scx, scy, tcx, tcy;
-    const char *comp, *field; /* in the parsed scene */
+    const char *comp;       /* in the parsed scene */
+    char path[DE__XREF_PATH]; /* field, "field[2]", "field[1].key" */
 } wc_xref;
 
 /* The index of the entity that `v` references when it is a "0x.." string naming a placed entity
@@ -1236,21 +1246,66 @@ static u32 wc_xref_target(const wc_run *run, const wc_ent *e, const toml_datum_t
     return j;
 }
 
-/* A cross-cell reference inside an array or inline table: warned, written unchanged. */
-static void wc_xref_nested(wc_run *run, const wc_ent *e, const char *comp, const char *field,
-                           const toml_datum_t *v) {
-    if (v->type == TOML_ARRAY) {
-        for (int32_t i = 0; i < v->u.arr.size; ++i)
-            wc_xref_nested(run, e, comp, field, &v->u.arr.elem[i]);
-    } else if (v->type == TOML_TABLE) {
-        for (int32_t i = 0; i < v->u.tab.size; ++i)
-            wc_xref_nested(run, e, comp, field, &v->u.tab.value[i]);
-    } else if (wc_xref_target(run, e, v) != UINT32_MAX) {
-        wc_msg(run, "warning", e->source, v->lineno,
-               "%s.%s of entity 0x%016llx names %s in another cell inside an array or table; "
-               "only a top-level field can reference another cell, so it will be null",
-               comp, field, (unsigned long long)e->id, v->u.str.ptr);
+static bool wc_push_xref(wc_run *run, const wc_xref *x);
+
+/* Records the reference `v` (when it is one) at `path`, which is the field name of a top-level
+ * field or, below an array or inline table, "field[2]" or "field.key". Out of memory: false. A
+ * path or component name too long for the table is an error. */
+static bool wc_xref_value(wc_run *run, const wc_ent *e, const char *comp, const char *path,
+                          const toml_datum_t *v) {
+    const u32 j = wc_xref_target(run, e, v);
+    if (j == UINT32_MAX)
+        return true;
+    const wc_ent *d = &run->ents[j];
+    if (strlen(comp) >= DE__XREF_NAME || strlen(path) >= DE__XREF_PATH) {
+        wc_msg(run, "error", e->source, v->lineno,
+               "%s.%s references another cell, but its name or path is longer than %u bytes", comp,
+               path, (unsigned)DE__XREF_PATH - 1u);
+        return true;
     }
+    wc_msg(run, "note", e->source, v->lineno,
+           "%s.%s of entity 0x%016llx in cell (%d, %d) references entity 0x%016llx "
+           "in cell (%d, %d); written as a world reference",
+           comp, path, (unsigned long long)e->id, (int)e->cx, (int)e->cy,
+           (unsigned long long)d->id, (int)d->cx, (int)d->cy);
+    wc_xref x;
+    memset(&x, 0, sizeof x);
+    x.src = e->id;
+    x.dst = d->id;
+    x.scx = e->cx;
+    x.scy = e->cy;
+    x.tcx = d->cx;
+    x.tcy = d->cy;
+    x.comp = comp;
+    memcpy(x.path, path, strlen(path));
+    return wc_push_xref(run, &x);
+}
+
+/* The references at or below `v`, whose path is `path` (a buffer of DE__XREF_PATH bytes, with
+ * `len` used). A path that does not fit is reported only when it holds a reference. */
+static bool wc_xref_walk(wc_run *run, const wc_ent *e, const char *comp, char *path, size_t len,
+                         const toml_datum_t *v) {
+    if (v->type != TOML_ARRAY && v->type != TOML_TABLE)
+        return wc_xref_value(run, e, comp, path, v);
+    const int32_t n = v->type == TOML_ARRAY ? v->u.arr.size : v->u.tab.size;
+    for (int32_t i = 0; i < n; ++i) {
+        const toml_datum_t *c = v->type == TOML_ARRAY ? &v->u.arr.elem[i] : &v->u.tab.value[i];
+        int w = v->type == TOML_ARRAY ? snprintf(path + len, DE__XREF_PATH - len, "[%d]", (int)i)
+                                      : snprintf(path + len, DE__XREF_PATH - len, ".%s",
+                                                 v->u.tab.key[i]);
+        if (w < 0 || (size_t)w >= DE__XREF_PATH - len) {
+            path[len] = 0;
+            wc_msg(run, "error", e->source, c->lineno,
+                   "%s.%s: a path in this value is longer than %u bytes; a cross-cell reference "
+                   "inside it cannot be recorded", comp, path, (unsigned)DE__XREF_PATH - 1u);
+            continue;
+        }
+        const bool ok = wc_xref_walk(run, e, comp, path, len + (size_t)w, c);
+        path[len] = 0;
+        if (!ok)
+            return false;
+    }
+    return true;
 }
 
 static int wc_xref_cmp(const void *pa, const void *pb) {
@@ -1262,7 +1317,7 @@ static int wc_xref_cmp(const void *pa, const void *pb) {
     if (a->src != b->src)
         return a->src < b->src ? -1 : 1;
     int c = strcmp(a->comp, b->comp);
-    return c != 0 ? c : strcmp(a->field, b->field);
+    return c != 0 ? c : strcmp(a->path, b->path);
 }
 
 static bool wc_push_xref(wc_run *run, const wc_xref *x) {
@@ -1295,29 +1350,17 @@ static bool wc_xrefs_collect(wc_run *run) {
             if (t->type != TOML_TABLE)
                 continue;
             for (int32_t f = 0; f < t->u.tab.size; ++f) {
-                const toml_datum_t *v = &t->u.tab.value[f];
+                char path[DE__XREF_PATH];
                 const char *field = t->u.tab.key[f];
-                if (v->type == TOML_ARRAY || v->type == TOML_TABLE) {
-                    wc_xref_nested(run, e, comp, field, v);
+                const size_t fl = strlen(field);
+                if (fl >= sizeof path) {
+                    wc_msg(run, "error", e->source, t->u.tab.value[f].lineno,
+                           "%s.%s: the field name is longer than %u bytes", comp, field,
+                           (unsigned)DE__XREF_PATH - 1u);
                     continue;
                 }
-                const u32 j = wc_xref_target(run, e, v);
-                if (j == UINT32_MAX)
-                    continue;
-                const wc_ent *d = &run->ents[j];
-                if (strlen(comp) >= DE__XREF_NAME || strlen(field) >= DE__XREF_NAME) {
-                    wc_msg(run, "error", e->source, v->lineno,
-                           "%s.%s references another cell, but its name is longer than %u bytes",
-                           comp, field, (unsigned)DE__XREF_NAME - 1u);
-                    continue;
-                }
-                wc_msg(run, "note", e->source, v->lineno,
-                       "%s.%s of entity 0x%016llx in cell (%d, %d) references entity 0x%016llx "
-                       "in cell (%d, %d); written as a world reference",
-                       comp, field, (unsigned long long)e->id, (int)e->cx, (int)e->cy,
-                       (unsigned long long)d->id, (int)d->cx, (int)d->cy);
-                const wc_xref x = {e->id, d->id, e->cx, e->cy, d->cx, d->cy, comp, field};
-                if (!wc_push_xref(run, &x))
+                memcpy(path, field, fl + 1u);
+                if (!wc_xref_walk(run, e, comp, path, fl, &t->u.tab.value[f]))
                     return false;
             }
         }
@@ -1371,7 +1414,7 @@ static bool wc_xref_cell(wc_run *run, const char *world, const char *cells_dir, 
         wc_le32(r + 16, (u32)x->tcx);
         wc_le32(r + 20, (u32)x->tcy);
         memcpy(r + 24, x->comp, strlen(x->comp));
-        memcpy(r + 24 + DE__XREF_NAME, x->field, strlen(x->field));
+        memcpy(r + 24 + DE__XREF_NAME, x->path, strlen(x->path));
         r += DE__XREF_REC;
     }
     qsort(anchors, na, sizeof *anchors, wc_u64_cmp);

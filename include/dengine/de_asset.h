@@ -846,8 +846,11 @@ DE_API void de_asset_flush_unused(de_asset_system *s); /* evict every zero-ref a
  * another cell, for example a target or a joint body, is cut out of the cell scene by the cook
  * (the field is null there) and kept, with the world scene IDs of both entities, in the source
  * cell's reference table, a blob asset "world/<name>/xref_<cx>_<cy>" in the cell's bundle (the
- * target's cell has one too). The cook reports each one. Only a top-level field of a component
- * can cross cells; one nested in an array or struct is warned and stays null. At runtime the
+ * target's cell has one too). The cook reports each one. DENG-874: the field may sit inside an
+ * array or inline table (path "targets[2]", "slots[1].who"; resolved at runtime with
+ * de_reflect_resolve_path). The cook detects a reference by value, a "0x.." string naming a
+ * placed entity of another cell, so an integer scene ID is not detected (write it as a string).
+ * Tables before version 2 (DENG-858) cannot be read: cook the world again. At runtime the
  * partition writes the target entity into the field once both cells are loaded (whichever loads
  * second), before on_cell reports the cell, and writes null back before the target's cell
  * unloads; the component is marked changed each time. Code that holds such a field thus sees

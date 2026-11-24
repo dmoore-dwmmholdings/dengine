@@ -83,7 +83,7 @@ typedef struct wp_xref {
     i32 tcx, tcy;    /* its cell */
     de_entity src;   /* the entity of this cell whose field it is */
     de_component comp;
-    u32 offset;      /* of the DE_FK_ENTITY field in the component */
+    u32 offset;      /* of the DE_FK_ENTITY field or array element in the component */
     bool usable;     /* the component and field were found */
     bool resolved;   /* the field holds the target */
 } wp_xref;
@@ -718,22 +718,21 @@ static bool wp_xref_table(de_world_partition *p, const wp_cell *c, de__xref_view
     return true;
 }
 
-/* The field `field` of component type `comp` as a DE_FK_ENTITY offset; false when there is none. */
-static bool wp_xref_field(de_world_partition *p, const char *comp, const char *field,
+/* The field or element at `path` (de_reflect_resolve_path) of component type `comp` as a
+ * DE_FK_ENTITY offset; false when there is none. */
+static bool wp_xref_field(de_world_partition *p, const char *comp, const char *path,
                           de_component *out, u32 *offset) {
     *out = de_component_find(p->world, comp);
     if (!DE_HANDLE_VALID(*out))
         return false;
     const de_type_registry *reg = de_world_types(p->world);
-    const de_type_desc *d = de_type_get(reg, de_type_find(reg, comp));
-    for (u32 i = 0; d != NULL && i < d->field_count; ++i)
-        if (strcmp(d->fields[i].name, field) == 0) {
-            if (d->fields[i].kind != DE_FK_ENTITY || d->fields[i].size != sizeof(de_entity))
-                return false;
-            *offset = d->fields[i].offset;
-            return true;
-        }
-    return false;
+    const de_field_info *f = NULL;
+    u32 off = 0;
+    if (de_reflect_resolve_path(reg, de_type_find(reg, comp), path, &f, &off) != DE_OK ||
+        f == NULL || f->kind != DE_FK_ENTITY || f->size != sizeof(de_entity))
+        return false;
+    *offset = off;
+    return true;
 }
 
 /* Builds cell c's anchors and references from table `v` and the instantiated entities (`n` of
@@ -782,11 +781,11 @@ static void wp_xref_load(de_world_partition *p, wp_cell *c, const de__xref_view 
         x->tcx = r.tcx;
         x->tcy = r.tcy;
         x->src = wp_xref_anchor(c, r.source);
-        x->usable = x->src.bits != 0 && wp_xref_field(p, r.component, r.field, &x->comp, &x->offset);
+        x->usable = x->src.bits != 0 && wp_xref_field(p, r.component, r.path, &x->comp, &x->offset);
         if (!x->usable)
             DE_WARN(p->log, "world %s: cell (%d, %d): %s.%s of entity 0x%016llx is not an entity "
                     "field of a loaded entity; its reference is ignored", p->name, (int)c->cx,
-                    (int)c->cy, r.component, r.field, (unsigned long long)r.source);
+                    (int)c->cy, r.component, r.path, (unsigned long long)r.source);
     }
     p->stats.xrefs += nr;
 }
