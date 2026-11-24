@@ -28,10 +28,101 @@ f32 de__pt_hg(f32 cosine, f32 g) {
     return (1 - g * g) / (12.566370614359172f * d * sqrtf(d));
 }
 
-typedef struct pt_fog_gpu {
-    f32 inverse[3][4], extent_density[4], albedo_g[4];
-} pt_fog_gpu;
-DE_STATIC_ASSERT(sizeof(pt_fog_gpu) == 80, "PtFog shader layout");
+typedef de__pt_fog pt_fog_gpu;
+DE_STATIC_ASSERT(sizeof(pt_fog_gpu) == 96, "PtFog shader layout");
+static f32 fog_hash(f32 x, f32 y, f32 z) {
+    x = x * 0.3183099f + 0.1f;
+    y = y * 0.3183099f + 0.1f;
+    z = z * 0.3183099f + 0.1f;
+    x -= floorf(x);
+    y -= floorf(y);
+    z -= floorf(z);
+    x *= 17.0f;
+    y *= 17.0f;
+    z *= 17.0f;
+    f32 v = x * y * z * (x + y + z);
+    return v - floorf(v);
+}
+static f32 fog_lerp(f32 a, f32 b, f32 t) {
+    return a + (b - a) * t;
+}
+/* Value noise in [0, 1]; the same as fog_noise of froxel_inject_media.slang. */
+static f32 fog_noise(f32 px, f32 py, f32 pz) {
+    f32 ix = floorf(px), iy = floorf(py), iz = floorf(pz);
+    f32 fx = px - ix, fy = py - iy, fz = pz - iz;
+    fx = fx * fx * (3.0f - 2.0f * fx);
+    fy = fy * fy * (3.0f - 2.0f * fy);
+    fz = fz * fz * (3.0f - 2.0f * fz);
+    f32 a = fog_lerp(fog_lerp(fog_hash(ix, iy, iz), fog_hash(ix + 1, iy, iz), fx),
+                     fog_lerp(fog_hash(ix, iy + 1, iz), fog_hash(ix + 1, iy + 1, iz), fx), fy);
+    f32 b = fog_lerp(fog_lerp(fog_hash(ix, iy, iz + 1), fog_hash(ix + 1, iy, iz + 1), fx),
+                     fog_lerp(fog_hash(ix, iy + 1, iz + 1), fog_hash(ix + 1, iy + 1, iz + 1), fx),
+                     fy);
+    return fog_lerp(a, b, fz);
+}
+static f32 fog_exponent(f32 v) {
+    return expf(-fminf(fmaxf(v, -8.0f), 80.0f));
+}
+bool de__pt_fog_heterogeneous(const de__pt_fog *fog) {
+    return fog->params[1] > 0 ||
+           (fog->extent_density[0] < 0 ? fog->params[0] != 0 : fog->params[2] > 0);
+}
+f32 de__pt_fog_density(const de__pt_fog *fog, de_vec3 p) {
+    f32 q[3];
+    for (u32 r = 0; r < 3; ++r)
+        q[r] = fog->inverse[r][0] * p.x + fog->inverse[r][1] * p.y + fog->inverse[r][2] * p.z +
+               fog->inverse[r][3];
+    f32 d = fmaxf(fog->extent_density[3], 0.0f);
+    if (fog->extent_density[0] < 0) {
+        d *= fog_exponent(fog->params[0] * (p.z - fog->params[3]));
+    } else {
+        f32 inside = fminf(fog->extent_density[0] - fabsf(q[0]),
+                           fminf(fog->extent_density[1] - fabsf(q[1]),
+                                 fog->extent_density[2] - fabsf(q[2])));
+        if (inside < 0)
+            return 0;
+        if (fog->params[2] > 0) {
+            f32 t = fminf(fmaxf(inside / fog->params[2], 0.0f), 1.0f);
+            d *= t * t * (3.0f - 2.0f * t);
+        }
+    }
+    if (fog->params[1] > 0)
+        d *= fog_lerp(1.0f, 2.0f * fog_noise(q[0] * 0.5f, q[1] * 0.5f, q[2] * 0.5f), fog->params[1]);
+    return d;
+}
+f32 de__pt_fog_majorant(const de__pt_fog *fog, de_vec3 o, de_vec3 dir, f32 t0, f32 t1) {
+    f32 m = fmaxf(fog->extent_density[3], 0.0f);
+    if (fog->extent_density[0] < 0 && fog->params[0] != 0) {
+        f32 z = fminf(o.z + dir.z * t0, o.z + dir.z * t1);
+        m *= fog_exponent(fog->params[0] * (z - fog->params[3]));
+    }
+    return m * (1.0f + fmaxf(fog->params[1], 0.0f));
+}
+void de__pt_fog_pack(const de__fog_snapshot *s, de__pt_fog *v) {
+    memset(v, 0, sizeof *v);
+    de_mat4 matrix = de_affine_to_m4(&s->transform), inverse = de_m4_inverse_affine(&matrix);
+    for (u32 r = 0; r < 3; ++r)
+        for (u32 c = 0; c < 4; ++c)
+            v->inverse[r][c] = inverse.m[c * 4 + r];
+    v->extent_density[0] = fabsf(s->volume.extent.x) * .5f;
+    v->extent_density[1] = fabsf(s->volume.extent.y) * .5f;
+    v->extent_density[2] = fabsf(s->volume.extent.z) * .5f;
+    /* DENG-207: a zero extent is global fog, as in the froxel volumetrics. DENG-848: global fog
+     * keeps its height falloff; noise and edge fade follow the raster clamps. */
+    bool global = v->extent_density[0] == 0 && v->extent_density[1] == 0 &&
+                  v->extent_density[2] == 0;
+    if (global)
+        v->extent_density[0] = -1;
+    v->extent_density[3] = s->volume.density;
+    v->albedo_g[0] = s->volume.albedo.x;
+    v->albedo_g[1] = s->volume.albedo.y;
+    v->albedo_g[2] = s->volume.albedo.z;
+    v->albedo_g[3] = s->volume.anisotropy;
+    v->params[0] = global ? fmaxf(s->volume.height_falloff, 0.0f) : 0.0f;
+    v->params[1] = fminf(fmaxf(s->volume.noise, 0.0f), 1.0f);
+    v->params[2] = fmaxf(s->volume.edge_fade, 0.0f);
+    v->params[3] = matrix.m[14]; /* the entity's world height */
+}
 struct de__pt_media {
     de_renderer *r;
     de_cvar density, albedo, g, steps;
@@ -119,23 +210,7 @@ de_result de__pt_media_frame(de__pt_media *m, de__view_frame *f, de__pt_media_pa
         const de__fog_snapshot *s = &f->world->fog[i];
         if (!(s->volume.density > 0))
             continue;
-        pt_fog_gpu *v = &fog[count++];
-        de_mat4 matrix = de_affine_to_m4(&s->transform), inverse = de_m4_inverse_affine(&matrix);
-        for (u32 r = 0; r < 3; ++r)
-            for (u32 c = 0; c < 4; ++c)
-                v->inverse[r][c] = inverse.m[c * 4 + r];
-        v->extent_density[0] = fabsf(s->volume.extent.x) * .5f;
-        v->extent_density[1] = fabsf(s->volume.extent.y) * .5f;
-        v->extent_density[2] = fabsf(s->volume.extent.z) * .5f;
-        /* DENG-207: a zero extent is global fog, as in the froxel volumetrics (no height
-         * falloff or noise in the path tracer yet). */
-        if (v->extent_density[0] == 0 && v->extent_density[1] == 0 && v->extent_density[2] == 0)
-            v->extent_density[0] = -1;
-        v->extent_density[3] = s->volume.density;
-        v->albedo_g[0] = s->volume.albedo.x;
-        v->albedo_g[1] = s->volume.albedo.y;
-        v->albedo_g[2] = s->volume.albedo.z;
-        v->albedo_g[3] = s->volume.anisotropy;
+        de__pt_fog_pack(s, &fog[count++]);
     }
     out->count = count;
     out->features = count ? 1u : 0u;

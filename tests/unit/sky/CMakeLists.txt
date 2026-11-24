@@ -50,6 +50,14 @@ if(TARGET test_sky_fog)
     target_include_directories(test_sky_fog PRIVATE "${DE_ROOT_DIR}/src")
 endif()
 
+# test_sky_pt_fog: the path tracer's fog density against the raster formula (DENG-848).
+de_add_test(NAME sky_pt_fog
+    SOURCES test_pt_fog.c
+    LIBS ${_de_sky_libs})
+if(TARGET test_sky_pt_fog)
+    target_include_directories(test_sky_pt_fog PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
 # test_sky_clouds (render builds; CTest names sky_clouds.clouds.<test>): the volumetric clouds'
 # settings, pass list on a null-backend device and large-coordinate weather offsets (DENG-208).
 de_add_test(NAME sky_clouds
