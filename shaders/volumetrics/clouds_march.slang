@@ -111,6 +111,9 @@ void cs_clouds_march(uint3 id : SV_DispatchThreadID, uniform MarchParams pc)
     }
     float dist = (1.0 - T) > 1e-3 ? wsum / (1.0 - T) : (seg.y > seg.x ? 0.5 * (seg.x + seg.y) : 1e5);
     L = min(L, float3(CLOUDS_MAX_VALUE, CLOUDS_MAX_VALUE, CLOUDS_MAX_VALUE));
+    // The early-out leaves up to 1 % through, enough to show the sun disk (about 1e5 times the
+    // sky) through an overcast deck: remap so that an opaque cloud is fully opaque.
+    T = saturate((T - 0.01) / 0.99);
     de_rwtex2d(pc.color)[id.xy] = float4(L, T);
     de_rwtex2d(pc.dist)[id.xy] = float4(dist, 0.0, 0.0, 0.0);
 }
