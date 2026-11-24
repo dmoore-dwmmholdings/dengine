@@ -8,8 +8,10 @@
  * the lighting target and exported to the forward transparency pass through the lighting context.
  * DENG-838: with no HDRI, the stage also keeps the sky's IBL environment (sky_ibl.c) current: it
  * completes a finished generation, hands it to lighting (de__lighting_set_sky) and starts a new one
- * when the sun turned more than DE__SKY_IBL_SUN_DEG. Lighting runs before this stage, so a new
- * environment lights the frame after the one it completed in.
+ * when the sun turned more than DE__SKY_IBL_SUN_DEG. DENG-844: that is the "sky.ibl" stage, in
+ * DE__VIEW_SLOT_LIGHTING before the lighting build (de__ibl_build), so a generation that finished
+ * lights the very frame whose graph is built next (no one-frame lag); the draw stage below runs
+ * after lighting and only reads what lighting used.
  */
 #include "world/sky/sky_internal.h"
 
@@ -335,7 +337,8 @@ struct de__sky_render {
     u32 smp_wrap_bindless;
     de_cvar cv_aerial; /* r.sky_aerial_perspective */
     de__sky_ibl *ibl;  /* DENG-838 */
-    bool registered, failed, ibl_failed;
+    u64 ibl_swap_frame; /* DENG-844: frame_index + 1 of the frame a new environment was handed over */
+    bool registered, ibl_registered, failed, ibl_failed;
 };
 
 typedef struct view_pass {
@@ -499,18 +502,24 @@ static void add_aerial(de__sky_render *sr, const de__view_frame *vf, de__vis_con
     lc->aerial_range_km = DE__SKY_AERIAL_RANGE_KM;
 }
 
-/* The sky's IBL environment (DENG-838): completes a finished generation and hands it to lighting,
- * or starts one when the sky changed. Never both in one call: the strip a completed generation
- * frees may still be read by this frame's graph, which is not submitted yet. */
-static void update_ibl(de__sky_render *sr, de__lighting *lt, const de__sky_snapshot *sn, f32 r_km) {
+/* The sky's IBL environment (DENG-838, DENG-844): completes a finished generation and hands it to
+ * lighting, or starts one when the sky changed. Runs before the lighting build of the frame, so a
+ * handed-over environment is the one that lighting packs in this frame. A frame that handed one
+ * over starts no generation: the strip it frees (the previous current one) may still be read by
+ * the graph of an earlier view of this frame, which is not submitted yet. */
+static void update_ibl(de__sky_render *sr, de__lighting *lt, const de__sky_snapshot *sn, f32 r_km,
+                       u64 frame_index) {
     if (sr->ibl_failed || !de__sky_ibl_ready(sr->ibl))
         return;
     if (de__sky_ibl_poll(sr->ibl, false)) {
         de__ibl_sky cur;
         de__sky_ibl_current(sr->ibl, &cur);
         de__lighting_set_sky(lt, &cur);
+        sr->ibl_swap_frame = frame_index + 1u;
         return;
     }
+    if (sr->ibl_swap_frame == frame_index + 1u)
+        return;
     if (de__sky_ibl_pending(sr->ibl) || !de__sky_ibl_wants(sr->ibl, sn, r_km))
         return;
     const de_result r = de__sky_ibl_generate(sr->ibl, sr->luts, sn, r_km);
@@ -520,6 +529,35 @@ static void update_ibl(de__sky_render *sr, de__lighting *lt, const de__sky_snaps
                  e != NULL ? e->message : de_result_str(r));
         sr->ibl_failed = true;
     }
+}
+
+/* The viewer's radius from the planet's centre (km). */
+static f32 viewer_radius_km(const de__view_frame *vf) {
+    f64 alt_m = 1.0;
+    if (vf->camera != NULL)
+        alt_m = vf->camera->has_position ? vf->camera->position.z : (f64)vf->camera->offset.z;
+    return (f32)(DE__SKY_BOTTOM + fmax(alt_m / 1000.0, 0.001));
+}
+
+/* DENG-844: "sky.ibl", before the lighting build. Without an HDRI environment it keeps the sky's
+ * IBL current (update_ibl) so that de__ibl_build, later in this frame, packs the new environment. */
+static void ibl_stage(de__view_frame *vf, void *user) {
+    de__sky_render *sr = (de__sky_render *)user;
+    if (sr->failed || sr->ibl_failed || !de__sky_luts_ready(sr->luts) || vf->graph == NULL ||
+        vf->camera == NULL || vf->probe_capture)
+        return;
+    de_renderer *r = vf->renderer;
+    de__lighting *lt = de__views_lighting(r);
+    if (lt == NULL || lt->env.valid)
+        return; /* an HDRI environment lights the view */
+    if (de__vis_frame_context(de__views_vis(r), vf->view, vf->graph, vf->frame_index) == NULL)
+        return;
+    de__sky_snapshot sn;
+    if (!de__sky_snapshot_get(sr->sky, &sn))
+        return;
+    if (de__sky_luts_update(sr->luts, sn.mie_scale, sn.albedo) != DE_OK)
+        return; /* the draw stage reports it and switches the sky off */
+    update_ibl(sr, lt, &sn, viewer_radius_km(vf), vf->frame_index);
 }
 
 static void stage(de__view_frame *vf, void *user) {
@@ -551,11 +589,7 @@ static void stage(de__view_frame *vf, void *user) {
     const f32 pre = de__lighting_view_exposure(
         lt, slot, vf->view, vf->frame_index,
         vf->camera != NULL ? vf->camera->camera.exposure_ev100 : (f32)NAN, NULL);
-    f64 alt_m = 1.0;
-    if (vf->camera != NULL)
-        alt_m = vf->camera->has_position ? vf->camera->position.z : (f64)vf->camera->offset.z;
-    const f32 r_km = (f32)(DE__SKY_BOTTOM + fmax(alt_m / 1000.0, 0.001));
-    update_ibl(sr, lt, &sn, r_km);
+    const f32 r_km = viewer_radius_km(vf);
     const f32 sun_w = sn.sun_weight * pre, moon_w = sn.moon_weight * pre;
 
     de_rg *g = vf->graph;
@@ -637,6 +671,10 @@ void de__sky_render_destroy(de__sky_render *sr) {
         de__render_world_wait_idle(sr->renderer);
         de__view_unregister_stage(sr->renderer, stage, sr);
     }
+    if (sr->ibl_registered) {
+        de__render_world_wait_idle(sr->renderer);
+        de__view_unregister_stage(sr->renderer, ibl_stage, sr);
+    }
     if (sr->ibl != NULL) {
         de__lighting_set_sky(de__views_lighting(sr->renderer), NULL);
         de__sky_ibl_destroy(sr->ibl);
@@ -704,6 +742,11 @@ de_result de__sky_render_create(struct de_renderer *r, struct de_sky *s, const d
     if (res == DE_OK) {
         res = de__view_register_stage(r, DE__VIEW_SLOT_TRANSPARENT, -100, "sky", stage, sr);
         sr->registered = res == DE_OK;
+    }
+    if (res == DE_OK) {
+        res = de__view_register_stage(r, DE__VIEW_SLOT_LIGHTING, DE__SKY_IBL_STAGE_ORDER, "sky.ibl",
+                                      ibl_stage, sr);
+        sr->ibl_registered = res == DE_OK;
     }
     if (res != DE_OK) {
         de__sky_render_destroy(sr);

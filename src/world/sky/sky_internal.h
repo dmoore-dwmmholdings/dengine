@@ -162,6 +162,9 @@ bool de__sky_snapshot_get(struct de_sky *s, de__sky_snapshot *out);
 #define DE__SKY_IBL_SIZE   128u
 #define DE__SKY_IBL_MIPS   8u
 #define DE__SKY_IBL_SH_MIP 3u
+/** DENG-844: the order of the "sky.ibl" stage in DE__VIEW_SLOT_LIGHTING: before every stage that
+ * builds the lighting (the "lighting" stage is 0). */
+#define DE__SKY_IBL_STAGE_ORDER (-50)
 /** The sun's turn (degrees) that regenerates the environment. */
 #define DE__SKY_IBL_SUN_DEG 0.5f
 /** The viewer's altitude change (km) that regenerates it. */
