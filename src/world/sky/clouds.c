@@ -29,6 +29,7 @@ enum {
     CLOUDS_PIPE_MARCH,
     CLOUDS_PIPE_RECONSTRUCT,
     CLOUDS_PIPE_COMPOSITE,
+    CLOUDS_PIPE_GROUND,
     CLOUDS_PIPES
 };
 
@@ -65,10 +66,19 @@ typedef struct composite_params {
     u32 width, height, mw, mh;
     u32 dist, flags, pad0, pad1; /* flags: 1 the aerial perspective on opaque pixels */
 } composite_params;
+/* clouds_shadow.slang GroundParams (DENG-867) */
+typedef struct ground_params {
+    u32 header, entry, depth, target;
+    u32 width, height, pad0, pad1;
+} ground_params;
 DE_STATIC_ASSERT(sizeof(shadow_params) == 48, "ShadowParams is 48 bytes");
 DE_STATIC_ASSERT(sizeof(march_params) == 48, "MarchParams is 48 bytes");
 DE_STATIC_ASSERT(sizeof(reconstruct_params) == 48, "ReconstructParams is 48 bytes");
 DE_STATIC_ASSERT(sizeof(composite_params) == 64, "CompositeParams is 64 bytes");
+DE_STATIC_ASSERT(sizeof(ground_params) == 32, "GroundParams is 32 bytes");
+
+/* DENG-867: one entry of the ground readback ring: DE__CLOUDS_GROUND_SAMPLES float4s. */
+#define GROUND_ENTRY_BYTES ((u64)DE__CLOUDS_GROUND_SAMPLES * 16u)
 
 typedef struct clouds_view {
     de_gpu_texture shadow, history[2];
@@ -79,6 +89,12 @@ typedef struct clouds_view {
     u32 header_bindless, shadow_header_bindless;
     u32 width, height; /* the histories' size */
     u64 frames;        /* cloud frames with these histories */
+    /* DENG-867: the depth samples read back (clouds.ground), one entry per ring slot. */
+    de_gpu_buffer ground_rb;
+    const u8 *ground_map;
+    u32 ground_access;
+    u64 ground_tag[DE__VIS_FRAME_RING];   /* the frame index + 1 that wrote the entry; 0: none */
+    f64 ground_cam[DE__VIS_FRAME_RING][3]; /* the camera's world position in that frame */
     bool failed;
 } clouds_view;
 
@@ -104,6 +120,7 @@ static const struct {
     {"clouds_march", "cs_clouds_march", (u32)sizeof(march_params)},
     {"clouds_reconstruct", "cs_clouds_reconstruct", (u32)sizeof(reconstruct_params)},
     {"clouds_composite", "cs_clouds_composite", (u32)sizeof(composite_params)},
+    {"clouds_shadow", "cs_clouds_ground", (u32)sizeof(ground_params)},
 };
 
 static de_result load_pipe(de__clouds *c, u32 i) {
@@ -145,6 +162,8 @@ static void view_release(de__clouds *c, clouds_view *v) {
         de_gpu_buffer_destroy(c->dev, v->header_buf);
     if (DE_HANDLE_VALID(v->shadow_buf))
         de_gpu_buffer_destroy(c->dev, v->shadow_buf);
+    if (DE_HANDLE_VALID(v->ground_rb))
+        de_gpu_buffer_destroy(c->dev, v->ground_rb);
     memset(v, 0, sizeof *v);
 }
 
@@ -167,6 +186,52 @@ static de_gpu_buffer ring_create(de__clouds *c, u32 entry_bytes, u32 stride, con
     *map = DE_HANDLE_VALID(b) ? (u8 *)de_gpu_buffer_map(c->dev, b) : NULL;
     *bindless = *map != NULL ? de_gpu_buffer_bindless(c->dev, b) : 0u;
     return b;
+}
+
+/* DENG-867: the view's ground readback ring (made in its first cloud frame; without it the
+ * cascades follow the camera alone, as before). */
+static bool view_ensure_ground(de__clouds *c, clouds_view *v, u32 slot) {
+    if (v->ground_map != NULL)
+        return true;
+    if (DE_HANDLE_VALID(v->ground_rb))
+        return false; /* made, but it would not map: no estimate for this view */
+    char name[48];
+    snprintf(name, sizeof name, "clouds ground readback %u", slot);
+    v->ground_rb = de_gpu_buffer_create(
+        c->dev, &(de_gpu_buffer_desc){.size = (u64)DE__VIS_FRAME_RING * GROUND_ENTRY_BYTES,
+                                      .usage = DE_USAGE_COPY_DST,
+                                      .memory = DE_MEM_READBACK,
+                                      .name = name});
+    v->ground_map =
+        DE_HANDLE_VALID(v->ground_rb) ? (const u8 *)de_gpu_buffer_map(c->dev, v->ground_rb) : NULL;
+    v->ground_access = DE_ACCESS_NONE;
+    memset(v->ground_tag, 0, sizeof v->ground_tag);
+    if (v->ground_map == NULL) {
+        de_error_clear();
+        return false;
+    }
+    return true;
+}
+
+/* DENG-867: the sun's crossing of the layer bottom for the receivers seen in the readback entry
+ * that this frame's ring slot holds (a frame at least DE__VIS_FRAME_RING old, so complete),
+ * relative to the camera now. False without one. */
+static bool receiver_target(const clouds_view *v, const de__clouds_frame *f, f64 *x, f64 *y) {
+    const u64 frame = f->frame_index;
+    const u32 e = (u32)(frame % DE__VIS_FRAME_RING);
+    const u64 tag = v->ground_tag[e];
+    if (v->ground_map == NULL || tag == 0u || tag - 1u + DE__VIS_FRAME_RING > frame ||
+        frame - (tag - 1u) > 4u * DE__VIS_FRAME_RING)
+        return false;
+    f32 s[DE__CLOUDS_GROUND_SAMPLES * 4u];
+    memcpy(s, v->ground_map + (size_t)e * GROUND_ENTRY_BYTES, sizeof s);
+    const f64 *cam = v->ground_cam[e];
+    if (!de__clouds_receiver_crossing(s, DE__CLOUDS_GROUND_SAMPLES, cam[2], f->sun_dir,
+                                      (f64)f->clouds.bottom_m, x, y))
+        return false;
+    *x += cam[0] - f->camera_world[0];
+    *y += cam[1] - f->camera_world[1];
+    return true;
 }
 
 /* The view's constant rings and shadow map: made in its first cloud frame. */
@@ -508,8 +573,10 @@ typedef struct clouds_pass {
         march_params march;
         reconstruct_params reconstruct;
         composite_params composite;
+        ground_params ground;
     } pc;
     u32 pc_bytes;
+    u64 rb_offset; /* clouds.ground.readback: the entry's offset in the ring */
 } clouds_pass;
 
 static u32 tex_index(const clouds_pass *p, const de_rg_pass *pass, de_rg_resource r, bool storage) {
@@ -558,6 +625,19 @@ static void composite_exec(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) 
     dispatch(cmd, p);
 }
 
+static void ground_exec(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    clouds_pass *p = (clouds_pass *)user;
+    p->pc.ground.depth = tex_index(p, pass, p->r[0], false);
+    p->pc.ground.target = de_gpu_buffer_bindless(p->dev, de_rg_buffer(pass, p->r[1]));
+    dispatch(cmd, p);
+}
+
+static void ground_readback_exec(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    const clouds_pass *p = (const clouds_pass *)user;
+    de_gpu_cmd_copy_buffer(cmd, de_rg_buffer(pass, p->r[2]), p->rb_offset,
+                           de_rg_buffer(pass, p->r[1]), 0, GROUND_ENTRY_BYTES);
+}
+
 static clouds_pass *new_pass(const de__clouds *c, de_arena *arena, u32 pipe, u32 bytes) {
     clouds_pass *p = (clouds_pass *)de_arena_push(arena, sizeof *p, 16);
     if (p == NULL)
@@ -584,20 +664,25 @@ u32 de__clouds_add_shadow_pass(de__clouds *c, de_rg *g, de_arena *arena, const d
     /* The cascades: centred on the camera, snapped to their texels in world space (no shimmer). */
     const de__clouds_quality q = de__clouds_quality_for(f->settings->volumetrics);
     /* The map is indexed where the sun's ray crosses the layer bottom, so the fine cascade is
-     * centred on the crossing of the ray through the camera (the receivers near it); the coarse
-     * one keeps its camera-centred area (16 km covers the shift). */
+     * centred on the crossing of the ray through the camera (the receivers near it), moved to
+     * cover the crossing of the receivers the camera sees when that is elsewhere, as below a
+     * high camera (DENG-867; from the depth buffer a few frames ago). The coarse one stays camera-centred unless
+     * the fine centre is beyond its reach (a low sun): then it moves with it. */
     const f64 bottom = (f64)f->clouds.bottom_m;
-    const f64 shx = de__clouds_shadow_shift((f64)f->sun_dir.x, (f64)f->sun_dir.z,
-                                            f->camera_world[2], bottom);
-    const f64 shy = de__clouds_shadow_shift((f64)f->sun_dir.y, (f64)f->sun_dir.z,
-                                            f->camera_world[2], bottom);
-    const f32 sx = de__clouds_shadow_snap(f->camera_world[0], 0.0, DE__CLOUDS_SHADOW_EXTENT_M,
+    f64 tx = 0.0, ty = 0.0;
+    const bool has_target = receiver_target(v, f, &tx, &ty);
+    f64 fsx = 0.0, fsy = 0.0, csx = 0.0, csy = 0.0;
+    de__clouds_shadow_centres((f64)f->sun_dir.x, (f64)f->sun_dir.z, f->camera_world[2], bottom,
+                              has_target, tx, &fsx, &csx);
+    de__clouds_shadow_centres((f64)f->sun_dir.y, (f64)f->sun_dir.z, f->camera_world[2], bottom,
+                              has_target, ty, &fsy, &csy);
+    const f32 sx = de__clouds_shadow_snap(f->camera_world[0], csx, DE__CLOUDS_SHADOW_EXTENT_M,
                                           DE__CLOUDS_SHADOW_N);
-    const f32 sy = de__clouds_shadow_snap(f->camera_world[1], 0.0, DE__CLOUDS_SHADOW_EXTENT_M,
+    const f32 sy = de__clouds_shadow_snap(f->camera_world[1], csy, DE__CLOUDS_SHADOW_EXTENT_M,
                                           DE__CLOUDS_SHADOW_N);
-    const f32 fx = de__clouds_shadow_snap(f->camera_world[0], shx, DE__CLOUDS_SHADOW_FINE_EXTENT_M,
+    const f32 fx = de__clouds_shadow_snap(f->camera_world[0], fsx, DE__CLOUDS_SHADOW_FINE_EXTENT_M,
                                           DE__CLOUDS_SHADOW_N);
-    const f32 fy = de__clouds_shadow_snap(f->camera_world[1], shy, DE__CLOUDS_SHADOW_FINE_EXTENT_M,
+    const f32 fy = de__clouds_shadow_snap(f->camera_world[1], fsy, DE__CLOUDS_SHADOW_FINE_EXTENT_M,
                                           DE__CLOUDS_SHADOW_N);
     const f32 area[4] = {f->camera.x + sx, f->camera.y + sy, DE__CLOUDS_SHADOW_EXTENT_M,
                          f->camera.z + (f32)((f64)f->clouds.bottom_m - f->camera_world[2])};
@@ -798,6 +883,47 @@ u32 de__clouds_add_passes(de__clouds *c, de_rg *g, de_arena *arena, const de__cl
         de_rg_read(pass, in->aerial, DE_ACCESS_SHADER_READ);
     de_rg_read(pass, in->target, DE_ACCESS_SHADER_READ);
     de_rg_write(pass, in->target, DE_ACCESS_SHADER_WRITE);
+
+    /* DENG-867: the depth samples for the cascades' placement, read back DE__VIS_FRAME_RING
+     * frames later. Optional: without them the cascades follow the camera. */
+    if (view_ensure_ground(c, v, f->slot)) {
+        const de_rg_resource samples = de_rg_create_buffer(
+            g, &(de_gpu_buffer_desc){.size = GROUND_ENTRY_BYTES,
+                                     .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC,
+                                     .stride = 16u,
+                                     .name = "clouds.ground"});
+        clouds_pass *pg = new_pass(c, arena, CLOUDS_PIPE_GROUND, (u32)sizeof(ground_params));
+        if (!DE_HANDLE_VALID(samples) || pg == NULL) {
+            ++g->error_count;
+            return added;
+        }
+        pg->gx = 1u;
+        pg->gy = 1u;
+        pg->r[0] = in->depth;
+        pg->r[1] = samples;
+        pg->rb_offset = (u64)entry * GROUND_ENTRY_BYTES;
+        pg->pc.ground = (ground_params){
+            .header = hdr, .entry = entry, .width = in->width, .height = in->height};
+        pass = de_rg_add_pass(g, "clouds.ground", DE_QUEUE_GRAPHICS, ground_exec, pg);
+        if (pass == NULL)
+            return added;
+        ++added;
+        de_rg_read(pass, in->depth, DE_ACCESS_SHADER_READ);
+        de_rg_write(pass, samples, DE_ACCESS_SHADER_WRITE);
+        pass = de_rg_add_pass(g, "clouds.ground.readback", DE_QUEUE_GRAPHICS,
+                              ground_readback_exec, pg);
+        if (pass == NULL)
+            return added;
+        ++added;
+        de_rg_pass_side_effect(pass);
+        de_rg_read(pass, samples, DE_ACCESS_COPY_SRC);
+        pg->r[2] = de_rg_import_buffer(g, v->ground_rb, v->ground_access);
+        de_rg_set_name(g, pg->r[2], "clouds.ground_readback");
+        de_rg_write(pass, pg->r[2], DE_ACCESS_COPY_DST);
+        v->ground_access = DE_ACCESS_COPY_DST;
+        v->ground_tag[entry] = f->frame_index + 1u;
+        memcpy(v->ground_cam[entry], f->camera_world, sizeof v->ground_cam[entry]);
+    }
 
     /* Both histories end the frame sampled; next frame imports them so. */
     de_rg_export(g, hist_cur, DE_ACCESS_SHADER_READ);

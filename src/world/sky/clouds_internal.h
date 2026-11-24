@@ -136,6 +136,38 @@ f32 de__clouds_shadow_snap(f64 camera_world, f64 shift, f64 extent, u32 n);
  * cascade stays inside the coarse one (low sun: beyond it the map has no shadow, as before);
  * 0 when the sun is within 0.02 of the horizon. Pure. */
 f64 de__clouds_shadow_shift(f64 sun_axis, f64 sun_z, f64 from_z, f64 bottom_z);
+/** DENG-867: de__clouds_shadow_shift without the clamp: the sun's whole horizontal travel from
+ * `from_z` up to `bottom_z` (0 from at or above the bottom, or with the sun within 0.02 of the
+ * horizon). Pure. */
+f64 de__clouds_shadow_travel(f64 sun_axis, f64 sun_z, f64 from_z, f64 bottom_z);
+
+/** DENG-867: the half-width of the fine cascade's fully weighted part (inside its fade). */
+#define DE__CLOUDS_SHADOW_FINE_INNER_M (DE__CLOUDS_SHADOW_FINE_EXTENT_M * (0.5f - DE__CLOUDS_SHADOW_FADE))
+
+/** DENG-867: the two cascades' centre shifts from the camera along one axis (before the snap).
+ * The fine cascade starts at the crossing of the ray through the camera (`camera_z`), as in
+ * DENG-854. With a target (`has_target`: the crossing of the receivers the camera sees, from the
+ * depth buffer a few frames ago, relative to the camera), it moves the least distance that brings
+ * the target inside its fully weighted part (DE__CLOUDS_SHADOW_FINE_INNER_M): a camera high above
+ * the ground then still has the fine cascade on the ground it looks at. Neither is clamped: when
+ * the fine centre is more than DE__CLOUDS_SHADOW_SHIFT_MAX_M from the camera (a low sun), the
+ * coarse cascade moves by the excess, so the fine cascade stays inside it and the receivers near
+ * the camera keep a shadow. Both are the DENG-854 values while the fine cascade fits and covers
+ * the target. Pure. */
+void de__clouds_shadow_centres(f64 sun_axis, f64 sun_z, f64 camera_z, f64 bottom_z,
+                               bool has_target, f64 target, f64 *fine, f64 *coarse);
+
+/** DENG-867: the samples of the depth buffer that clouds.ground reads (an 8 x 8 grid). */
+#define DE__CLOUDS_GROUND_SAMPLES 64u
+
+/** DENG-867: where the receivers the camera sees cross the layer bottom toward the sun. `s` holds
+ * `n` float4s from clouds.ground: each the receiver's position relative to the camera (x, y, z)
+ * and w 1 for a hit (0: sky); the camera was at world height `camera_z`. The result, relative to
+ * that camera (x, y), is the per-axis median crossing of the nearer half of the hits (the
+ * receivers that the fine cascade is for). False with no hit or with the sun within 0.02 of the
+ * horizon. Pure. */
+bool de__clouds_receiver_crossing(const f32 *s, u32 n, f64 camera_z, de_vec3 sun, f64 bottom_z,
+                                  f64 *x, f64 *y);
 
 /** (`world` + `drift`) modulo `tile` in double precision, in [0, tile), as f32. Pure. */
 f32 de__clouds_tile_offset(f64 world, f64 drift, f64 tile);
