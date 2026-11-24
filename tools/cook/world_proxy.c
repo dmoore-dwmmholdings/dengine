@@ -364,6 +364,92 @@ static bool wp_add(de__wproxy *b, wp_geo *g, const de__wproxy_item *it) {
     return true;
 }
 
+/* ---- Terrain (DENG-871) -------------------------------------------------------------------- */
+
+#define WP_TERRAIN_STEP_MAX 16u
+
+u32 de__wproxy_terrain_step(f32 ratio) {
+    u32 step = 1u;
+    while (step < WP_TERRAIN_STEP_MAX && !((f64)(step * 2u) * (f64)(step * 2u) * (f64)ratio > 1.0))
+        step *= 2u;
+    return step;
+}
+
+/* The kept sample offsets of a `count`-sample span: 0, step, 2 step, ..., and count - 1. */
+static u32 wp_terrain_axis(u32 count, u32 step, u32 *out) {
+    u32 n = 0;
+    if (count == 0)
+        return 0;
+    for (u32 k = 0; k < count - 1u; k += step)
+        out[n++] = k;
+    out[n++] = count - 1u;
+    return n;
+}
+
+static void wp_terrain_point(const de__wproxy_tile *t, u32 i, u32 j, f64 p[3]) {
+    const u32 gi = t->x0 + i, gj = t->y0 + j;
+    p[0] = t->origin[0] + (f64)gi * t->spacing;
+    p[1] = t->origin[1] + (f64)gj * t->spacing;
+    p[2] = t->origin[2] + (f64)t->heights[(size_t)gj * t->res + gi] / 65535.0 * t->height;
+}
+
+static bool wp_terrain_hole(const de__wproxy_tile *t, u32 i0, u32 i1, u32 j0, u32 j1) {
+    if (t->holes == NULL)
+        return false;
+    for (u32 j = j0; j <= j1; ++j)
+        for (u32 i = i0; i <= i1; ++i)
+            if (t->holes[(size_t)(t->y0 + j) * t->res + t->x0 + i] != 0u)
+                return true;
+    return false;
+}
+
+/* The triangles of tile `t` at sample step `step`, written to `out` (9 floats each) when it is
+ * not NULL; `*area` gets their total area. Returns the triangle count. */
+static u32 wp_terrain_tris(const de__wproxy_tile *t, u32 step, f32 *out, f64 *area) {
+    u32 xs[WP_TERRAIN_STEP_MAX * 4u + 2u], ys[WP_TERRAIN_STEP_MAX * 4u + 2u];
+    *area = 0.0;
+    if (t->heights == NULL || t->res == 0 || t->w > WP_TERRAIN_STEP_MAX * 4u + 1u ||
+        t->h > WP_TERRAIN_STEP_MAX * 4u + 1u || t->x0 + t->w > t->res || t->y0 + t->h > t->res)
+        return 0;
+    const u32 nx = wp_terrain_axis(t->w, step, xs), ny = wp_terrain_axis(t->h, step, ys);
+    u32 tris = 0;
+    for (u32 b = 0; b + 1u < ny; ++b)
+        for (u32 a = 0; a + 1u < nx; ++a) {
+            const u32 i0 = xs[a], i1 = xs[a + 1u], j0 = ys[b], j1 = ys[b + 1u];
+            const f64 mx =
+                t->origin[0] + ((f64)(t->x0 + i0) + (f64)(t->x0 + i1)) * 0.5 * t->spacing;
+            const f64 my =
+                t->origin[1] + ((f64)(t->y0 + j0) + (f64)(t->y0 + j1)) * 0.5 * t->spacing;
+            if (!(mx >= 0.0 && mx < t->cell[0] && my >= 0.0 && my < t->cell[1]))
+                continue;
+            if (wp_terrain_hole(t, i0, i1, j0, j1))
+                continue;
+            f64 q[4][3];
+            wp_terrain_point(t, i0, j0, q[0]);
+            wp_terrain_point(t, i1, j0, q[1]);
+            wp_terrain_point(t, i1, j1, q[2]);
+            wp_terrain_point(t, i0, j1, q[3]);
+            /* (00, 10, 11) and (00, 11, 01): counter-clockwise seen from +Z */
+            static const u32 k_tri[2][3] = {{0, 1, 2}, {0, 2, 3}};
+            for (u32 k = 0; k < 2u; ++k) {
+                const f64 *v0 = q[k_tri[k][0]], *v1 = q[k_tri[k][1]], *v2 = q[k_tri[k][2]];
+                const f64 e1[3] = {v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]};
+                const f64 e2[3] = {v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]};
+                const f64 cx = e1[1] * e2[2] - e1[2] * e2[1], cy = e1[2] * e2[0] - e1[0] * e2[2],
+                          cz = e1[0] * e2[1] - e1[1] * e2[0];
+                *area += 0.5 * sqrt(cx * cx + cy * cy + cz * cz);
+                if (out != NULL) {
+                    f32 *o = &out[(size_t)tris * 9u];
+                    for (u32 c = 0; c < 3u; ++c)
+                        for (u32 d = 0; d < 3u; ++d)
+                            o[c * 3u + d] = (f32)q[k_tri[k][c]][d];
+                }
+                tris++;
+            }
+        }
+    return tris;
+}
+
 /* ---- Output -------------------------------------------------------------------------------- */
 
 static bool wp_base64(de_strbuf *out, const u8 *p, size_t n) {
@@ -544,8 +630,9 @@ static u32 wp_simplify(const f32 *src, u32 n, f32 ratio, f32 *out, u32 *remap, u
     return (u32)(got / 3u);
 }
 
-de_result de__wproxy_bake(de__wproxy *b, const de__wproxy_item *items, u32 n, f32 ratio,
-                          de_strbuf *out, u32 *tris) {
+de_result de__wproxy_bake(de__wproxy *b, const de__wproxy_item *items, u32 n,
+                          const de__wproxy_tile *tiles, u32 tile_n, f32 ratio, de_strbuf *out,
+                          u32 *tris) {
     de_strbuf_clear(out);
     *tris = 0;
     wp_geo g;
@@ -555,28 +642,42 @@ de_result de__wproxy_bake(de__wproxy *b, const de__wproxy_item *items, u32 n, f3
     u32 *remap = NULL, *idx = NULL, *dst = NULL;
     f32 *verts = NULL, *src = NULL, *res_pos = NULL;
     u32 index_count = 0;
+    size_t res_cap = 0;
     for (u32 i = 0; i < n; ++i)
         if (!wp_add(b, &g, &items[i])) {
             res = DE_FAIL(DE_ERR_OUT_OF_MEMORY, "far proxy bake");
             goto done;
         }
-    if (g.tris == 0)
+    /* Terrain (DENG-871): counted first, so the result has room for it. */
+    const u32 step = de__wproxy_terrain_step(ratio);
+    u32 terr_tris = 0;
+    for (u32 i = 0; i < tile_n; ++i) {
+        f64 area;
+        terr_tris += wp_terrain_tris(&tiles[i], step, NULL, &area);
+    }
+    if (g.tris == 0 && terr_tris == 0)
         goto done;
     index_count = g.tris * 3u;
+    res_cap = (size_t)(g.tris + terr_tris) * 9u;
+    res_pos = (f32 *)DE_ALLOC(b->a, sizeof(f32) * res_cap, 16, DE_MEM_GENERAL);
+    if (res_pos == NULL) {
+        res = DE_FAIL(DE_ERR_OUT_OF_MEMORY, "far proxy bake");
+        goto done;
+    }
+    u32 count[WP_MAX_GROUPS + 1u] = {0}, groups = 0, total = 0;
+    f32 rgb[WP_MAX_GROUPS + 1u][3];
+    if (g.tris == 0)
+        goto terrain;
     remap = (u32 *)DE_ALLOC(b->a, sizeof(u32) * index_count, 16, DE_MEM_GENERAL);
     idx = (u32 *)DE_ALLOC(b->a, sizeof(u32) * index_count, 16, DE_MEM_GENERAL);
     dst = (u32 *)DE_ALLOC(b->a, sizeof(u32) * index_count, 16, DE_MEM_GENERAL);
     verts = (f32 *)DE_ALLOC(b->a, sizeof(f32) * 3u * index_count, 16, DE_MEM_GENERAL);
     src = (f32 *)DE_ALLOC(b->a, sizeof(f32) * 3u * index_count, 16, DE_MEM_GENERAL);
-    res_pos = (f32 *)DE_ALLOC(b->a, sizeof(f32) * 3u * index_count, 16, DE_MEM_GENERAL);
-    if (remap == NULL || idx == NULL || dst == NULL || verts == NULL || src == NULL ||
-        res_pos == NULL) {
+    if (remap == NULL || idx == NULL || dst == NULL || verts == NULL || src == NULL) {
         res = DE_FAIL(DE_ERR_OUT_OF_MEMORY, "far proxy bake");
         goto done;
     }
     /* Each colour group on its own, in group order. */
-    u32 count[WP_MAX_GROUPS] = {0}, groups = 0, total = 0;
-    f32 rgb[WP_MAX_GROUPS][3];
     for (u32 k = 0; k < g.groups; ++k) {
         u32 m = 0;
         for (u32 t = 0; t < g.tris; ++t)
@@ -592,6 +693,23 @@ de_result de__wproxy_bake(de__wproxy *b, const de__wproxy_item *items, u32 n, f3
             rgb[groups][c] = g.area[k] > 0.0 ? (f32)(g.color[k][c] / g.area[k]) : g.key[k][c];
         count[groups++] = got;
         total += got;
+    }
+terrain:
+    /* The terrain tiles, in order, as one more primitive (not simplified). */
+    if (terr_tris > 0) {
+        f64 csum[3] = {0.0, 0.0, 0.0}, asum = 0.0;
+        u32 first = total;
+        for (u32 i = 0; i < tile_n; ++i) {
+            f64 area = 0.0;
+            first += wp_terrain_tris(&tiles[i], step, &res_pos[(size_t)first * 9u], &area);
+            for (int c = 0; c < 3; ++c)
+                csum[c] += (f64)tiles[i].color[c] * area;
+            asum += area;
+        }
+        for (int c = 0; c < 3; ++c)
+            rgb[groups][c] = asum > 0.0 ? (f32)(csum[c] / asum) : tiles[0].color[c];
+        count[groups++] = terr_tris;
+        total += terr_tris;
     }
     if (total == 0)
         goto done;
@@ -613,7 +731,7 @@ done:
     if (src != NULL)
         DE_FREE(b->a, src, sizeof(f32) * 3u * index_count);
     if (res_pos != NULL)
-        DE_FREE(b->a, res_pos, sizeof(f32) * 3u * index_count);
+        DE_FREE(b->a, res_pos, sizeof(f32) * res_cap);
     if (g.pos != NULL) {
         DE_FREE(b->a, g.pos, sizeof(f32) * 9u * g.cap);
         DE_FREE(b->a, g.grp, g.cap);

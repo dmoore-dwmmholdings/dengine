@@ -12,6 +12,16 @@
  * shaded triangles (POSITION and NORMAL, no UVs) in one mesh named "proxy", with one primitive and
  * one material per group, whose base colour is the group's area-weighted mean.
  *
+ * Terrain (DENG-871): each terrain tile that overlaps the cell (de__wproxy_tile, the DENG-857 tile
+ * data) adds a decimated heightfield: every `step`-th sample of the tile on each axis, its far
+ * edge sample always kept, where `step` is the largest power of two up to 16 with
+ * step * step * ratio <= 1 (so about `ratio` of the tile's triangles, never fewer). Each
+ * decimated quad whose centre lies in the cell, and none of whose source samples is a hole, gives
+ * two triangles. The samples follow the cooked tile convention (Z up): sample (i, j) is at
+ * origin + (i * spacing, j * spacing, heights[] / 65535 * height). The terrain is not passed to
+ * the simplifier; it is one more primitive after the mesh groups, with the area-weighted mean of
+ * the tiles' colours. A bake without tiles is byte-identical to one before DENG-871.
+ *
  * The output depends only on the input bytes: the mesh code is built with the deterministic float
  * flags (DE_DETERMINISTIC_FLAGS) and floats are written in their shortest round-trip form.
  */
@@ -39,6 +49,18 @@ typedef struct de__wproxy_item {
     int line;
 } de__wproxy_item;
 
+/** One terrain tile that overlaps a cell (DENG-871), in the cell's frame. */
+typedef struct de__wproxy_tile {
+    f64 origin[3];       /**< sample (0, 0) of the terrain grid, relative to the cell origin */
+    f64 spacing, height; /**< metres between samples; metres at height 65535 */
+    u32 res;             /**< samples per side of the grid (the row stride of the arrays) */
+    u32 x0, y0, w, h;    /**< the tile's samples: columns x0..x0+w-1, rows y0..y0+h-1 */
+    const u16 *heights;  /**< res * res samples, row-major (row j along +y, column i along +x) */
+    const u8 *holes;     /**< res * res; non-zero: no surface. NULL: none */
+    f64 cell[2];         /**< the cell's extent on x and y, from 0 (its origin) */
+    f32 color[3];        /**< linear base colour */
+} de__wproxy_tile;
+
 /** Reports a problem with one item (it is left out of the proxy). */
 typedef void (*de__wproxy_warn_fn)(void *user, const de__wproxy_item *item, const char *msg);
 
@@ -49,11 +71,16 @@ de__wproxy *de__wproxy_create(const de_allocator *a, de__wproxy_warn_fn warn, vo
 void de__wproxy_destroy(de__wproxy *b);
 
 /**
- * Bakes `items` into the glTF text `out` (cleared first). `*tris` is the proxy's triangle count;
- * 0 (and `out` empty) when no item gave geometry. DE_OK, or DE_ERR_OUT_OF_MEMORY.
+ * Bakes `items` and the terrain `tiles` into the glTF text `out` (cleared first). `*tris` is the
+ * proxy's triangle count; 0 (and `out` empty) when nothing gave geometry. DE_OK, or
+ * DE_ERR_OUT_OF_MEMORY.
  */
-de_result de__wproxy_bake(de__wproxy *b, const de__wproxy_item *items, u32 n, f32 ratio,
-                          de_strbuf *out, u32 *tris);
+de_result de__wproxy_bake(de__wproxy *b, const de__wproxy_item *items, u32 n,
+                          const de__wproxy_tile *tiles, u32 tile_n, f32 ratio, de_strbuf *out,
+                          u32 *tris);
+
+/** The terrain sample step of `ratio` (1, 2, 4, 8 or 16). */
+u32 de__wproxy_terrain_step(f32 ratio);
 
 DE_EXTERN_C_END
 
