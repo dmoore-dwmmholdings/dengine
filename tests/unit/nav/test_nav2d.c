@@ -601,3 +601,155 @@ TEST(nav2d, test_nav2d_plane_mapping) {
     b = de_nav2d_from_world(DE_PLANE_TOP_XY, q);
     EXPECT_TRUE(b.x == 1.0f && b.y == 2.0f);
 }
+
+/* ---------- spatial index vs linear scans (DENG-860) ---------- */
+
+/* A W x H field of cells, one hole per cell (a rectangle, or a triangle every fourth), inside one
+ * outline. `integer` snaps every coordinate to whole units, which makes many collinear touches.
+ * Fills `pts` (4 per hole at most) and `holes`. Returns the hole count. */
+#define IDX_CELL 8.0f
+static u32 idx_field(de_rng *r, u32 w, u32 h, f32 fill, bool integer, de_vec2 *pts,
+                     de_nav2d_polygon *holes) {
+    u32 n = 0, np = 0;
+    for (u32 cy = 0; cy < h; ++cy)
+        for (u32 cx = 0; cx < w; ++cx) {
+            if (de_rng_f32(r) > fill)
+                continue;
+            f32 x0 = (f32)cx * IDX_CELL + 1.0f + de_rng_f32(r) * 1.5f;
+            f32 y0 = (f32)cy * IDX_CELL + 1.0f + de_rng_f32(r) * 1.5f;
+            f32 x1 = (f32)(cx + 1u) * IDX_CELL - 1.0f - de_rng_f32(r) * 1.5f;
+            f32 y1 = (f32)(cy + 1u) * IDX_CELL - 1.0f - de_rng_f32(r) * 1.5f;
+            if (integer) {
+                x0 = (f32)(i32)x0;
+                y0 = (f32)(i32)y0;
+                x1 = (f32)(i32)x1;
+                y1 = (f32)(i32)y1;
+            }
+            const bool tri = (n % 4u) == 3u;
+            pts[np] = v2(x0, y0);
+            pts[np + 1u] = v2(x1, y0);
+            pts[np + 2u] = v2(tri ? x0 : x1, y1);
+            if (!tri)
+                pts[np + 3u] = v2(x0, y1);
+            holes[n].points = &pts[np];
+            holes[n].count = tri ? 3u : 4u;
+            np += holes[n].count;
+            n++;
+        }
+    return n;
+}
+
+static de_nav2d_mesh *idx_build(const de_vec2 *outer, const de_nav2d_polygon *holes, u32 n,
+                                bool brute) {
+    de_nav2d_polygon outline = {outer, 4};
+    de_nav2d_mesh_desc d;
+    memset(&d, 0, sizeof d);
+    d.outlines = &outline;
+    d.outline_count = 1;
+    d.holes = holes;
+    d.hole_count = n;
+    de_nav2d_mesh *m = NULL;
+    if (de__nav2d_mesh_build_opts(&d, NULL, brute, &m) != DE_OK)
+        return NULL;
+    return m;
+}
+
+static bool same_path(de_vec2 *pa, u32 na, de_result ra, de_vec2 *pb, u32 nb, de_result rb) {
+    const bool same = ra == rb && na == nb && (na == 0 || memcmp(pa, pb, sizeof(de_vec2) * na) == 0);
+    de_nav2d_path_free(NULL, pa, na);
+    de_nav2d_path_free(NULL, pb, nb);
+    return same;
+}
+
+TEST(nav2d, test_nav2d_mesh_index_matches_linear_scans) {
+    de_rng r = de_rng_seed(860, 1);
+    for (u32 round = 0; round < 12u; ++round) {
+        const u32 w = 2u + de_rng_range(&r, 0, 4), h = 2u + de_rng_range(&r, 0, 4);
+        const bool integer = (round & 1u) != 0;
+        de_vec2 pts[4u * 64u];
+        de_nav2d_polygon holes[64];
+        const u32 n = idx_field(&r, w, h, 0.8f, integer, pts, holes);
+        const f32 ew = (f32)w * IDX_CELL, eh = (f32)h * IDX_CELL;
+        const de_vec2 outer[4] = {v2(0, 0), v2(ew, 0), v2(ew, eh), v2(0, eh)};
+        de_nav2d_mesh *fast = idx_build(outer, holes, n, false);
+        de_nav2d_mesh *ref = idx_build(outer, holes, n, true);
+        ASSERT_TRUE(fast != NULL && ref != NULL);
+        ASSERT_EQ(fast->corner_count, ref->corner_count);
+        ASSERT_EQ(fast->vis_count, ref->vis_count);
+        EXPECT_EQ(memcmp(fast->vis_off, ref->vis_off,
+                         sizeof(u32) * ((size_t)ref->corner_count + 1u)),
+                  0);
+        EXPECT_EQ(memcmp(fast->vis_nbr, ref->vis_nbr, sizeof(u32) * (size_t)ref->vis_count), 0);
+        u32 bad_locate = 0, bad_path = 0;
+        for (u32 i = 0; i < 300u; ++i) {
+            /* Slightly outside the bounds too, and on whole units (vertices, edges). */
+            de_vec2 p = v2(-2.0f + de_rng_f32(&r) * (ew + 4.0f), -2.0f + de_rng_f32(&r) * (eh + 4.0f));
+            if (i % 3u == 0)
+                p = v2((f32)(i32)p.x, (f32)(i32)p.y);
+            bad_locate += de__nav2d_mesh_locate(fast, p) != de__nav2d_mesh_locate(ref, p);
+        }
+        for (u32 i = 0; i < 120u; ++i) {
+            de_vec2 a = v2(de_rng_f32(&r) * ew, de_rng_f32(&r) * eh);
+            de_vec2 b = v2(de_rng_f32(&r) * ew, de_rng_f32(&r) * eh);
+            if (integer && i % 2u == 0) {
+                a = v2((f32)(i32)a.x, (f32)(i32)a.y);
+                b = v2((f32)(i32)b.x, (f32)(i32)b.y);
+            }
+            de_vec2 *pa = NULL, *pb = NULL;
+            u32 na = 0, nb = 0;
+            const de_result ra = de_nav2d_mesh_find_path(fast, a, b, NULL, &pa, &na);
+            const de_result rb = de_nav2d_mesh_find_path(ref, a, b, NULL, &pb, &nb);
+            bad_path += !same_path(pa, na, ra, pb, nb, rb);
+        }
+        EXPECT_EQ(bad_locate, 0u);
+        EXPECT_EQ(bad_path, 0u);
+        de_nav2d_mesh_destroy(fast);
+        de_nav2d_mesh_destroy(ref);
+    }
+}
+
+/* About 500 corners: 11 x 12 cells, a hole in each. Reports build and query times for the
+ * linear scans and for the grid. It is not gated on time. */
+TEST(nav2d, test_nav2d_mesh_index_timing_500_corners) {
+    de_rng r = de_rng_seed(860, 2);
+    de_vec2 pts[4u * 160u];
+    de_nav2d_polygon holes[160];
+    const u32 w = 11, h = 12;
+    const u32 n = idx_field(&r, w, h, 1.0f, false, pts, holes);
+    const f32 ew = (f32)w * IDX_CELL, eh = (f32)h * IDX_CELL;
+    const de_vec2 outer[4] = {v2(0, 0), v2(ew, 0), v2(ew, eh), v2(0, eh)};
+    enum { Q = 100 };
+    de_vec2 from[Q], to[Q];
+    for (u32 i = 0; i < Q; ++i) {
+        from[i] = v2(de_rng_f32(&r) * ew, de_rng_f32(&r) * eh);
+        to[i] = v2(de_rng_f32(&r) * ew, de_rng_f32(&r) * eh);
+    }
+    f64 build_ms[2], query_ms[2];
+    u64 sum[2] = {0, 0};
+    u32 corners = 0, edges = 0, tris = 0;
+    for (u32 brute = 0; brute < 2u; ++brute) {
+        u64 t0 = de_time_now_ns();
+        de_nav2d_mesh *m = idx_build(outer, holes, n, brute != 0);
+        build_ms[brute] = (f64)(de_time_now_ns() - t0) / 1e6;
+        ASSERT_TRUE(m != NULL);
+        corners = m->corner_count;
+        edges = m->bedge_count;
+        tris = m->tri_count;
+        t0 = de_time_now_ns();
+        for (u32 i = 0; i < Q; ++i) {
+            de_vec2 *p = NULL;
+            u32 np = 0;
+            if (de_nav2d_mesh_find_path(m, from[i], to[i], NULL, &p, &np) == DE_OK)
+                sum[brute] = fnv(sum[brute] ^ np, p, sizeof(de_vec2) * np);
+            de_nav2d_path_free(NULL, p, np);
+        }
+        query_ms[brute] = (f64)(de_time_now_ns() - t0) / 1e6;
+        de_nav2d_mesh_destroy(m);
+    }
+    EXPECT_EQ(sum[0], sum[1]);
+    printf("nav2d index timing: %u corners, %u boundary edges, %u triangles, %u queries\n"
+           "  linear scans: build %.1f ms, queries %.2f ms (%.3f ms each)\n"
+           "  grid index:   build %.1f ms, queries %.2f ms (%.3f ms each)\n",
+           corners, edges, tris, (u32)Q, build_ms[1], query_ms[1], query_ms[1] / Q, build_ms[0],
+           query_ms[0], query_ms[0] / Q);
+}
