@@ -1,0 +1,4 @@
+# white (DENG-838 sky_ibl_sphere): a white diffuse sphere lit by the sky's SH9 irradiance.
+base_color = [0.8, 0.8, 0.8]
+metallic = 0.0
+roughness = 0.6

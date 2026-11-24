@@ -120,6 +120,8 @@ de_gpu_texture de__sky_luts_multiscatter(const de__sky_luts *l);
 /** Bindless indices: transmittance, multi-scattering (sampled). */
 u32 de__sky_luts_transmittance_bindless(const de__sky_luts *l);
 u32 de__sky_luts_multiscatter_bindless(const de__sky_luts *l);
+/** The LUTs' linear clamp sampler (bindless). */
+u32 de__sky_luts_sampler_bindless(const de__sky_luts *l);
 /** The fence and value of the last generation. */
 de_gpu_fence de__sky_luts_fence(const de__sky_luts *l, u64 *value);
 
@@ -154,6 +156,53 @@ typedef struct de__sky_snapshot {
 struct de_sky;
 /** The latest snapshot of `s` (render thread). false before the first update. */
 bool de__sky_snapshot_get(struct de_sky *s, de__sky_snapshot *out);
+
+/* ---------- The sky as the IBL environment (sky_ibl.c; DENG-838) ---------- */
+/** The sky environment's face size, mips (128 .. 1) and the mip its SH9 is projected from. */
+#define DE__SKY_IBL_SIZE   128u
+#define DE__SKY_IBL_MIPS   8u
+#define DE__SKY_IBL_SH_MIP 3u
+/** The sun's turn (degrees) that regenerates the environment. */
+#define DE__SKY_IBL_SUN_DEG 0.5f
+/** The viewer's altitude change (km) that regenerates it. */
+#define DE__SKY_IBL_ALT_KM 0.1f
+
+/** Projects a face strip (`n` x 6 `n` RGBA16F texels, rows `pitch_texels` apart; the face order
+ * and directions of de_cooked_env.h) of radiance onto the SH9 irradiance E_k = A_l L_k
+ * (de_cooked_env.h's basis and A_l). Pure. */
+void de__sky_ibl_project_sh(const u16 *texels, u32 n, u32 pitch_texels, f32 out[9][3]);
+/** True when the environment generated for (`last`, `last_r_km`) is stale for (`now`, `r_km`):
+ * the sun or the moon turned more than DE__SKY_IBL_SUN_DEG, the moon's or the sun's weight, the
+ * mie scale or the albedo changed, or the altitude moved more than DE__SKY_IBL_ALT_KM. Pure. */
+bool de__sky_ibl_stale(const de__sky_snapshot *last, f32 last_r_km, const de__sky_snapshot *now,
+                       f32 r_km);
+
+#if DE_HAS_RENDER
+struct de__ibl_sky;
+typedef struct de__sky_ibl de__sky_ibl;
+/** The generator's pipelines and its persistent textures and buffers on `dev` (every allocation is
+ * here: generating allocates nothing). No shader code for this backend: DE_OK with a generator
+ * that de__sky_ibl_ready() reports off. */
+de_result de__sky_ibl_create(de_gpu_device *dev, const de_allocator *alloc, de__sky_ibl **out);
+/** Releases it (the textures' destruction waits for the GPU). Clear the lighting's sky first. */
+void de__sky_ibl_destroy(de__sky_ibl *ibl);
+bool de__sky_ibl_ready(const de__sky_ibl *ibl);
+/** Whether a generation is in flight. */
+bool de__sky_ibl_pending(const de__sky_ibl *ibl);
+/** True when no environment was generated yet or the last one is stale for (`sn`, `r_km`). */
+bool de__sky_ibl_wants(const de__sky_ibl *ibl, const de__sky_snapshot *sn, f32 r_km);
+/** Records and submits a generation for `sn` at radius `r_km` on the graphics queue: the sky into
+ * the cube's mip 0, the probe downsample and GGX prefilter (S14), the copy into the back strip
+ * and the readback of the SH mip. The LUTs must be generated (earlier on the queue). Refused
+ * (DE_ERR_BUSY) while one is in flight. */
+de_result de__sky_ibl_generate(de__sky_ibl *ibl, const de__sky_luts *luts,
+                               const de__sky_snapshot *sn, f32 r_km);
+/** Completes a finished generation: projects its SH9 and makes its strip the current one. `wait`:
+ * block until it finishes (tests). True when a new environment became current in this call. */
+bool de__sky_ibl_poll(de__sky_ibl *ibl, bool wait);
+/** The current environment (valid false before the first generation completes). */
+void de__sky_ibl_current(const de__sky_ibl *ibl, struct de__ibl_sky *out);
+#endif
 
 #if DE_HAS_RENDER
 struct de_renderer;

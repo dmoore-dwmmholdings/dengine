@@ -27,7 +27,7 @@ if(DE_HAS_GPU_D3D12)
     list(APPEND _de_sky_libs de_gpu_d3d12 de_tp_d3d12_agility)
 endif()
 de_add_test(NAME sky_gpu
-    SOURCES test_sky_system.c test_atmosphere_cpu.c
+    SOURCES test_sky_system.c test_atmosphere_cpu.c test_sky_ibl.c
     LIBS ${_de_sky_libs}
     LABELS unit gpu render
     TIMEOUT 300)

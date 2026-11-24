@@ -1,0 +1,4 @@
+# chrome (DENG-838 sky_ibl_sphere): a smooth metal that mirrors the sky's IBL environment.
+base_color = [0.95, 0.95, 0.95]
+metallic = 1.0
+roughness = 0.15
