@@ -155,8 +155,8 @@ TEST(clouds, test_clouds_disabled_culls_passes) {
             EXPECT_FALSE(DE_HANDLE_VALID(so.texture));
         } else {
             EXPECT_EQ(shadow, 1u);
-            EXPECT_EQ(view, 3u);
-            EXPECT_EQ(cloud_passes(g), 4u);
+            EXPECT_EQ(view, 5u); /* march, reconstruct, composite, ground, its readback */
+            EXPECT_EQ(cloud_passes(g), 6u);
             EXPECT_TRUE(DE_HANDLE_VALID(so.texture));
             EXPECT_TRUE(so.header != 0u);
             EXPECT_EQ(so.entry, (u32)(frame % DE__VIS_FRAME_RING));
@@ -368,4 +368,89 @@ TEST(clouds, test_clouds_blue_noise_tile) {
     var /= (N / 4) * (N / 4);
     /* White noise: the 4x4 mean has sigma 73.9 / 4 = 18.5 (variance 341); blue is far lower. */
     EXPECT_TRUE(var < 150.0);
+}
+
+/* DENG-867: the cascades' centres: the DENG-854 values while they fit and cover the receivers,
+ * the receivers' crossing covered below a high camera, and the coarse cascade following a low
+ * sun. */
+TEST(clouds, test_clouds_shadow_centres) {
+    const f64 s = 0.70710678118654752, r = DE__CLOUDS_SHADOW_FINE_INNER_M,
+              m = DE__CLOUDS_SHADOW_SHIFT_MAX_M;
+    f64 fine = -1.0, coarse = -1.0;
+    EXPECT_FLOAT_EQ(DE__CLOUDS_SHADOW_FINE_INNER_M, 819.2f, 1e-3f);
+    /* No target: the DENG-854 shift, the coarse cascade on the camera. */
+    de__clouds_shadow_centres(s, s, 500.0, 1500.0, false, 0.0, &fine, &coarse);
+    EXPECT_FLOAT_EQ((f32)fine, 1000.0f, 0.01f);
+    EXPECT_FLOAT_EQ((f32)coarse, 0.0f, 1e-6f);
+    EXPECT_FLOAT_EQ((f32)fine, (f32)de__clouds_shadow_shift(s, s, 500.0, 1500.0), 1e-6f);
+    /* A target already inside the fully weighted part: unchanged. */
+    de__clouds_shadow_centres(s, s, 600.0, 1500.0, true, 900.0 + 800.0, &fine, &coarse);
+    EXPECT_FLOAT_EQ((f32)fine, 900.0f, 0.01f);
+    EXPECT_FLOAT_EQ((f32)coarse, 0.0f, 1e-6f);
+    /* A target 1400 m beyond: the fine cascade moves just enough to cover it fully. */
+    de__clouds_shadow_centres(s, s, 1400.0, 1500.0, true, 1500.0, &fine, &coarse);
+    EXPECT_FLOAT_EQ((f32)fine, (f32)(1500.0 - r), 0.01f);
+    EXPECT_FLOAT_EQ((f32)coarse, 0.0f, 1e-6f);
+    {
+        const f64 u = (1500.0 - fine) / (f64)DE__CLOUDS_SHADOW_FINE_EXTENT_M + 0.5;
+        EXPECT_TRUE(de__clouds_shadow_weight((f32)u, 0.5f) > 0.99f);
+    }
+    de__clouds_shadow_centres(-s, s, 3000.0, 1500.0, true, -1500.0, &fine, &coarse);
+    EXPECT_FLOAT_EQ((f32)fine, (f32)(-1500.0 + r), 0.01f);
+    /* A low sun (5.7 degrees): the fine cascade on the camera's crossing, 14.8 km out, and the
+     * coarse cascade moved by the excess so that it still holds the fine one. */
+    de__clouds_shadow_centres(0.99, 0.1, 0.0, 1500.0, false, 0.0, &fine, &coarse);
+    EXPECT_FLOAT_EQ((f32)fine, 14850.0f, 0.1f);
+    EXPECT_FLOAT_EQ((f32)coarse, (f32)(14850.0 - m), 0.1f);
+    EXPECT_TRUE(fabs(fine - coarse) <= m + 1e-6);
+    de__clouds_shadow_centres(-0.99, 0.1, 0.0, 1500.0, true, -20000.0, &fine, &coarse);
+    EXPECT_FLOAT_EQ((f32)fine, (f32)(-20000.0 + r), 0.1f);
+    EXPECT_FLOAT_EQ((f32)coarse, (f32)(-20000.0 + r + m), 0.1f);
+    /* The sun at the horizon without a target, and a NaN target: as DENG-854. */
+    de__clouds_shadow_centres(1.0, 0.01, 0.0, 1500.0, false, 0.0, &fine, &coarse);
+    EXPECT_FLOAT_EQ((f32)fine, 0.0f, 1e-6f);
+    EXPECT_FLOAT_EQ((f32)coarse, 0.0f, 1e-6f);
+    de__clouds_shadow_centres(s, s, 1400.0, 1500.0, true, NAN, &fine, &coarse);
+    EXPECT_FLOAT_EQ((f32)fine, 100.0f, 0.01f);
+}
+
+/* DENG-867: the receivers' crossing from the depth samples. */
+TEST(clouds, test_clouds_receiver_crossing) {
+    f32 s[DE__CLOUDS_GROUND_SAMPLES * 4u];
+    memset(s, 0, sizeof s);
+    const f32 k = 0.70710678f;
+    const de_vec3 sun = {0.0f, k, k}; /* 45 degrees up toward +y */
+    f64 x = 7.0, y = 7.0;
+    EXPECT_FALSE(de__clouds_receiver_crossing(s, DE__CLOUDS_GROUND_SAMPLES, 1400.0, sun, 1500.0,
+                                              &x, &y)); /* all sky */
+    EXPECT_FALSE(de__clouds_receiver_crossing(NULL, 4u, 1400.0, sun, 1500.0, &x, &y));
+    EXPECT_FLOAT_EQ((f32)x, 7.0f, 0.0f);
+    /* One hit on the ground 1400 m below and 2000 m south: it crosses 1500 m north of itself. */
+    s[0] = 0.0f, s[1] = -2000.0f, s[2] = -1400.0f, s[3] = 1.0f;
+    ASSERT_TRUE(de__clouds_receiver_crossing(s, DE__CLOUDS_GROUND_SAMPLES, 1400.0, sun, 1500.0,
+                                             &x, &y));
+    EXPECT_FLOAT_EQ((f32)x, 0.0f, 1e-3f);
+    EXPECT_FLOAT_EQ((f32)y, -500.0f, 0.05f);
+    /* The sun at the horizon: none. */
+    EXPECT_FALSE(de__clouds_receiver_crossing(s, DE__CLOUDS_GROUND_SAMPLES, 1400.0,
+                                              (de_vec3){1.0f, 0.0f, 0.01f}, 1500.0, &x, &y));
+    /* Ground at four distances and two far mountains: the nearer half's median per axis. */
+    const f32 pts[6][3] = {{100, -2000, -1400}, {-100, -2500, -1400}, {0, -3000, -1400},
+                           {0, -5000, -1400},   {0, -40000, 600},     {0, -30000, 600}};
+    memset(s, 0, sizeof s);
+    for (u32 i = 0; i < 6u; ++i) {
+        s[i * 8u + 0u] = pts[i][0];
+        s[i * 8u + 1u] = pts[i][1];
+        s[i * 8u + 2u] = pts[i][2];
+        s[i * 8u + 3u] = 1.0f; /* every other sample is sky */
+    }
+    ASSERT_TRUE(de__clouds_receiver_crossing(s, DE__CLOUDS_GROUND_SAMPLES, 1400.0, sun, 1500.0,
+                                             &x, &y));
+    EXPECT_FLOAT_EQ((f32)x, 0.0f, 1e-3f);
+    EXPECT_FLOAT_EQ((f32)y, -1000.0f, 0.05f); /* -2500 + 1500 */
+    /* A non-finite hit is skipped. */
+    s[1u * 4u + 0u] = NAN, s[1u * 4u + 2u] = 5.0f, s[1u * 4u + 3u] = 1.0f;
+    ASSERT_TRUE(de__clouds_receiver_crossing(s, DE__CLOUDS_GROUND_SAMPLES, 1400.0, sun, 1500.0,
+                                             &x, &y));
+    EXPECT_FLOAT_EQ((f32)y, -1000.0f, 0.05f);
 }

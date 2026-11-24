@@ -77,6 +77,68 @@ f64 de__clouds_shadow_shift(f64 sun_axis, f64 sun_z, f64 from_z, f64 bottom_z) {
     return v < -m ? -m : (v > m ? m : v);
 }
 
+f64 de__clouds_shadow_travel(f64 sun_axis, f64 sun_z, f64 from_z, f64 bottom_z) {
+    if (!(sun_z > 0.02))
+        return 0.0;
+    return sun_axis * fmax(bottom_z - from_z, 0.0) / sun_z;
+}
+
+void de__clouds_shadow_centres(f64 sun_axis, f64 sun_z, f64 camera_z, f64 bottom_z,
+                               bool has_target, f64 target, f64 *fine, f64 *coarse) {
+    f64 f = de__clouds_shadow_travel(sun_axis, sun_z, camera_z, bottom_z);
+    if (has_target && isfinite(target)) {
+        const f64 r = (f64)DE__CLOUDS_SHADOW_FINE_INNER_M;
+        f = f < target - r ? target - r : (f > target + r ? target + r : f);
+    }
+    const f64 m = (f64)DE__CLOUDS_SHADOW_SHIFT_MAX_M;
+    const f64 inside = f < -m ? -m : (f > m ? m : f);
+    *fine = f;
+    *coarse = f - inside; /* 0 while the fine cascade fits in the camera-centred coarse one */
+}
+
+static f64 median_sorted(f64 *v, u32 n) {
+    for (u32 i = 1; i < n; ++i) { /* insertion sort: at most DE__CLOUDS_GROUND_SAMPLES */
+        const f64 t = v[i];
+        u32 k = i;
+        for (; k > 0u && v[k - 1u] > t; --k)
+            v[k] = v[k - 1u];
+        v[k] = t;
+    }
+    return (n & 1u) != 0u ? v[n / 2u] : 0.5 * (v[n / 2u - 1u] + v[n / 2u]);
+}
+
+bool de__clouds_receiver_crossing(const f32 *s, u32 n, f64 camera_z, de_vec3 sun, f64 bottom_z,
+                                  f64 *x, f64 *y) {
+    f64 dist[DE__CLOUDS_GROUND_SAMPLES], cx[DE__CLOUDS_GROUND_SAMPLES],
+        cy[DE__CLOUDS_GROUND_SAMPLES];
+    u32 hits = 0;
+    if (s == NULL || x == NULL || y == NULL || !((f64)sun.z > 0.02))
+        return false;
+    for (u32 i = 0; i < n && hits < DE__CLOUDS_GROUND_SAMPLES; ++i) {
+        const f32 *p = s + (size_t)i * 4u;
+        if (!(p[3] > 0.5f) || !isfinite(p[0]) || !isfinite(p[1]) || !isfinite(p[2]))
+            continue;
+        const f64 d = (f64)p[0] * p[0] + (f64)p[1] * p[1] + (f64)p[2] * p[2];
+        const f64 qx = (f64)p[0] + de__clouds_shadow_travel(sun.x, sun.z, camera_z + p[2], bottom_z);
+        const f64 qy = (f64)p[1] + de__clouds_shadow_travel(sun.y, sun.z, camera_z + p[2], bottom_z);
+        u32 k = hits++; /* insertion by distance */
+        for (; k > 0u && dist[k - 1u] > d; --k) {
+            dist[k] = dist[k - 1u];
+            cx[k] = cx[k - 1u];
+            cy[k] = cy[k - 1u];
+        }
+        dist[k] = d;
+        cx[k] = qx;
+        cy[k] = qy;
+    }
+    if (hits == 0u)
+        return false;
+    const u32 near = (hits + 1u) / 2u;
+    *x = median_sorted(cx, near);
+    *y = median_sorted(cy, near);
+    return true;
+}
+
 f32 de__clouds_tile_offset(f64 world, f64 drift, f64 tile) {
     if (!(tile > 0.0))
         return 0.0f;
