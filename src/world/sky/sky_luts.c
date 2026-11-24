@@ -567,6 +567,9 @@ static void ibl_stage(de__view_frame *vf, void *user) {
         return;
     if (de__sky_luts_update(sr->luts, sn.mie_scale, sn.albedo) != DE_OK)
         return; /* the draw stage reports it and switches the sky off */
+    /* DENG-853: the IBL includes the clouds only when this (the owner) view draws them. */
+    if (!de__clouds_ready(sr->clouds) || !de__clouds_enabled(&sn.clouds, vf->settings))
+        sn.clouds.on = false;
     update_ibl(sr, lt, &sn, viewer_radius_km(vf), vf->frame_index);
 }
 
