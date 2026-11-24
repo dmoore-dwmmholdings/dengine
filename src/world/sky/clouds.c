@@ -41,6 +41,7 @@ typedef struct noise_params {
 typedef struct shadow_params {
     u32 header, entry, target, n;
     f32 area[4]; /* centre x, y, extent, layer bottom z (render-origin) */
+    f32 fine[4]; /* the fine cascade: centre x, y, extent, rows (0: no fine cascade) */
 } shadow_params;
 
 /* clouds_march.slang MarchParams */
@@ -64,7 +65,7 @@ typedef struct composite_params {
     u32 width, height, mw, mh;
     u32 dist, flags, pad0, pad1; /* flags: 1 the aerial perspective on opaque pixels */
 } composite_params;
-DE_STATIC_ASSERT(sizeof(shadow_params) == 32, "ShadowParams is 32 bytes");
+DE_STATIC_ASSERT(sizeof(shadow_params) == 48, "ShadowParams is 48 bytes");
 DE_STATIC_ASSERT(sizeof(march_params) == 48, "MarchParams is 48 bytes");
 DE_STATIC_ASSERT(sizeof(reconstruct_params) == 48, "ReconstructParams is 48 bytes");
 DE_STATIC_ASSERT(sizeof(composite_params) == 64, "CompositeParams is 64 bytes");
@@ -184,7 +185,7 @@ static bool view_ensure_common(de__clouds *c, clouds_view *v, u32 slot) {
                                 &v->shadow_header_bindless);
     v->shadow = de_gpu_texture_create(
         c->dev, &(de_gpu_texture_desc){.width = DE__CLOUDS_SHADOW_N,
-                                       .height = DE__CLOUDS_SHADOW_N,
+                                       .height = 2u * DE__CLOUDS_SHADOW_N, /* coarse, fine */
                                        .format = DE_FMT_R16_FLOAT,
                                        .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED,
                                        .name = "clouds.shadow"});
@@ -484,7 +485,7 @@ static de__clouds_header *fill_common(const de__clouds *c, clouds_view *v,
     h->misc[0] = (f32)(1.0 / DE__CLOUDS_DETAIL_TILE_M);
     h->misc[1] = 1.0f;
     h->misc[2] = f->camera.z;
-    h->misc[3] = 0.0f;
+    h->misc[3] = q.shadow_detail ? 1.0f : 0.0f; /* DENG-854: the fine shadow march's detail */
     put4(h->sun, f->sun_dir, f->sun_illuminance);
     put4(h->camera, f->camera, 0.0f);
     return h;
@@ -580,22 +581,41 @@ u32 de__clouds_add_shadow_pass(de__clouds *c, de_rg *g, de_arena *arena, const d
     const u32 entry = (u32)(f->frame_index % DE__VIS_FRAME_RING);
     (void)fill_common(c, v, f, entry);
 
-    /* The map: centred on the camera, snapped to its texels in world space (no shimmer). */
-    const f64 texel = (f64)DE__CLOUDS_SHADOW_EXTENT_M / (f64)DE__CLOUDS_SHADOW_N;
-    const f64 sx = floor(f->camera_world[0] / texel) * texel - f->camera_world[0];
-    const f64 sy = floor(f->camera_world[1] / texel) * texel - f->camera_world[1];
-    const f32 area[4] = {f->camera.x + (f32)sx, f->camera.y + (f32)sy, DE__CLOUDS_SHADOW_EXTENT_M,
+    /* The cascades: centred on the camera, snapped to their texels in world space (no shimmer). */
+    const de__clouds_quality q = de__clouds_quality_for(f->settings->volumetrics);
+    /* The map is indexed where the sun's ray crosses the layer bottom, so the fine cascade is
+     * centred on the crossing of the ray through the camera (the receivers near it); the coarse
+     * one keeps its camera-centred area (16 km covers the shift). */
+    const f64 bottom = (f64)f->clouds.bottom_m;
+    const f64 shx = de__clouds_shadow_shift((f64)f->sun_dir.x, (f64)f->sun_dir.z,
+                                            f->camera_world[2], bottom);
+    const f64 shy = de__clouds_shadow_shift((f64)f->sun_dir.y, (f64)f->sun_dir.z,
+                                            f->camera_world[2], bottom);
+    const f32 sx = de__clouds_shadow_snap(f->camera_world[0], 0.0, DE__CLOUDS_SHADOW_EXTENT_M,
+                                          DE__CLOUDS_SHADOW_N);
+    const f32 sy = de__clouds_shadow_snap(f->camera_world[1], 0.0, DE__CLOUDS_SHADOW_EXTENT_M,
+                                          DE__CLOUDS_SHADOW_N);
+    const f32 fx = de__clouds_shadow_snap(f->camera_world[0], shx, DE__CLOUDS_SHADOW_FINE_EXTENT_M,
+                                          DE__CLOUDS_SHADOW_N);
+    const f32 fy = de__clouds_shadow_snap(f->camera_world[1], shy, DE__CLOUDS_SHADOW_FINE_EXTENT_M,
+                                          DE__CLOUDS_SHADOW_N);
+    const f32 area[4] = {f->camera.x + sx, f->camera.y + sy, DE__CLOUDS_SHADOW_EXTENT_M,
                          f->camera.z + (f32)((f64)f->clouds.bottom_m - f->camera_world[2])};
+    const f32 fine[4] = {f->camera.x + fx, f->camera.y + fy, DE__CLOUDS_SHADOW_FINE_EXTENT_M,
+                         q.shadow_fine ? 1.0f : 0.0f};
     de__cloud_shadow_gpu *sg =
         (de__cloud_shadow_gpu *)(v->shadow_map + (size_t)entry * sizeof(de__cloud_shadow_gpu));
     memset(sg, 0, sizeof *sg);
     sg->tex[0] = v->shadow_bindless;
     sg->tex[1] = f->sampler;
-    sg->tex[2] = 1u;
+    sg->tex[2] = 1u | (q.shadow_fine ? 2u : 0u);
     sg->area[0] = area[0];
     sg->area[1] = area[1];
     sg->area[2] = 1.0f / DE__CLOUDS_SHADOW_EXTENT_M;
     sg->area[3] = area[3];
+    sg->fine[0] = fine[0];
+    sg->fine[1] = fine[1];
+    sg->fine[2] = 1.0f / DE__CLOUDS_SHADOW_FINE_EXTENT_M;
     put4(sg->sun, f->sun_dir, f->sun_dir.z > 0.0f ? 1.0f : 0.0f);
 
     clouds_pass *p = new_pass(c, arena, CLOUDS_PIPE_SHADOW, (u32)sizeof(shadow_params));
@@ -606,12 +626,14 @@ u32 de__clouds_add_shadow_pass(de__clouds *c, de_rg *g, de_arena *arena, const d
     }
     de_rg_set_name(g, map, "clouds.shadow");
     p->gx = (DE__CLOUDS_SHADOW_N + 7u) / 8u;
-    p->gy = (DE__CLOUDS_SHADOW_N + 7u) / 8u;
+    /* One dispatch over both cascades: rows 0..N-1 coarse, N..2N-1 fine (without it: coarse only). */
+    p->gy = ((q.shadow_fine ? 2u : 1u) * DE__CLOUDS_SHADOW_N + 7u) / 8u;
     p->r[0] = map;
     p->pc.shadow = (shadow_params){.header = v->header_bindless,
                                    .entry = entry,
                                    .n = DE__CLOUDS_SHADOW_N,
-                                   .area = {area[0], area[1], area[2], area[3]}};
+                                   .area = {area[0], area[1], area[2], area[3]},
+                                   .fine = {fine[0], fine[1], fine[2], fine[3]}};
     de_rg_pass *pass = de_rg_add_pass(g, "clouds.shadow", DE_QUEUE_GRAPHICS, shadow_exec, p);
     if (pass == NULL)
         return 0u;

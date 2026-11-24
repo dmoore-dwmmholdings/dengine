@@ -150,12 +150,25 @@ public float de_input_rt_shadow(LightingInputs i,uint2 pixel,uint key,float fall
     return fallback;
 }
 
+/// DENG-854: how much of a cascade covers `uv` (0..1 across its area): 0 outside, fading in over
+/// the outer tenth at each edge (DE__CLOUDS_SHADOW_FADE; de__clouds_shadow_weight on the CPU).
+float de_cloud_shadow_weight(float2 uv)
+{
+    if (any(uv < 0.0) || any(uv > 1.0))
+        return 0.0;
+    float2 e = saturate(min(uv, 1.0 - uv) * 10.0);
+    return e.x * e.y;
+}
+
 /// DENG-208: the clouds' shadow on the sun at `p` (render-origin space) for light direction `wi`
 /// (toward the light). The CloudShadow header (64 bytes per ring entry; src/world/sky/
 /// clouds_internal.h de__cloud_shadow_gpu): uint4 (texture, sampler, flags, 0); float4 (origin
-/// x, y, 1 / extent, layer bottom z); float4 (sun direction, strength); float4 reserved. The map
-/// stores the layer's transmittance along the sun at the point where the sun ray crosses the
-/// layer bottom. 1 without clouds, for other lights and outside the map.
+/// x, y, 1 / extent, layer bottom z); float4 (sun direction, strength); float4 (fine cascade
+/// origin x, y, 1 / extent, 0). The map stores the layer's transmittance along the sun at the
+/// point where the sun ray crosses the layer bottom. DENG-854: it is two cascades stacked, the
+/// coarse one in the top half and, when flags bit 1 is set, a fine one in the bottom half; the
+/// fine one replaces the coarse one near the camera, blended over its outer tenth. 1 without
+/// clouds, for other lights and outside the map. The inputs and the result are unchanged.
 public float de_input_cloud_shadow(LightingInputs i, float3 p, float3 wi)
 {
     if (i.cloud_shadow == 0u)
@@ -172,10 +185,26 @@ public float de_input_cloud_shadow(LightingInputs i, float3 p, float3 wi)
     float t = max(area.w - p.z, 0.0) / wi.z;
     float2 q = p.xy + wi.xy * t;
     float2 uv = (q - area.xy) * area.z + 0.5;
-    if (any(uv < 0.0) || any(uv > 1.0))
-        return 1.0;
-    float s = de_tex2d(h.x).SampleLevel(de_sampler(h.y), uv, 0.0).r;
-    // Fade to no shadow at the map's border, so the edge of the covered area is not a line.
-    float2 e = saturate(min(uv, 1.0 - uv) * 10.0);
-    return lerp(1.0, s, sun.w * e.x * e.y);
+    // The coarse cascade fades to no shadow at the map's border, so the edge of the covered area
+    // is not a line.
+    float we = de_cloud_shadow_weight(uv);
+    float result = 1.0;
+    if (we > 0.0)
+    {
+        float s = de_tex2d(h.x).SampleLevel(de_sampler(h.y), float2(uv.x, uv.y * 0.5), 0.0).r;
+        result = lerp(1.0, s, sun.w * we);
+    }
+    if ((h.z & 2u) != 0u)
+    {
+        float4 fine = asfloat(b.load4(base + 48u));
+        float2 fuv = (q - fine.xy) * fine.z + 0.5;
+        float wf = de_cloud_shadow_weight(fuv);
+        if (wf > 0.0)
+        {
+            float s = de_tex2d(h.x).SampleLevel(de_sampler(h.y),
+                                                float2(fuv.x, 0.5 + fuv.y * 0.5), 0.0).r;
+            result = lerp(result, lerp(1.0, s, sun.w), wf);
+        }
+    }
+    return result;
 }
