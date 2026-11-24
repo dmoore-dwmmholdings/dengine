@@ -90,6 +90,7 @@ struct de__clouds {
     de_gpu_sampler wrap;
     u32 wrap_bindless;
     bool noise_ready, noise_failed;
+    de_cvar cv_blue; /* r.clouds_blue_noise (DENG-852: 0 jitters with IGN, the A/B) */
     clouds_view views[DE__VIEW_MAX];
 };
 
@@ -392,6 +393,13 @@ de_result de__clouds_create(de_gpu_device *dev, const de_allocator *alloc, de__c
         else
             c->wrap_bindless = de_gpu_sampler_bindless(dev, c->wrap);
     }
+    if (r == DE_OK)
+        c->cv_blue = de_cvar_register(&(de_cvar_desc){
+            .name = "r.clouds_blue_noise",
+            .help = "Debug: 1 jitters the clouds' march with the blue-noise tile, 0 with "
+                    "interleaved gradient noise (the old jitter)",
+            .type = DE_CVAR_BOOL,
+            .default_number = 1});
     if (r != DE_OK) {
         de__clouds_destroy(c);
         return r;
@@ -451,7 +459,8 @@ static de__clouds_header *fill_common(const de__clouds *c, clouds_view *v,
     h->tex2[0] = f->transmittance;
     h->tex2[1] = f->sampler;
     h->tex2[2] = (u32)f->frame_index;
-    h->tex2[3] = c->blue_bindless; /* DENG-852 */
+    h->tex2[3] = (c->cv_blue.id == 0u || de_cvar_bool(c->cv_blue)) ? c->blue_bindless
+                                                                   : 0u; /* DENG-852 */
     h->steps[0] = q.primary_steps;
     h->steps[1] = q.light_steps;
     h->steps[2] = q.octaves;

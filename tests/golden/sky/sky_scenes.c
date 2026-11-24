@@ -65,6 +65,9 @@ typedef struct sky_opts {
     f32 pan_deg;         /**< > 0: a temporal pan of this many degrees a frame over 30 frames,
                               captured at frame 30 and checked against the converged still */
     bool coverage_pair;  /**< left half coverage 0, right half coverage 1 (one run) */
+    /* DENG-852: volumetrics Low; the capture (blue-noise jitter) is checked for banding against
+     * the old interleaved-gradient jitter (r.clouds_blue_noise 0), both against volumetrics Ultra. */
+    bool low_banding;
     /* DENG-849: no DeSky entity (de_sky_attach still runs): no sky, no sky IBL and no state; the
      * fog must still draw, without the aerial perspective. */
     bool no_sky;
@@ -373,6 +376,109 @@ static bool sky_clouds_checks(sky_run *s, const sky_opts *o, DeSky *sky, DeTrans
     return true;
 }
 
+/* DENG-852: the banding of a cloud picture `test` against a reference `ref` (sRGB8 RGBA, the
+ * view's pitch), over the sky rows [8, 45% of the height). e is the linear-luminance error over
+ * the reference's mean luminance. Banding is the RMS of box4(e) - box16(e): the error's structure
+ * at the 4-16 pixel scale of the march's steps (the smooth bias of fewer steps cancels, and so
+ * does the per-pixel grain). *noise gets the plain RMS of e. */
+static f64 sky_band_metric(const sky_run *s, const u8 *test, const u8 *ref, f64 *noise) {
+    const u32 w = s->ctx->width, y0 = 8u, h = (u32)((f32)s->ctx->height * 0.45f) - y0;
+    f64 *sat = (f64 *)calloc((size_t)(w + 1u) * (h + 1u), sizeof(f64));
+    f64 *e = (f64 *)malloc((size_t)w * h * sizeof(f64));
+    if (sat == NULL || e == NULL) {
+        free(sat);
+        free(e);
+        *noise = -1.0;
+        return -1.0;
+    }
+    f64 mean = 0.0;
+    for (u32 y = 0; y < h; ++y)
+        for (u32 x = 0; x < w; ++x) {
+            const size_t i = (size_t)(y0 + y) * s->pitch + (size_t)x * 4u;
+            f64 yt = 0.0, yr = 0.0;
+            static const f64 k_w[3] = {0.2126, 0.7152, 0.0722};
+            for (u32 k = 0; k < 3u; ++k) {
+                const f64 ct = test[i + k] / 255.0, cr = ref[i + k] / 255.0;
+                yt += k_w[k] * (ct <= 0.04045 ? ct / 12.92 : pow((ct + 0.055) / 1.055, 2.4));
+                yr += k_w[k] * (cr <= 0.04045 ? cr / 12.92 : pow((cr + 0.055) / 1.055, 2.4));
+            }
+            e[(size_t)y * w + x] = yt - yr;
+            mean += yr;
+        }
+    mean /= (f64)w * h;
+    const f64 inv = mean > 0.0 ? 1.0 / mean : 0.0;
+    f64 n2 = 0.0;
+    for (u32 y = 0; y < h; ++y)
+        for (u32 x = 0; x < w; ++x) {
+            const f64 v = e[(size_t)y * w + x] * inv;
+            n2 += v * v;
+            sat[(size_t)(y + 1u) * (w + 1u) + x + 1u] = v + sat[(size_t)y * (w + 1u) + x + 1u] +
+                                                        sat[(size_t)(y + 1u) * (w + 1u) + x] -
+                                                        sat[(size_t)y * (w + 1u) + x];
+        }
+    f64 b2 = 0.0;
+    u32 n = 0;
+    for (u32 y = 8u; y + 8u <= h; ++y)
+        for (u32 x = 8u; x + 8u <= w; ++x, ++n) {
+#define SKY_BOX(r)                                                                                 \
+    ((sat[(size_t)(y + (r)) * (w + 1u) + x + (r)] - sat[(size_t)(y - (r)) * (w + 1u) + x + (r)] -    \
+      sat[(size_t)(y + (r)) * (w + 1u) + x - (r)] + sat[(size_t)(y - (r)) * (w + 1u) + x - (r)]) / \
+     (4.0 * (r) * (r)))
+            const f64 d = SKY_BOX(2u) - SKY_BOX(8u);
+#undef SKY_BOX
+            b2 += d * d;
+        }
+    free(sat);
+    free(e);
+    *noise = sqrt(n2 / ((f64)w * h));
+    return n != 0u ? sqrt(b2 / n) : 0.0;
+}
+
+/* DENG-852 AC: at volumetrics Low the blue-noise jitter bands less than the old interleaved
+ * gradient noise. The capture (s->pixels, blue noise) is kept; SKY_FRAMES more with
+ * r.clouds_blue_noise 0 give the IGN picture, then SKY_FRAMES at volumetrics Ultra (blue noise)
+ * the reference. Fails when blue noise's banding is not below IGN's. */
+static bool sky_clouds_banding(sky_run *s, de_render_settings *rs, size_t bytes) {
+    de_golden_ctx *ctx = s->ctx;
+    u8 *blue = (u8 *)malloc(bytes), *ign = (u8 *)malloc(bytes);
+    bool ok = blue != NULL && ign != NULL;
+    if (!ok)
+        de_golden_fail(ctx, "no memory for the banding readbacks");
+    if (ok) {
+        memcpy(blue, s->pixels, bytes);
+        sky_cvar("r.clouds_blue_noise", "0");
+        for (u32 i = 0; ok && i < SKY_FRAMES; ++i)
+            ok = sky_frame(s);
+        ok = ok && sky_read(s);
+        sky_cvar("r.clouds_blue_noise", "1");
+    }
+    if (ok) {
+        memcpy(ign, s->pixels, bytes);
+        rs->volumetrics = DE_QUALITY_ULTRA;
+        de_renderer_set_settings(s->r, rs);
+        for (u32 i = 0; ok && i < SKY_FRAMES; ++i)
+            ok = sky_frame(s);
+        ok = ok && sky_read(s);
+    }
+    if (ok) {
+        f64 nb, ni;
+        const f64 bb = sky_band_metric(s, blue, s->pixels, &nb);
+        const f64 bi = sky_band_metric(s, ign, s->pixels, &ni);
+        printf("  clouds Low vs Ultra banding (4-16 px error RMS): blue noise %.5f, IGN %.5f "
+               "(ratio %.2f); per-pixel error RMS: blue %.5f, IGN %.5f\n",
+               bb, bi, bi > 0.0 ? bb / bi : 0.0, nb, ni);
+        if (bb < 0.0 || bi < 0.0)
+            de_golden_fail(ctx, "no memory for the banding metric");
+        else if (!(bb < bi))
+            de_golden_fail(ctx, "at volumetrics Low the blue-noise jitter bands no less than IGN "
+                                "(%.5f vs %.5f)", bb, bi);
+        memcpy(s->pixels, blue, bytes);
+    }
+    free(blue);
+    free(ign);
+    return ok;
+}
+
 static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
     if (!ctx->caps->base_tier_ok) {
         de_golden_skip(ctx, "below the Base tier (the renderer needs it): %s",
@@ -443,7 +549,7 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
         rs.shadows = DE_QUALITY_MEDIUM;
     }
     if (o->clouds)
-        rs.volumetrics = DE_QUALITY_HIGH; /* DENG-208: the clouds' quality */
+        rs.volumetrics = o->low_banding ? DE_QUALITY_LOW : DE_QUALITY_HIGH; /* DENG-208, DENG-852 */
     rs.rt_shadows = rs.rt_ao = rs.rt_reflections = rs.rt_gi = rs.rt_refraction = false;
     de_renderer_set_settings(s.r, &rs);
 
@@ -631,6 +737,10 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
         sky_close(&s);
         return;
     }
+    if (o->low_banding && !sky_clouds_banding(&s, &rs, bytes)) {
+        sky_close(&s);
+        return;
+    }
     if (o->clouds) {
         sky_block_mean(&s, 0.5f, 4u, 64u, 16u, top);
         /* The frame budget (AC4), after the capture: r.rg_gpu_timers on for 16 more frames, the
@@ -651,8 +761,9 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
         }
         sky_cvar("r.rg_gpu_timers", "0");
         if (timed > 0u)
-            printf("  clouds GPU %.3f ms of a %.3f ms frame (%ux%u, volumetrics High, %u frames)\n",
-                   cms / timed, fms / timed, ctx->width, ctx->height, timed);
+            printf("  clouds GPU %.3f ms of a %.3f ms frame (%ux%u, volumetrics %s, %u frames)\n",
+                   cms / timed, fms / timed, ctx->width, ctx->height,
+                   rs.volumetrics == DE_QUALITY_ULTRA ? "Ultra" : "High", timed);
     }
     if (!o->fog && !o->clouds && o->sun_elev_min > 0.0f && !(top[2] > top[0] + 8.0f))
         de_golden_fail(ctx, "the daytime sky is not blue at the top (%.0f %.0f %.0f)",
@@ -918,4 +1029,16 @@ DE_GOLDEN_SCENE(clouds_coverage_pair) {
                                    .sun_elev_max = 46.5f,
                                    .clouds = true,
                                    .coverage_pair = true});
+}
+/* DENG-852: cumulus at volumetrics Low, the blue-noise jitter's banding against IGN's. */
+DE_GOLDEN_SCENE(clouds_low_banding) {
+    sky_run_scene(ctx, &(sky_opts){.hours = 12.0f,
+                                   .heading_deg = 180.0f,
+                                   .pitch_deg = 22.0f,
+                                   .ev100 = 14.5f,
+                                   .sun_elev_min = 44.0f,
+                                   .sun_elev_max = 46.5f,
+                                   .clouds = true,
+                                   .coverage = 0.45f,
+                                   .low_banding = true});
 }
