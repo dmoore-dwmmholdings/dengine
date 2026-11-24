@@ -14,7 +14,7 @@ foreach(_backend IN ITEMS metal vulkan d3d12)
     foreach(_scene IN ITEMS sky_sunrise sky_noon sky_sunset sky_night
                              sky_aerial_perspective sky_ibl_sphere
                              fog_spot_shaft fog_sun_window fog_local_volume fog_transparent
-                             fog_ap_seam
+                             fog_ap_seam fog_no_sky
                              clouds_overcast clouds_cumulus_noon clouds_sunset clouds_shadow
                              clouds_coverage_pair)
         if(TEST golden.${_backend}.${_scene})

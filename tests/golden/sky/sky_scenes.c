@@ -65,6 +65,9 @@ typedef struct sky_opts {
     f32 pan_deg;         /**< > 0: a temporal pan of this many degrees a frame over 30 frames,
                               captured at frame 30 and checked against the converged still */
     bool coverage_pair;  /**< left half coverage 0, right half coverage 1 (one run) */
+    /* DENG-849: no DeSky entity (de_sky_attach still runs): no sky, no sky IBL and no state; the
+     * fog must still draw, without the aerial perspective. */
+    bool no_sky;
 } sky_opts;
 
 /* DENG-207: the largest mean sRGB change allowed between two consecutive frames of a static fog
@@ -489,24 +492,28 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
     if (o->cam_z > 0.0f)
         cam_xf->position.z = o->cam_z;
 
-    /* The sky: latitude 45, day 80, the reference turbidity, the real moon. */
+    /* The sky: latitude 45, day 80, the reference turbidity, the real moon. DENG-849: no_sky
+     * spawns no DeSky at all. */
     const de_component c_sky = de_component_find(s.world, "DeSky");
-    const de_entity sky_e = de_entity_spawn(s.world);
-    DeSky *sky = DE_HANDLE_VALID(c_sky) ? (DeSky *)de_entity_add(s.world, sky_e, c_sky) : NULL;
-    if (sky == NULL) {
-        de_golden_fail(ctx, "adding DeSky: %s", sky_err());
-        sky_close(&s);
-        return;
+    DeSky *sky = NULL;
+    if (!o->no_sky) {
+        const de_entity sky_e = de_entity_spawn(s.world);
+        sky = DE_HANDLE_VALID(c_sky) ? (DeSky *)de_entity_add(s.world, sky_e, c_sky) : NULL;
+        if (sky == NULL) {
+            de_golden_fail(ctx, "adding DeSky: %s", sky_err());
+            sky_close(&s);
+            return;
+        }
+        *sky = (DeSky){.time_of_day_hours = o->hours,
+                       .latitude_deg = 45.0f,
+                       .turbidity = 2.0f,
+                       .day_of_year = 80.0f,
+                       .moon_phase = o->moon_phase > 0.0f ? o->moon_phase : -1.0f,
+                       .ground_albedo = 0.3f,
+                       .drive_sun = true,
+                       .clouds = o->clouds,
+                       .cloud_coverage = o->coverage_pair ? 0.0f : o->coverage};
     }
-    *sky = (DeSky){.time_of_day_hours = o->hours,
-                   .latitude_deg = 45.0f,
-                   .turbidity = 2.0f,
-                   .day_of_year = 80.0f,
-                   .moon_phase = o->moon_phase > 0.0f ? o->moon_phase : -1.0f,
-                   .ground_albedo = 0.3f,
-                   .drive_sun = true,
-                   .clouds = o->clouds,
-                   .cloud_coverage = o->coverage_pair ? 0.0f : o->coverage};
     if (de_sky_attach(s.world, s.r, &s.sky) != DE_OK) {
         de_golden_fail(ctx, "de_sky_attach: %s", sky_err());
         sky_close(&s);
@@ -556,29 +563,31 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
             return;
         }
     }
-    if (lt == NULL || lt->sky_serial == 0u) {
-        de_golden_fail(ctx, "the sky's IBL environment never reached lighting in %u frames",
-                       SKY_FRAMES);
-        sky_close(&s);
-        return;
+    if (!o->no_sky) {
+        if (lt == NULL || lt->sky_serial == 0u) {
+            de_golden_fail(ctx, "the sky's IBL environment never reached lighting in %u frames",
+                           SKY_FRAMES);
+            sky_close(&s);
+            return;
+        }
+        de_sky_state st;
+        if (!de_sky_get_state(s.sky, &st)) {
+            de_golden_fail(ctx, "the sky has no state after %u frames", SKY_FRAMES);
+            sky_close(&s);
+            return;
+        }
+        printf("  sky %.2f h: sun elev %.2f az %.1f, moon elev %.2f az %.1f lit %.2f, light %.4g lx "
+               "(%s)\n",
+               (f64)o->hours, (f64)st.sun_elevation_deg, (f64)sky_azimuth_deg(st.sun_direction),
+               (f64)st.moon_elevation_deg, (f64)sky_azimuth_deg(st.moon_direction),
+               (f64)st.moon_illuminated_fraction, (f64)st.light_illuminance,
+               st.light_is_moon ? "moon" : "sun");
+        if (st.sun_elevation_deg < o->sun_elev_min || st.sun_elevation_deg > o->sun_elev_max)
+            de_golden_fail(ctx, "sun elevation %.2f outside [%.1f, %.1f]",
+                           (f64)st.sun_elevation_deg, (f64)o->sun_elev_min, (f64)o->sun_elev_max);
+        if (st.light_is_moon != o->expect_moon_light)
+            de_golden_fail(ctx, "the driven light is the %s", st.light_is_moon ? "moon" : "sun");
     }
-    de_sky_state st;
-    if (!de_sky_get_state(s.sky, &st)) {
-        de_golden_fail(ctx, "the sky has no state after %u frames", SKY_FRAMES);
-        sky_close(&s);
-        return;
-    }
-    printf("  sky %.2f h: sun elev %.2f az %.1f, moon elev %.2f az %.1f lit %.2f, light %.4g lx "
-           "(%s)\n",
-           (f64)o->hours, (f64)st.sun_elevation_deg, (f64)sky_azimuth_deg(st.sun_direction),
-           (f64)st.moon_elevation_deg, (f64)sky_azimuth_deg(st.moon_direction),
-           (f64)st.moon_illuminated_fraction, (f64)st.light_illuminance,
-           st.light_is_moon ? "moon" : "sun");
-    if (st.sun_elevation_deg < o->sun_elev_min || st.sun_elevation_deg > o->sun_elev_max)
-        de_golden_fail(ctx, "sun elevation %.2f outside [%.1f, %.1f]",
-                       (f64)st.sun_elevation_deg, (f64)o->sun_elev_min, (f64)o->sun_elev_max);
-    if (st.light_is_moon != o->expect_moon_light)
-        de_golden_fail(ctx, "the driven light is the %s", st.light_is_moon ? "moon" : "sun");
     if (!sky_read(&s)) {
         sky_close(&s);
         return;
@@ -783,6 +792,19 @@ DE_GOLDEN_SCENE(fog_local_volume) {
                                                    .anisotropy = 0.2f,
                                                    .noise = 0.6f,
                                                    .edge_fade = 1.5f}}});
+}
+/* DENG-849: the spot-lit column in global fog with no DeSky entity (an interior): the fog still
+ * runs, with no aerial perspective behind it. The constant ambient fallback lights the room. */
+DE_GOLDEN_SCENE(fog_no_sky) {
+    sky_run_scene(ctx, &(sky_opts){.heading_deg = 0.0f,
+                                   .pitch_deg = 8.0f,
+                                   .ev100 = 4.0f,
+                                   .scene = "scenes/fog_spot",
+                                   .no_sky = true,
+                                   .keep_ambient = true,
+                                   .fog = true,
+                                   .fog_count = 1u,
+                                   .fog_volume = {sky_fog_global(0.04f, 0.05f, 0.3f)}});
 }
 /* A blended glass panel in global fog: the forward transparent pass applies the same froxel
  * volume (froxel_apply), so the panel fades with the columns behind it. */
