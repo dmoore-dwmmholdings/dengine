@@ -954,6 +954,7 @@ typedef struct wc_tile {
 typedef struct wc_tsamples {
     u16 heights[DE__TTILE_RES * DE__TTILE_RES];
     u8 holes[DE__TTILE_RES * DE__TTILE_RES];
+    f32 color[DE__TTILE_RES * DE__TTILE_RES * 3u]; /* the splat-weighted layer colour (DENG-882) */
 } wc_tsamples;
 
 static bool wc_tile_in(const wc_tile *t, i32 cx, i32 cy) {
@@ -978,6 +979,7 @@ static void wc_proxy_tile(const wc_run *run, const wc_tile *t, i32 cx, i32 cy,
     out->cell[0] = DE__CELL_SIZE;
     out->cell[1] = DE__CELL_SIZE;
     memcpy(out->color, t->rgb, sizeof out->color);
+    out->vcolor = s->color;
 }
 
 /* Bakes cell (cx, cy)'s proxy into `<sub><leaf>.proxy.gltf` and lists it; no mesh, no proxy. */
@@ -1201,7 +1203,8 @@ static void wc_tile_color(const wc_terrain *t, const f32 lc[WC_TERRAIN_LAYERS][3
         rgb[c] = wsum > 0.0 ? (f32)(sum[c] / wsum) : 1.0f;
 }
 
-static bool wc_push_samples(wc_run *run, const wc_terrain *t, u32 *index) {
+static bool wc_push_samples(wc_run *run, const wc_terrain *t,
+                            const f32 lc[WC_TERRAIN_LAYERS][3], u32 *index) {
     if (run->tsample_count == run->tsample_cap) {
         u32 cap = run->tsample_cap ? run->tsample_cap * 2u : 4u;
         wc_tsamples *n = (wc_tsamples *)wc_alloc(run, sizeof *n * cap);
@@ -1217,6 +1220,18 @@ static bool wc_push_samples(wc_run *run, const wc_terrain *t, u32 *index) {
     wc_tsamples *s = &run->tsamples[run->tsample_count];
     memcpy(s->heights, t->heights, sizeof s->heights);
     memcpy(s->holes, t->holes, sizeof s->holes);
+    /* The colour of each sample: the layer colours weighted by its splat; white without weights. */
+    for (u32 i = 0; i < DE__TTILE_RES * DE__TTILE_RES; ++i) {
+        const u8 *sp = &t->splat[i * WC_TERRAIN_LAYERS];
+        f64 sum[3] = {0.0, 0.0, 0.0}, wsum = 0.0;
+        for (u32 k = 0; k < WC_TERRAIN_LAYERS; ++k) {
+            for (int c = 0; c < 3; ++c)
+                sum[c] += (f64)sp[k] * (f64)lc[k][c];
+            wsum += (f64)sp[k];
+        }
+        for (int c = 0; c < 3; ++c)
+            s->color[i * 3u + (u32)c] = wsum > 0.0 ? (f32)(sum[c] / wsum) : 1.0f;
+    }
     *index = run->tsample_count++;
     return true;
 }
@@ -1274,7 +1289,7 @@ static bool wc_terrain_tiles(wc_run *run, const de__manifest *m, const char *sub
         f32 lc[WC_TERRAIN_LAYERS][3];
         wc_terrain_layer_colors(run, m, dt, lc);
         u32 samples = 0;
-        ok = wc_push_samples(run, t, &samples);
+        ok = wc_push_samples(run, t, (const f32(*)[3])lc, &samples);
         for (u32 ty = 0; ok && ty < DE__TTILE_COUNT; ++ty)
             for (u32 tx = 0; ok && tx < DE__TTILE_COUNT; ++tx) {
                 u32 x0, w, y0, h;

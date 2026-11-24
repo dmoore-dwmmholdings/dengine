@@ -404,8 +404,8 @@ static bool wp_terrain_hole(const de__wproxy_tile *t, u32 i0, u32 i1, u32 j0, u3
 }
 
 /* The triangles of tile `t` at sample step `step`, written to `out` (9 floats each) when it is
- * not NULL; `*area` gets their total area. Returns the triangle count. */
-static u32 wp_terrain_tris(const de__wproxy_tile *t, u32 step, f32 *out, f64 *area) {
+ * not NULL, with the vertex colours in `col` (9 floats each) when that is not NULL; `*area` gets their total area. Returns the triangle count. */
+static u32 wp_terrain_tris(const de__wproxy_tile *t, u32 step, f32 *out, f32 *col, f64 *area) {
     u32 xs[WP_TERRAIN_STEP_MAX * 4u + 2u], ys[WP_TERRAIN_STEP_MAX * 4u + 2u];
     *area = 0.0;
     if (t->heights == NULL || t->res == 0 || t->w > WP_TERRAIN_STEP_MAX * 4u + 1u ||
@@ -443,6 +443,17 @@ static u32 wp_terrain_tris(const de__wproxy_tile *t, u32 step, f32 *out, f64 *ar
                     for (u32 c = 0; c < 3u; ++c)
                         for (u32 d = 0; d < 3u; ++d)
                             o[c * 3u + d] = (f32)q[k_tri[k][c]][d];
+                }
+                if (col != NULL) {
+                    f32 *o = &col[(size_t)tris * 9u];
+                    for (u32 c = 0; c < 3u; ++c) {
+                        const u32 s = k_tri[k][c];
+                        const u32 si = (t->y0 + ((s == 2u || s == 3u) ? j1 : j0)) * t->res +
+                                       t->x0 + ((s == 1u || s == 2u) ? i1 : i0);
+                        for (u32 d = 0; d < 3u; ++d)
+                            o[c * 3u + d] = t->vcolor != NULL ? t->vcolor[(size_t)si * 3u + d]
+                                                              : t->color[d];
+                    }
                 }
                 tris++;
             }
@@ -482,20 +493,24 @@ static bool wp_f32s(de_strbuf *out, const f32 *v, u32 n) {
 }
 
 /* The glTF of the flat triangles `tri` (9 floats each, engine axes): one primitive per group,
- * group `i` being the next `count[i]` triangles with base colour `rgb[i]`. */
+ * group `i` being the next `count[i]` triangles with base colour `rgb[i]`. With `tcol` (9 floats
+ * per triangle, for the triangles from `tfirst` on: the last group), that group also has COLOR_0,
+ * the other vertices white. */
 static bool wp_write(const de_allocator *a, de_strbuf *out, const f32 *tri, const u32 *count,
-                     const f32 (*rgb)[3], u32 groups) {
+                     const f32 (*rgb)[3], u32 groups, const f32 *tcol, u32 tfirst) {
     u32 tris = 0;
     for (u32 i = 0; i < groups; ++i)
         tris += count[i];
     const u32 vc = tris * 3u;
     const size_t vbytes = (size_t)vc * 12u, ibytes = (size_t)vc * 4u;
-    const size_t total = vbytes * 2u + ibytes;
+    const size_t cbytes = tcol != NULL ? vbytes : 0u;
+    const size_t total = vbytes * 2u + ibytes + cbytes;
     u8 *bin = (u8 *)DE_ALLOC(a, total, 16, DE_MEM_GENERAL);
     if (bin == NULL)
         return false;
     f32 *pos = (f32 *)bin, *nrm = (f32 *)(bin + vbytes);
     u32 *idx = (u32 *)(bin + vbytes * 2u);
+    f32 *vcol = tcol != NULL ? (f32 *)(bin + vbytes * 2u + ibytes) : NULL;
     f32 lo[3] = {FLT_MAX, FLT_MAX, FLT_MAX}, hi[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
     for (u32 t = 0; t < tris; ++t) {
         f64 p[3][3];
@@ -530,6 +545,9 @@ static bool wp_write(const de_allocator *a, de_strbuf *out, const f32 *tri, cons
                     hi[d] = pos[v * 3u + d];
             }
             idx[v] = v;
+            for (u32 d = 0; vcol != NULL && d < 3u; ++d)
+                vcol[v * 3u + d] =
+                    t >= tfirst ? tcol[(size_t)(t - tfirst) * 9u + c * 3u + d] : 1.0f;
         }
     }
     bool ok = de_strbuf_append_cstr(
@@ -537,11 +555,15 @@ static bool wp_write(const de_allocator *a, de_strbuf *out, const f32 *tri, cons
                        "(DENG-830)\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{"
                        "\"name\":\"proxy\",\"mesh\":0}],\"meshes\":[{\"name\":\"proxy\","
                        "\"primitives\":[") == DE_OK;
-    for (u32 i = 0; ok && i < groups; ++i)
+    for (u32 i = 0; ok && i < groups; ++i) {
+        char extra[32] = "";
+        if (tcol != NULL && i + 1u == groups)
+            (void)snprintf(extra, sizeof extra, ",\"COLOR_0\":%u", groups + 2u);
         ok = de_strbuf_appendf(out,
-                               "%s{\"attributes\":{\"POSITION\":0,\"NORMAL\":1},\"indices\":%u,"
-                               "\"material\":%u}",
-                               i ? "," : "", i + 2u, i) == DE_OK;
+                               "%s{\"attributes\":{\"POSITION\":0,\"NORMAL\":1%s},"
+                               "\"indices\":%u,\"material\":%u}",
+                               i ? "," : "", extra, i + 2u, i) == DE_OK;
+    }
     ok = ok && de_strbuf_append_cstr(out, "]}],\"materials\":[") == DE_OK;
     for (u32 i = 0; ok && i < groups; ++i) {
         char num[3][DE__SER_NUM_CAP];
@@ -564,10 +586,17 @@ static bool wp_write(const de_allocator *a, de_strbuf *out, const f32 *tri, cons
              "\"}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":%llu,"
              "\"target\":34962},{\"buffer\":0,\"byteOffset\":%llu,\"byteLength\":%llu,"
              "\"target\":34962},{\"buffer\":0,\"byteOffset\":%llu,\"byteLength\":%llu,"
-             "\"target\":34963}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,"
-             "\"count\":%u,\"type\":\"VEC3\",\"min\":",
+             "\"target\":34963}",
              (unsigned long long)vbytes, (unsigned long long)vbytes, (unsigned long long)vbytes,
-             (unsigned long long)(vbytes * 2u), (unsigned long long)ibytes, vc) == DE_OK;
+             (unsigned long long)(vbytes * 2u), (unsigned long long)ibytes) == DE_OK;
+    ok = ok && (tcol == NULL ||
+                de_strbuf_appendf(out,
+                                  ",{\"buffer\":0,\"byteOffset\":%llu,\"byteLength\":%llu,"
+                                  "\"target\":34962}",
+                                  (unsigned long long)(vbytes * 2u + ibytes),
+                                  (unsigned long long)vbytes) == DE_OK);
+    ok = ok && de_strbuf_appendf(out, "],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,"
+                                      "\"count\":%u,\"type\":\"VEC3\",\"min\":", vc) == DE_OK;
     ok = ok && wp_f32s(out, lo, 3) && de_strbuf_append_cstr(out, ",\"max\":") == DE_OK &&
          wp_f32s(out, hi, 3);
     ok = ok && de_strbuf_appendf(out,
@@ -582,6 +611,11 @@ static bool wp_write(const de_allocator *a, de_strbuf *out, const f32 *tri, cons
                                (unsigned long long)first * 12u, count[i] * 3u) == DE_OK;
         first += count[i];
     }
+    ok = ok && (tcol == NULL ||
+                de_strbuf_appendf(out,
+                                  ",{\"bufferView\":3,\"componentType\":5126,\"count\":%u,"
+                                  "\"type\":\"VEC3\"}",
+                                  vc) == DE_OK);
     ok = ok && de_strbuf_append_cstr(out, "]}\n") == DE_OK;
     DE_FREE(a, bin, total);
     return ok;
@@ -640,7 +674,7 @@ de_result de__wproxy_bake(de__wproxy *b, const de__wproxy_item *items, u32 n,
     g.a = b->a;
     de_result res = DE_OK;
     u32 *remap = NULL, *idx = NULL, *dst = NULL;
-    f32 *verts = NULL, *src = NULL, *res_pos = NULL;
+    f32 *verts = NULL, *src = NULL, *res_pos = NULL, *tcol = NULL;
     u32 index_count = 0;
     size_t res_cap = 0;
     for (u32 i = 0; i < n; ++i)
@@ -653,7 +687,7 @@ de_result de__wproxy_bake(de__wproxy *b, const de__wproxy_item *items, u32 n,
     u32 terr_tris = 0;
     for (u32 i = 0; i < tile_n; ++i) {
         f64 area;
-        terr_tris += wp_terrain_tris(&tiles[i], step, NULL, &area);
+        terr_tris += wp_terrain_tris(&tiles[i], step, NULL, NULL, &area);
     }
     if (g.tris == 0 && terr_tris == 0)
         goto done;
@@ -664,7 +698,7 @@ de_result de__wproxy_bake(de__wproxy *b, const de__wproxy_item *items, u32 n,
         res = DE_FAIL(DE_ERR_OUT_OF_MEMORY, "far proxy bake");
         goto done;
     }
-    u32 count[WP_MAX_GROUPS + 1u] = {0}, groups = 0, total = 0;
+    u32 count[WP_MAX_GROUPS + 1u] = {0}, groups = 0, total = 0, tfirst = 0;
     f32 rgb[WP_MAX_GROUPS + 1u][3];
     if (g.tris == 0)
         goto terrain;
@@ -697,23 +731,27 @@ de_result de__wproxy_bake(de__wproxy *b, const de__wproxy_item *items, u32 n,
 terrain:
     /* The terrain tiles, in order, as one more primitive (not simplified). */
     if (terr_tris > 0) {
-        f64 csum[3] = {0.0, 0.0, 0.0}, asum = 0.0;
+        tfirst = total;
+        /* The colour is per vertex (DENG-882), so the material's factor is white. */
+        tcol = (f32 *)DE_ALLOC(b->a, sizeof(f32) * 9u * terr_tris, 16, DE_MEM_GENERAL);
+        if (tcol == NULL) {
+            res = DE_FAIL(DE_ERR_OUT_OF_MEMORY, "far proxy bake");
+            goto done;
+        }
         u32 first = total;
         for (u32 i = 0; i < tile_n; ++i) {
             f64 area = 0.0;
-            first += wp_terrain_tris(&tiles[i], step, &res_pos[(size_t)first * 9u], &area);
-            for (int c = 0; c < 3; ++c)
-                csum[c] += (f64)tiles[i].color[c] * area;
-            asum += area;
+            first += wp_terrain_tris(&tiles[i], step, &res_pos[(size_t)first * 9u],
+                                     &tcol[(size_t)(first - tfirst) * 9u], &area);
         }
         for (int c = 0; c < 3; ++c)
-            rgb[groups][c] = asum > 0.0 ? (f32)(csum[c] / asum) : tiles[0].color[c];
+            rgb[groups][c] = 1.0f;
         count[groups++] = terr_tris;
         total += terr_tris;
     }
     if (total == 0)
         goto done;
-    if (!wp_write(b->a, out, res_pos, count, (const f32(*)[3])rgb, groups)) {
+    if (!wp_write(b->a, out, res_pos, count, (const f32(*)[3])rgb, groups, tcol, tfirst)) {
         res = DE_FAIL(DE_ERR_OUT_OF_MEMORY, "far proxy bake");
         goto done;
     }
@@ -730,6 +768,8 @@ done:
         DE_FREE(b->a, verts, sizeof(f32) * 3u * index_count);
     if (src != NULL)
         DE_FREE(b->a, src, sizeof(f32) * 3u * index_count);
+    if (tcol != NULL)
+        DE_FREE(b->a, tcol, sizeof(f32) * 9u * terr_tris);
     if (res_pos != NULL)
         DE_FREE(b->a, res_pos, sizeof(f32) * res_cap);
     if (g.pos != NULL) {
