@@ -5,6 +5,7 @@
 #include "de_math.h"
 #include "de_ecs.h"
 #include "de_asset.h"
+#include "de_render.h" /* de_plane_2d (§12.12) */
 DE_EXTERN_C_BEGIN
 
 /* ===================== Navigation ===================== */
@@ -86,15 +87,73 @@ typedef struct DeNavAgent {
 } DeNavAgent;
 
 /* 2D grid / polygon navigation on the configured 2D plane. */
+/* ---- DENG-79: 2D navigation (pure C, deterministic, SPEC §21.2, §12.12, §5.7) ----
+ * Plane coordinates are de_vec2 on the game's 2D plane (de_plane_2d, §12.12); convert with
+ * de_nav2d_to_world / de_nav2d_from_world, which match 2D physics (§13.3). Every function here is
+ * pure: it reads its inputs only, so any thread may call it at any time and the result does not
+ * depend on call order. Paths and scratch come from `a` (NULL = de_heap_allocator()); scratch is
+ * released before return. Free a path with de_nav2d_path_free. */
 typedef struct de_nav2d_grid {
     u32 width, height;
-    f32 cell_size;
-    de_vec2 origin;
-    const u8 *walkable;
+    f32 cell_size;     /* > 0, in plane units */
+    de_vec2 origin;    /* plane position of the corner of cell (0, 0) */
+    const u8 *walkable; /* width * height cells, row-major (y * width + x); non-zero = walkable */
 } de_nav2d_grid;
+/**
+ * Shortest 8-neighbour path on `grid` from the cell of `from` to the cell of `to`: A* with the
+ * octile heuristic (straight cost 1, diagonal cost 1.4142, in fixed point) and no corner cutting
+ * (a diagonal step needs both orthogonal cells walkable). `jump_point_search` uses Jump Point
+ * Search instead, which finds a path of the same cost and expands fewer nodes. Ties break on
+ * f, then h, then cell index, so the path is the same on every machine.
+ * `*points` gets the turning points as cell centres, from the start cell to the goal cell
+ * (one point when both are the same cell). DE_ERR_NOT_FOUND when `from` or `to` is outside the
+ * grid or on a blocked cell, or no path exists; DE_ERR_INVALID_ARGUMENT for a bad grid.
+ */
 DE_API de_result de_nav2d_find_path(const de_nav2d_grid *grid, de_vec2 from, de_vec2 to,
                                     bool jump_point_search, const de_allocator *a, de_vec2 **points,
                                     u32 *count);
+/** Frees `points` (`count` points from de_nav2d_find_path or de_nav2d_mesh_find_path) to `a`. */
+DE_API void de_nav2d_path_free(const de_allocator *a, de_vec2 *points, u32 count);
+
+/** A closed polygon: `count` >= 3 points, either winding, no self-intersections. */
+typedef struct de_nav2d_polygon {
+    const de_vec2 *points;
+    u32 count;
+} de_nav2d_polygon;
+/** de_nav2d_mesh_build input. Polygons are walkable areas already inset by the author for the
+ *  agent radius (no erosion is done). Each hole lies inside one outline (the first outline that
+ *  contains its first point) and does not touch other holes. */
+typedef struct de_nav2d_mesh_desc {
+    const de_nav2d_polygon *outlines;
+    u32 outline_count;
+    const de_nav2d_polygon *holes;
+    u32 hole_count;
+} de_nav2d_mesh_desc;
+typedef struct de_nav2d_mesh de_nav2d_mesh;
+/**
+ * Triangulates the walkable area (ear clipping, holes bridged into their outline) and links
+ * the triangles across shared edges (outlines that share vertices are joined), then builds the
+ * visibility graph of the reflex corners (O(corners^2 * boundary edges)). The mesh is
+ * immutable and owned by the caller. DE_ERR_INVALID_ARGUMENT for an empty or degenerate input.
+ */
+DE_API de_result de_nav2d_mesh_build(const de_nav2d_mesh_desc *desc, const de_allocator *a,
+                                     de_nav2d_mesh **out);
+DE_API void de_nav2d_mesh_destroy(de_nav2d_mesh *m);
+/**
+ * Shortest path from `from` to `to` inside the mesh: a straight line when in sight, otherwise
+ * A* over the visibility graph of the reflex boundary corners (built by de_nav2d_mesh_build).
+ * The points are `from`, the corners, then `to`. DE_ERR_NOT_FOUND when an
+ * end is outside every triangle (snap it with de_nav2d_mesh_nearest_point) or the two are not
+ * connected.
+ */
+DE_API de_result de_nav2d_mesh_find_path(const de_nav2d_mesh *m, de_vec2 from, de_vec2 to,
+                                         const de_allocator *a, de_vec2 **points, u32 *count);
+/** The mesh point nearest to `p` (`p` itself when inside). False for an empty mesh. */
+DE_API bool de_nav2d_mesh_nearest_point(const de_nav2d_mesh *m, de_vec2 p, de_vec2 *out);
+/** Plane point to world: DE_PLANE_SIDE_XZ gives (x, depth, y), DE_PLANE_TOP_XY (x, y, depth). */
+DE_API de_dvec3 de_nav2d_to_world(de_plane_2d plane, de_vec2 p, f64 depth);
+/** World point to plane: drops the out-of-plane axis (y for SIDE_XZ, z for TOP_XY). */
+DE_API de_vec2 de_nav2d_from_world(de_plane_2d plane, de_dvec3 p);
 
 /* ===================== Tilemaps (LDtk / Tiled / Aseprite tilesets) ===================== */
 typedef struct DeTilemap {

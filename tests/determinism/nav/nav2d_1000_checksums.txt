@@ -1,0 +1,12 @@
+# de_det v1 scenario=nav2d_1000 seed=0x79 ticks=11: de_world_checksum after each tick, one per line
+583274a6efcaa802
+6efe8be6f40c3d94
+789ded94da2580d9
+b6d13f6c88726dcb
+32750622c8e63bcf
+f7bc5b2eb9efad68
+a6135cb3533d6c41
+4d77decd55b56aa2
+05fb40dea3aa5d0f
+539daec0c13406f0
+f6fb60418b33d8c6

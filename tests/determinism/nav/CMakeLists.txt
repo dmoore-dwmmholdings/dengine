@@ -18,3 +18,20 @@ endif()
 de_det_add_tests(TARGET test_nav_determinism TESTS
     determinism_nav.queries_match_golden=nav_determinism.queries_match_golden
     determinism_nav.repeat_runs_match=nav_determinism.repeat_runs_match)
+
+# DENG-79: 2D navigation (grid A*/JPS, polygon navmesh), vector nav2d_1000. The golden was
+# recorded on macOS arm64; x86-64 is unverified (needs hardware), see the DENG-79 follow-up.
+add_executable(test_nav2d_determinism test_nav2d_determinism.c)
+target_link_libraries(test_nav2d_determinism PRIVATE de_det_harness de_nav de_platform de_core
+    de_test_framework de_build_flags)
+target_include_directories(test_nav2d_determinism PRIVATE "${DE_ROOT_DIR}/src")
+target_compile_options(test_nav2d_determinism PRIVATE ${DE_DETERMINISTIC_FLAGS})
+target_compile_definitions(test_nav2d_determinism PRIVATE
+    "DE_NAV2D_DET_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/nav2d_1000_checksums.txt\""
+    "DE_DET_OUT_DIR=\"${DE_DET_OUT_DIR}\"")
+if(WIN32)
+    target_compile_definitions(test_nav2d_determinism PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+de_det_add_tests(TARGET test_nav2d_determinism TESTS
+    determinism_nav2d.nav2d_1000_matches_golden=nav2d_determinism.nav2d_1000_matches_golden
+    determinism_nav2d.repeat_runs_match=nav2d_determinism.repeat_runs_match)

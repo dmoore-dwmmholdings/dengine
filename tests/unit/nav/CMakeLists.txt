@@ -28,3 +28,13 @@ if(TARGET test_nav_query)
     target_include_directories(test_nav_query PRIVATE "${DE_ROOT_DIR}/src"
         "${DE_ROOT_DIR}/tests/unit")
 endif()
+
+# 2D navigation: grid A*/JPS and the polygon navmesh (DENG-79). CTest names nav2d.<test>.
+de_add_test(NAME nav2d
+    SOURCES test_nav2d.c
+    LIBS de_nav de_platform de_core
+    TIMEOUT 180)
+if(TARGET test_nav2d)
+    target_include_directories(test_nav2d PRIVATE "${DE_ROOT_DIR}/src"
+        "${DE_ROOT_DIR}/tests/unit")
+endif()

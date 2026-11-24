@@ -2,7 +2,8 @@
 # Tiled navmesh generation with the vendored Recast / Detour (third_party/recastnavigation): the
 # runtime de_nav (nav.c), its input from static DeColliders (nav_input.c) and the `navmesh` asset
 # type (nav_asset.c). Queries and deterministic mode (nav_query.c), off-mesh links and dynamic
-# obstacles (nav_obstacles.c) are DENG-77; crowds (DENG-78) and nav2d (DENG-79) come later.
+# obstacles (nav_obstacles.c) are DENG-77; crowds (DENG-78) come later.
+# 2D grid A* / JPS and the 2D polygon navmesh (nav2d_*.c) are DENG-79: pure C, no Recast.
 de_add_module(
     NAME nav
     LAYER gameplay
@@ -15,6 +16,9 @@ de_add_module(
         nav_obstacles.c
         nav_components.h
         nav_components.c
+        nav2d_internal.h
+        nav2d_grid.c
+        nav2d_mesh.c
     DEPS ecs asset
     OPTIONAL_DEPS physics
     OPTIONAL_OPTION DE_WITH_NAV
