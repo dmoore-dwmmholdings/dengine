@@ -638,3 +638,38 @@ size = [1280, 720]
 tiers = ["base"]
 threshold_mean = 0.005
 threshold_p99 = 0.05
+
+[scene.fog_spot_shaft]
+description = "Froxel fog: a spot light 6 m up over a short column at night in thin global fog; the cone is a lit shaft with the column's atlas shadow (DENG-207)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.fog_sun_window]
+description = "Froxel fog: the low sun through a gap in a wall west of the camera; forward-scattering global fog shows the CSM-shadowed shaft (DENG-207)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.fog_local_volume]
+description = "Froxel fog: a local DeFogVolume box with 3D noise and soft edges in front of the columns at noon; no global fog (DENG-207)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.fog_transparent]
+description = "Froxel fog: a blended glass panel in global fog; the forward transparent pass applies the same froxel volume (DENG-207)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.fog_ap_seam]
+description = "Froxel fog: the aerial perspective scene in thin global fog; the fog's 128 m range blends into the aerial perspective with no seam (DENG-207)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05

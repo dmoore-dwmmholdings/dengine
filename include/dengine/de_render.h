@@ -930,11 +930,21 @@ DE_API de_result de_sky_attach(de_world *world, de_renderer *renderer, de_sky **
 DE_API void de_sky_detach(de_sky *sky);
 /** The last update's state; false before the first update with a DeSky. */
 DE_API bool de_sky_get_state(const de_sky *sky, de_sky_state *out);
+/**
+ * Participating media for the froxel volumetrics (DENG-207) and the path tracer. A box of
+ * `extent` (full size, m) around the entity, oriented by its transform; an extent of 0 on every
+ * axis is global height fog: density * exp(-height_falloff * (z - entity z)) everywhere.
+ * `edge_fade` (m) softens a box's faces; `noise` (0..1) modulates density with 3D value noise.
+ * Rendered when de_render_settings.volumetrics is not DE_QUALITY_OFF and the world has a de_sky.
+ */
 typedef struct DeFogVolume {
     de_vec3 extent;
     f32 density;
     de_vec3 albedo;
     f32 anisotropy;
+    f32 height_falloff; /**< 1/m; global fog only (0: uniform). */
+    f32 noise;          /**< 0..1 density modulation by 3D noise. */
+    f32 edge_fade;      /**< m; box faces fade over this distance (0: hard). */
 } DeFogVolume;
 typedef struct DeDecal {
     de_material material;
@@ -1111,7 +1121,8 @@ typedef struct DeWater {
  *   white, cast_shadows true.
  * - DeSky: 12 h, latitude 45 degrees, turbidity 2, cloud_coverage 0.5, day_of_year 80,
  *   moon_phase -1 (real), ground_albedo 0.3, drive_sun true.
- * - DeFogVolume: extent 10 x 10 x 10 m, density 0.02 /m, white albedo.
+ * - DeFogVolume: extent 10 x 10 x 10 m, density 0.02 /m, white albedo, anisotropy 0, no height
+ *   falloff, noise 0, edge_fade 0 (an extent of 0 makes it global fog).
  * - DeDecal: extent 1 x 1 x 1 m, angle_fade 1. DeParticleSystem: playing, time_scale 1.
  * - DeTerrain: 33 x 33 samples over 32 x 32 m, height 32 m, flat at 0, all splat weight in slot
  *   0 ("Ground"), every layer tiling 4 m and sharpness 0.5, order 0..3, no rules enabled.

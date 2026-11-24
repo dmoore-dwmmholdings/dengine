@@ -218,6 +218,9 @@ typedef struct de__lighting_context {
     de_rg_resource aerial; /**< RGBA16F 32^3 froxel atlas (invalid: none this frame) */
     u32 aerial_sampler;    /**< its linear clamp sampler (bindless) */
     f32 aerial_range_km;   /**< the distance its depth slices cover */
+    /* ---- DENG-207: the froxel fog (src/world/sky/fog.c), for the forward transparent pass ---- */
+    de_rg_resource fog; /**< the integrated froxel volume (invalid: no fog this frame) */
+    u32 fog_header;     /**< its FogHeader ring (bindless; 0: none); entry constants_entry */
 } de__lighting_context;
 
 /**

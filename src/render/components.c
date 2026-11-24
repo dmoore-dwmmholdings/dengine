@@ -364,6 +364,12 @@ static de_result reg_fog_volume(de_world *w, de_component *out) {
                     {0, 0, 0, "Scattering colour (linear RGB)", 0, 0}),
         DE_FIELD_EX(DeFogVolume, anisotropy, DE_FK_F32, AUTHORED,
                     {-1, 1, 0, "Phase function g: < 0 back scattering, > 0 forward", 0, 0}),
+        DE_FIELD_EX(DeFogVolume, height_falloff, DE_FK_F32, AUTHORED,
+                    {0, 0, "1/m", "Global fog (extent 0): density falloff with height", 0, 0}),
+        DE_FIELD_EX(DeFogVolume, noise, DE_FK_F32, AUTHORED,
+                    {0, 1, 0, "3D noise modulation of the density", 0, 0}),
+        DE_FIELD_EX(DeFogVolume, edge_fade, DE_FK_F32, AUTHORED,
+                    {0, 0, "m", "Soft edge width of the box faces", 0, 0}),
     };
     return register_component(w, DE_TYPE_DESC(DeFogVolume, 1, k_fields), construct_fog_volume, out);
 }

@@ -50,7 +50,7 @@ static const struct {
     {"DeEnvironment", 3, offsetof(DeRenderComponents, environment)},
     {"DeSprite", 17, offsetof(DeRenderComponents, sprite)},
     {"DeSky", 9, offsetof(DeRenderComponents, sky)},
-    {"DeFogVolume", 4, offsetof(DeRenderComponents, fog_volume)},
+    {"DeFogVolume", 7, offsetof(DeRenderComponents, fog_volume)},
     {"DeDecal", 4, offsetof(DeRenderComponents, decal)},
     {"DeParticleSystem", 4, offsetof(DeRenderComponents, particle_system)},
     {"DeTerrain", 9, offsetof(DeRenderComponents, terrain)},
@@ -544,6 +544,9 @@ TEST_F(render_components, defaults, cfx) {
         EXPECT_FLOAT_EQ(fog.density, 0.02, 1e-8);
         EXPECT_FLOAT_EQ(fog.albedo.x, 1.0, 0);
         EXPECT_FLOAT_EQ(fog.anisotropy, 0.0, 0);
+        EXPECT_FLOAT_EQ(fog.height_falloff, 0.0, 0);
+        EXPECT_FLOAT_EQ(fog.noise, 0.0, 0);
+        EXPECT_FLOAT_EQ(fog.edge_fade, 0.0, 0);
 
         DeDecal dc;
         construct_from(f, "DeDecal", &dc, sizeof dc, fill);

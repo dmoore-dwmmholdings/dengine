@@ -127,6 +127,10 @@ de_result de__pt_media_frame(de__pt_media *m, de__view_frame *f, de__pt_media_pa
         v->extent_density[0] = fabsf(s->volume.extent.x) * .5f;
         v->extent_density[1] = fabsf(s->volume.extent.y) * .5f;
         v->extent_density[2] = fabsf(s->volume.extent.z) * .5f;
+        /* DENG-207: a zero extent is global fog, as in the froxel volumetrics (no height
+         * falloff or noise in the path tracer yet). */
+        if (v->extent_density[0] == 0 && v->extent_density[1] == 0 && v->extent_density[2] == 0)
+            v->extent_density[0] = -1;
         v->extent_density[3] = s->volume.density;
         v->albedo_g[0] = s->volume.albedo.x;
         v->albedo_g[1] = s->volume.albedo.y;
