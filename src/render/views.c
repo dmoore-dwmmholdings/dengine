@@ -695,6 +695,19 @@ void de__view_unregister_stage(de_renderer *r, de__view_stage_fn fn, void *user)
     de_mutex_unlock(&vs->lock);
 }
 
+u32 de__view_stage_count(de_renderer *r, const char *name) {
+    de__views *vs = views_of(r);
+    u32 n = 0;
+    if (vs == NULL || name == NULL)
+        return 0u;
+    de_mutex_lock(&vs->lock);
+    for (u32 i = 0; i < vs->stage_count; ++i)
+        if (strcmp(vs->stages[i].name, name) == 0)
+            ++n;
+    de_mutex_unlock(&vs->lock);
+    return n;
+}
+
 /* ---------- Render thread: hook-side accessors ---------- */
 
 de_rg_resource de_view_color(de_renderer *r, de_view v) {

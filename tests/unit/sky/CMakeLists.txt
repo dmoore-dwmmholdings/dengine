@@ -50,6 +50,14 @@ if(TARGET test_sky_fog)
     target_include_directories(test_sky_fog PRIVATE "${DE_ROOT_DIR}/src")
 endif()
 
+# test_sky_fog_stage: the renderer's "fog" view stage without and with de_sky_attach (DENG-861).
+de_add_test(NAME sky_fog_stage
+    SOURCES test_fog_stage.c
+    LIBS ${_de_sky_libs})
+if(TARGET test_sky_fog_stage)
+    target_include_directories(test_sky_fog_stage PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
 # test_sky_pt_fog: the path tracer's fog density against the raster formula (DENG-848).
 de_add_test(NAME sky_pt_fog
     SOURCES test_pt_fog.c

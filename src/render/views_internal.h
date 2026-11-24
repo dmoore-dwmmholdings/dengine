@@ -188,6 +188,8 @@ de_result de__view_register_stage(de_renderer *r, de__view_slot slot, i32 order,
                                   de__view_stage_fn fn, void *user);
 /** Removes every stage registered with (`fn`, `user`). Main thread. */
 void de__view_unregister_stage(de_renderer *r, de__view_stage_fn fn, void *user);
+/** The stages registered under `name` (tests: a stage must be there exactly once). Main thread. */
+u32 de__view_stage_count(de_renderer *r, const char *name);
 
 /** Main-thread override for a generic radiance capture view. NULL disables it. */
 void de__view_capture_camera(de_renderer *r, de_view view, const struct de__rw_view *camera);

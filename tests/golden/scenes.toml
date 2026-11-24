@@ -703,6 +703,13 @@ tiers = ["base"]
 threshold_mean = 0.005
 threshold_p99 = 0.05
 
+[scene.fog_no_attach]
+description = "Froxel fog in a world that never calls de_sky_attach: the renderer's own fog stage draws the same image as fog_no_sky (DENG-861)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
 [scene.fog_ap_seam]
 description = "Froxel fog: the aerial perspective scene in thin global fog; the fog's 128 m range blends into the aerial perspective with no seam (DENG-207)"
 size = [1280, 720]
