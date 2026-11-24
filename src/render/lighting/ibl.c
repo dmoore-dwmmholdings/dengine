@@ -20,8 +20,10 @@
  * only the mips whose faces are at least one block (4 texels): the shader clamps the LOD there.
  * The shader picks the face of a direction itself and clamps inside it (ibl.slang).
  *
- * Without an environment the shader lights with a constant radiance, r.ambient_fallback (nits;
- * default 0, black) until the procedural sky (S34).
+ * DENG-838: without an HDRI, the physical sky (src/world/sky/sky_ibl.c) can give its environment
+ * (de__lighting_set_sky): a strip it renders and prefilters itself, with its SH9; no copy here.
+ * Without either the shader lights with a constant radiance, r.ambient_fallback (nits; default 0,
+ * black).
  */
 #include "render/lighting/lighting.h"
 
@@ -114,7 +116,7 @@ de_result de__ibl_init(de__lighting *lt) {
     lt->cv_ambient = de_cvar_register(&(de_cvar_desc){
         .name = "r.ambient_fallback",
         .help = "Image-based lighting without an environment: a constant radiance (nits) from "
-                "every direction (0: black; the procedural sky comes in S34)",
+                "every direction when there is no HDRI and no physical sky (0: black)",
         .type = DE_CVAR_FLOAT,
         .default_number = 0.0,
         .min = 0.0,
@@ -155,6 +157,20 @@ void de__lighting_set_environment(de__lighting *lt, const de__ibl_environment *e
         lt->env = *env;
     else
         memset(&lt->env, 0, sizeof lt->env);
+}
+
+void de__lighting_set_sky(de__lighting *lt, const de__ibl_sky *sky) {
+    if (lt == NULL)
+        return;
+    if (sky != NULL && sky->valid && DE_HANDLE_VALID(sky->strip) && sky->strip_mips > 0u &&
+        sky->face_size > 0u) {
+        if (lt->sky.strip.id != sky->strip.id || !lt->sky.valid)
+            lt->sky_bindless = de_gpu_texture_bindless(lt->dev, sky->strip, 0, false);
+        lt->sky = *sky;
+    } else {
+        memset(&lt->sky, 0, sizeof lt->sky);
+        lt->sky_bindless = 0;
+    }
 }
 
 void de__lighting_prepare_environment(de__lighting *lt, de_asset_system *assets,
@@ -297,6 +313,26 @@ void de__ibl_build(de__lighting *lt, de_rg *g, de__lighting_context *lc) {
             /* The import of this frame: the copy passes wrote it. */
             lc->strip = de_rg_import_texture(g, lt->strip, DE_ACCESS_NONE);
             have = DE_HANDLE_VALID(lc->strip);
+        }
+    }
+    lc->strip_sky = false;
+    if (!lt->env.valid && lt->sky.valid && lt->sky_bindless != 0u) {
+        /* DENG-838: the sky's strip, written and left in DE_ACCESS_SHADER_READ by the sky. */
+        lc->strip = de_rg_import_texture(g, lt->sky.strip, DE_ACCESS_SHADER_READ);
+        if (DE_HANDLE_VALID(lc->strip)) {
+            de_rg_set_name(g, lc->strip, "lighting.sky_ibl_strip");
+            de__ibl_environment sky;
+            memset(&sky, 0, sizeof sky);
+            sky.valid = true;
+            sky.face_size = lt->sky.face_size;
+            sky.mip_count = lt->sky.strip_mips;
+            sky.mip_per_roughness = lt->sky.mip_per_roughness;
+            memcpy(sky.sh9, lt->sky.sh9, sizeof sky.sh9);
+            sky.intensity = 1.0f;
+            lc->strip_sky = true;
+            de__ibl_pack(&sky, lt->sky_bindless, lt->sky.strip_mips, lt->ibl_sampler_bindless,
+                         ambient, &lc->view.ibl);
+            return;
         }
     }
     de__ibl_pack(have ? &lt->env : NULL, have ? lt->strip_bindless : 0u, have ? lt->strip_mips : 0u,

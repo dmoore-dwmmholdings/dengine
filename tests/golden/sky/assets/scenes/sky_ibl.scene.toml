@@ -1,0 +1,64 @@
+# DENG-838 sky_ibl_sphere: a chrome and a white sphere over the ground, lit by the sky alone (no
+# DeEnvironment): the sky's prefiltered strip in the chrome, its SH9 irradiance on the white
+# sphere's shadowed side. DeSky is added in sky_scenes.c.
+
+[[entity]]
+id = "0x0000000000000001"
+[entity.DeTransform]
+position = [0.0, 0.0, 1.5]
+rotation = [0.707107, 0.0, 0.0, 0.707107]
+scale = [1.0, 1.0, 1.0]
+[entity.DeCamera]
+projection = "DE_PROJ_PERSPECTIVE"
+fov_y = 0.785398
+near_z = 0.1
+exposure_ev100 = 14.5
+
+[[entity]]
+id = "0x0000000000000010"
+[entity.DeTransform]
+position = [0.0, 0.0, -0.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [4000.0, 4000.0, 1.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/ground"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000011"
+[entity.DeTransform]
+position = [-1.3, -6.0, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [2.0, 2.0, 2.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/chrome"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000012"
+[entity.DeTransform]
+position = [1.3, -6.0, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [2.0, 2.0, 2.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/white"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000020"
+[entity.DeTransform]
+position = [0.0, 0.0, 10.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_DIRECTIONAL"
+color = [1.0, 1.0, 1.0]
+intensity = 1.0
+cast_shadows = true
+source_radius = 0.00465

@@ -631,3 +631,10 @@ size = [1280, 720]
 tiers = ["base"]
 threshold_mean = 0.005
 threshold_p99 = 0.05
+
+[scene.sky_ibl_sphere]
+description = "Physical sky as the IBL environment with no HDRI, latitude 45, day 80, noon, looking south: a chrome sphere mirrors the sky's prefiltered strip and a white sphere takes its SH9 irradiance on the side away from the sun (DENG-838)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05

@@ -6,6 +6,10 @@
  * DENG-840 adds the aerial perspective (Hillaire 2020 §5.5; SPEC §12.13, §12.7): a per-view 32^3
  * froxel volume of in-scatter and transmittance (a 2D atlas), applied to the opaque surfaces in
  * the lighting target and exported to the forward transparency pass through the lighting context.
+ * DENG-838: with no HDRI, the stage also keeps the sky's IBL environment (sky_ibl.c) current: it
+ * completes a finished generation, hands it to lighting (de__lighting_set_sky) and starts a new one
+ * when the sun turned more than DE__SKY_IBL_SUN_DEG. Lighting runs before this stage, so a new
+ * environment lights the frame after the one it completed in.
  */
 #include "world/sky/sky_internal.h"
 
@@ -267,6 +271,9 @@ u32 de__sky_luts_transmittance_bindless(const de__sky_luts *l) {
 u32 de__sky_luts_multiscatter_bindless(const de__sky_luts *l) {
     return l != NULL ? l->ms_bindless : DE_GPU_BINDLESS_INVALID;
 }
+u32 de__sky_luts_sampler_bindless(const de__sky_luts *l) {
+    return l != NULL ? l->smp_bindless : DE_GPU_BINDLESS_INVALID;
+}
 de_gpu_fence de__sky_luts_fence(const de__sky_luts *l, u64 *value) {
     if (value != NULL)
         *value = l != NULL ? l->fence_value : 0u;
@@ -327,7 +334,8 @@ struct de__sky_render {
     de_gpu_sampler smp_wrap;
     u32 smp_wrap_bindless;
     de_cvar cv_aerial; /* r.sky_aerial_perspective */
-    bool registered, failed;
+    de__sky_ibl *ibl;  /* DENG-838 */
+    bool registered, failed, ibl_failed;
 };
 
 typedef struct view_pass {
@@ -491,6 +499,29 @@ static void add_aerial(de__sky_render *sr, const de__view_frame *vf, de__vis_con
     lc->aerial_range_km = DE__SKY_AERIAL_RANGE_KM;
 }
 
+/* The sky's IBL environment (DENG-838): completes a finished generation and hands it to lighting,
+ * or starts one when the sky changed. Never both in one call: the strip a completed generation
+ * frees may still be read by this frame's graph, which is not submitted yet. */
+static void update_ibl(de__sky_render *sr, de__lighting *lt, const de__sky_snapshot *sn, f32 r_km) {
+    if (sr->ibl_failed || !de__sky_ibl_ready(sr->ibl))
+        return;
+    if (de__sky_ibl_poll(sr->ibl, false)) {
+        de__ibl_sky cur;
+        de__sky_ibl_current(sr->ibl, &cur);
+        de__lighting_set_sky(lt, &cur);
+        return;
+    }
+    if (de__sky_ibl_pending(sr->ibl) || !de__sky_ibl_wants(sr->ibl, sn, r_km))
+        return;
+    const de_result r = de__sky_ibl_generate(sr->ibl, sr->luts, sn, r_km);
+    if (r != DE_OK) {
+        const de_error *e = de_error_last();
+        DE_ERROR(sr->renderer->log, "sky: the IBL environment: %s; the sky no longer lights it",
+                 e != NULL ? e->message : de_result_str(r));
+        sr->ibl_failed = true;
+    }
+}
+
 static void stage(de__view_frame *vf, void *user) {
     de__sky_render *sr = (de__sky_render *)user;
     if (sr->failed || !DE_HANDLE_VALID(sr->pipe_view) || !DE_HANDLE_VALID(sr->pipe_sky) ||
@@ -503,7 +534,7 @@ static void stage(de__view_frame *vf, void *user) {
     de__lighting_context *lc =
         vc != NULL ? de__lighting_frame_context(lt, vf->view, vf->graph, vf->frame_index) : NULL;
     if (vc == NULL || lc == NULL || !lc->lit || !DE_HANDLE_VALID(lc->target) ||
-        !DE_HANDLE_VALID(vc->depth) || DE_HANDLE_VALID(lc->strip))
+        !DE_HANDLE_VALID(vc->depth) || (DE_HANDLE_VALID(lc->strip) && !lc->strip_sky))
         return; /* nothing lit, or an HDRI environment lights the view */
     de__sky_snapshot sn;
     if (!de__sky_snapshot_get(sr->sky, &sn))
@@ -524,6 +555,7 @@ static void stage(de__view_frame *vf, void *user) {
     if (vf->camera != NULL)
         alt_m = vf->camera->has_position ? vf->camera->position.z : (f64)vf->camera->offset.z;
     const f32 r_km = (f32)(DE__SKY_BOTTOM + fmax(alt_m / 1000.0, 0.001));
+    update_ibl(sr, lt, &sn, r_km);
     const f32 sun_w = sn.sun_weight * pre, moon_w = sn.moon_weight * pre;
 
     de_rg *g = vf->graph;
@@ -605,6 +637,10 @@ void de__sky_render_destroy(de__sky_render *sr) {
         de__render_world_wait_idle(sr->renderer);
         de__view_unregister_stage(sr->renderer, stage, sr);
     }
+    if (sr->ibl != NULL) {
+        de__lighting_set_sky(de__views_lighting(sr->renderer), NULL);
+        de__sky_ibl_destroy(sr->ibl);
+    }
     if (DE_HANDLE_VALID(sr->pipe_view))
         de_gpu_pipeline_destroy(sr->dev, sr->pipe_view);
     if (DE_HANDLE_VALID(sr->pipe_sky))
@@ -635,6 +671,8 @@ de_result de__sky_render_create(struct de_renderer *r, struct de_sky *s, const d
     sr->dev = r->dev;
     sr->smp_wrap_bindless = DE_GPU_BINDLESS_INVALID;
     de_result res = de__sky_luts_create(r->dev, alloc, &sr->luts);
+    if (res == DE_OK)
+        res = de__sky_ibl_create(r->dev, alloc, &sr->ibl);
     if (res == DE_OK)
         res = load_pipe(r->dev, alloc, "sky_skyview", "cs_skyview", (u32)sizeof(skyview_params), 8u,
                         8u, &sr->pipe_view);

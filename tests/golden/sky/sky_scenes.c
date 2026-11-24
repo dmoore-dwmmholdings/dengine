@@ -47,6 +47,9 @@ typedef struct sky_opts {
     f32 sun_elev_min, sun_elev_max;
     bool expect_moon_light;
     const char *scene; /**< the scene asset; NULL: scenes/sky_ground */
+    const char *mesh;  /**< a second model the scene uses (DENG-838); NULL: none */
+    /* DENG-838: keep r.ambient_fallback at its default (the sky lights the IBL anyway). */
+    bool keep_ambient;
 } sky_opts;
 
 #if DE_GOLDEN_COOK
@@ -64,7 +67,7 @@ typedef struct sky_run {
     de_gpu_fence fence;
     u64 fence_value;
     de_view view;
-    de_load_handle model_load, scene_load;
+    de_load_handle model_load, mesh_load, scene_load;
     char asset_pack[256];
     u32 pitch;
     u8 *pixels;
@@ -183,6 +186,8 @@ static void sky_close(sky_run *s) {
         de_asset_release(s->assets, s->scene_load);
     if (s->assets != NULL && DE_HANDLE_VALID(s->model_load))
         de_asset_release(s->assets, s->model_load);
+    if (s->assets != NULL && DE_HANDLE_VALID(s->mesh_load))
+        de_asset_release(s->assets, s->mesh_load);
     if (s->assets != NULL)
         de_asset_system_destroy(s->assets);
     if (de_golden_pack_cleanup(s->asset_pack) != DE_OK)
@@ -290,7 +295,8 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
     sky_cvar("r.pipelined", "0");
     /* No environment: the ambient term is the constant fallback; 0 keeps the night dark and the
      * picture down to the sky and its driven light (the sky as ambient is DENG-838). */
-    sky_cvar("r.ambient_fallback", "0");
+    if (!o->keep_ambient)
+        sky_cvar("r.ambient_fallback", "0");
     if (ctx->backend == DE_GPU_VULKAN)
         sky_cvar("r.rg_record_cost", "1048576"); /* as base_tier_scenes.c (DENG-235, DENG-427) */
     de_render_settings rs = de_render_settings_preset(DE_TIER_BASE, DE_QUALITY_MEDIUM);
@@ -332,6 +338,13 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
     if (!sky_wait(&s, s.model_load, "mesh/box", t0)) {
         sky_close(&s);
         return;
+    }
+    if (o->mesh != NULL) {
+        s.mesh_load = de_asset_load(s.assets, de_asset_id_from(o->mesh), 0);
+        if (!sky_wait(&s, s.mesh_load, o->mesh, t0)) {
+            sky_close(&s);
+            return;
+        }
     }
     const char *scene_name = o->scene != NULL ? o->scene : "scenes/sky_ground";
     const de_asset_id scene_id = de_asset_id_from(scene_name);
@@ -485,4 +498,19 @@ DE_GOLDEN_SCENE(sky_aerial_perspective) {
                                    .sun_elev_min = 15.0f,
                                    .sun_elev_max = 35.0f,
                                    .scene = "scenes/sky_aerial"});
+}
+/* DENG-838 (DENG-206 AC4): with no HDRI the sky is the IBL environment. Noon, looking south at a
+ * chrome sphere (the sky's prefiltered strip: blue above, the sunlit ground below) and a white one
+ * (its SH9 irradiance on the side away from the sun). r.ambient_fallback stays at its default: the
+ * sky's environment replaces it. */
+DE_GOLDEN_SCENE(sky_ibl_sphere) {
+    sky_run_scene(ctx, &(sky_opts){.hours = 12.0f,
+                                   .heading_deg = 180.0f,
+                                   .pitch_deg = -4.0f,
+                                   .ev100 = 14.5f,
+                                   .sun_elev_min = 44.0f,
+                                   .sun_elev_max = 46.5f,
+                                   .scene = "scenes/sky_ibl",
+                                   .mesh = "mesh/sphere",
+                                   .keep_ambient = true});
 }

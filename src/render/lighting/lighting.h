@@ -198,6 +198,7 @@ typedef struct de__lighting_context {
     de_rg_resource target; /**< the HDR lighting target it lit (vc->gbuffer[DE__GB_LIGHTING]) */
     u32 width, height;     /**< its size (the view's internal size) */
     de_rg_resource strip;  /**< the environment strip it read (import), invalid without one */
+    bool strip_sky;        /**< DENG-838: `strip` is the sky's (no HDRI environment) */
     /* ---- DENG-305: what the forward transparent pass shades with (as the deferred pass) ---- */
     de_rg_resource ltc1, ltc2; /**< the LTC tables (imports, DE_ACCESS_SHADER_READ) */
     u32 constants_bindless;    /**< the view's DeLightingView ring (de_robuffer) */
@@ -278,6 +279,23 @@ typedef struct de__ibl_environment {
     f32 intensity;         /**< DeEnvironment.intensity */
     f32 rotation;          /**< DeEnvironment.rotation (radians about +Z) */
 } de__ibl_environment;
+
+/** DENG-838: the sky's environment (src/world/sky/sky_ibl.c), used when there is no HDRI: a face
+ * strip already in the 2D layout (face_size x 6 face_size, `strip_mips` mips, mip k = roughness
+ * k / mip_per_roughness; DE_ACCESS_SHADER_READ between graphs) and its SH9 irradiance E_k (nits;
+ * intensity 1, no rotation). */
+typedef struct de__ibl_sky {
+    bool valid;
+    de_gpu_texture strip;
+    u32 face_size, strip_mips;
+    f32 mip_per_roughness;
+    f32 sh9[9][3];
+} de__ibl_sky;
+
+/** DENG-838: sets the sky environment of the next builds (render thread while a graph is built, or
+ * a test between frames). NULL or invalid: none. An HDRI environment takes precedence. The strip
+ * must outlive its use: clear it before destroying the texture. */
+void de__lighting_set_sky(de__lighting *lt, const de__ibl_sky *sky);
 
 /** Sets the environment of the next builds. Main thread with the render thread idle (the kick), or
  * a test between frames. NULL: none. */
@@ -435,6 +453,9 @@ struct de__lighting {
     bool strip_ready; /**< the copy into `strip` was added to a graph */
     de_gpu_sampler ibl_sampler;
     u32 ibl_sampler_bindless;
+    /* DENG-838: the sky's environment (de__lighting_set_sky), used without an HDRI. */
+    de__ibl_sky sky;
+    u32 sky_bindless;
     de_cvar cv_ambient, cv_ev100_default;
     /* Exposure (exposure.c), per view slot. */
     de__exposure_state exposure[DE__VIEW_MAX];
