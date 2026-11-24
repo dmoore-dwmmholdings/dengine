@@ -4,7 +4,14 @@
  *   wall_move_rebakes_tiles  AC1: moving a wall rebakes only its tiles; the test path goes around
  *   jump_link_used           AC2: a DeNavLink across a gap is used by nav.testPath
  *   cancel_and_overlay       nav.cancelBake and nav.overlay round-trip through nav.info
+ *   settings_persist         DENG-833: nav.configure writes nav.toml; a new service reads it back
  */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "de_test.h"
 #if !defined(DE_SHIPPING)
 #include "ecs/ecs_internal.h"
@@ -13,8 +20,14 @@
 #include "host/host_internal.h"
 #include <dengine/de_ecs.h>
 #include <dengine/de_physics.h>
+#include <dengine/de_gameplay.h>
+#include <dengine/de_platform.h>
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 #define STORAGE  (4u << 20)
 #define RESPONSE (1u << 20)
@@ -517,6 +530,69 @@ TEST_F(editor_nav, cancel_and_overlay, nav_fx) {
     EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(ov, "path")), 6u);
     oq.path.count = 5;
     expect_error(call(f, DE_EP_METHOD_NAV_OVERLAY, &oq), DE_EP_ERR_INVALID_PARAMS);
+}
+
+/* DENG-833: nav.configure writes the project file; a restarted service (register again) loads it,
+ * and the runtime loads the same file. */
+TEST_F(editor_nav, settings_persist, nav_fx) {
+    char dir[] = "/tmp/de_ed_nav_XXXXXX";
+    ASSERT_TRUE(mkdtemp(dir) != NULL);
+    ASSERT_EQ(de_fs_mount("ednav", dir, DE_MOUNT_WRITABLE, 0), DE_OK);
+    /* The fixture registered before the path was known: the next tick loads it (no file yet). */
+    de__ed_nav_set_settings_path("ednav:/nav.toml");
+    frame(f);
+
+    double mn[3] = {-32, -16, -3}, mx[3] = {32, 48, 9};
+    de_ep_nav_agent ag[2];
+    memset(ag, 0, sizeof ag);
+    ag[0] = (de_ep_nav_agent){.name = de_ep_cstr("tank"), .radius = 1.0f, .height = 2.0f,
+                              .max_slope_deg = 30.0f, .step_height = 0.4f, .cell_size = 0.5f,
+                              .cell_height = 0.25f, .collision_mask = 6};
+    ag[1] = (de_ep_nav_agent){.name = de_ep_cstr("humanoid"), .radius = 0.4f, .height = 1.8f,
+                              .max_slope_deg = 45.0f, .step_height = 0.3f, .cell_size = 0.5f,
+                              .cell_height = 0.2f};
+    de_ep_nav_area ar[2] = {{.id = 0, .name = de_ep_cstr("ground"), .cost = 1.0f},
+                            {.id = 3, .name = de_ep_cstr("mud"), .cost = 4.0f}};
+    de_ep_nav_configure_params q;
+    memset(&q, 0, sizeof q);
+    q.has_agents = true;
+    q.agents = (de_ep_list_nav_agent){ag, 2};
+    q.has_areas = true;
+    q.areas = (de_ep_list_nav_area){ar, 2};
+    q.has_bounds = true;
+    q.bounds.min = (de_ep_list_f64){mn, 3};
+    q.bounds.max = (de_ep_list_f64){mx, 3};
+    q.has_tile_size = true;
+    q.tile_size = 16.0f;
+    q.has_auto_rebake = true;
+    q.auto_rebake = false;
+    result_of(call(f, DE_EP_METHOD_NAV_CONFIGURE, &q));
+
+    /* The runtime reads the file the editor wrote. */
+    de_nav_settings rt;
+    ASSERT_EQ(de_nav_settings_load("ednav:/nav.toml", &rt), DE_OK);
+    ASSERT_EQ(rt.agent_count, 2u);
+    EXPECT_EQ(strcmp(rt.agents[0].name, "tank"), 0);
+    EXPECT_EQ(rt.agents[0].collision_mask, 6u);
+    EXPECT_EQ(rt.area_count, 2u);
+    EXPECT_EQ(rt.areas[1].id, 3u);
+    EXPECT_TRUE(rt.tile_size == 16.0f);
+    EXPECT_FALSE(rt.auto_rebake);
+    EXPECT_TRUE(rt.bounds_max[1] == 48.0);
+
+    /* A service restart: register again and read nav.info. */
+    for (u32 i = 0; i < f->editor.reset_count; ++i)
+        f->editor.resets[i](&f->editor);
+    de__ed_nav_shutdown(&f->editor);
+    de__ed_nav_register(&f->editor);
+    mpack_node_t r = result_of(call(f, DE_EP_METHOD_NAV_INFO, NULL));
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(r, "tilesX")), 4u);
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(r, "tilesY")), 4u);
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "autoRebake")));
+    EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(r, "agents")), 2u);
+    EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(r, "areas")), 2u);
+    de__ed_nav_set_settings_path(NULL);
+    ASSERT_EQ(de_file_delete("ednav:/nav.toml"), DE_OK);
 }
 
 #endif /* !DE_SHIPPING */

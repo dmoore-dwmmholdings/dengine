@@ -19,8 +19,12 @@
  * agent and area settings). A tile whose fingerprint changed is DIRTY; with autoRebake on, the
  * dirty baked tiles rebake every few frames, so moving a wall rebakes only its tiles.
  *
- * Limits: the navmeshes are not saved with the scene, and the settings reset when the service
- * stops. tileSize / cellSize must be a whole number of cells from 8 to 1024 (Recast tiles).
+ * Persistence (DENG-833): the settings (agents, areas, bounds, tileSize, autoRebake) live in the
+ * project file `nav.toml` beside the root manifest (de_nav_settings_*, de_gameplay.h). The service
+ * loads it when the project is known (register, and when the manifest path changes) and nav.configure
+ * rewrites it, so a restart keeps them and the game runtime reads the same file.
+ *
+ * Limits: the navmeshes are not saved with the scene. tileSize / cellSize must be a whole number of cells from 8 to 1024 (Recast tiles).
  */
 #if defined(_WIN32)
 #define _CRT_SECURE_NO_WARNINGS /* snprintf */
@@ -105,6 +109,7 @@ typedef struct nv_state {
     f32 tile_size;
     u32 tiles_x, tiles_y;
     bool auto_rebake;
+    char settings_path[1024]; /* the nav.toml last loaded or written; empty = no project */
     u64 revision;
     u64 frame;
 
@@ -750,6 +755,109 @@ static void set_defaults(void) {
     g_nv.revision = 1;
 }
 
+static bool any_baked(void);
+
+/* ---------- Project file nav.toml (DENG-833) ---------- */
+
+static const char *g_path_override; /* tests: a vpath to use when there is no manifest */
+
+void de__ed_nav_set_settings_path(const char *vpath) {
+    g_path_override = vpath;
+}
+
+static bool settings_vpath(de__editor *ed, char *out, size_t cap) {
+    if (g_path_override != NULL) {
+        const int n = snprintf(out, cap, "%s", g_path_override);
+        return n > 0 && (size_t)n < cap;
+    }
+    return de__ed_project_vpath(ed, "nav.toml", out, cap);
+}
+
+static void to_settings(de_nav_settings *s) {
+    memset(s, 0, sizeof *s);
+    s->agent_count = g_nv.agent_count;
+    for (u32 i = 0; i < g_nv.agent_count; ++i) {
+        const nv_agent *a = &g_nv.agents[i];
+        de_nav_agent_settings *d = &s->agents[i];
+        memcpy(d->name, a->name, sizeof d->name);
+        d->radius = a->radius, d->height = a->height, d->max_slope_deg = a->max_slope_deg;
+        d->step_height = a->step_height, d->cell_size = a->cell_size;
+        d->cell_height = a->cell_height, d->collision_mask = a->collision_mask;
+    }
+    s->area_count = g_nv.area_count;
+    for (u32 i = 0; i < g_nv.area_count; ++i) {
+        s->areas[i].id = g_nv.areas[i].id;
+        memcpy(s->areas[i].name, g_nv.areas[i].name, sizeof s->areas[i].name);
+        s->areas[i].cost = g_nv.areas[i].cost;
+    }
+    for (u32 i = 0; i < 3; ++i)
+        s->bounds_min[i] = g_nv.bmin[i], s->bounds_max[i] = g_nv.bmax[i];
+    s->tile_size = g_nv.tile_size;
+    s->auto_rebake = g_nv.auto_rebake;
+}
+
+static void from_settings(const de_nav_settings *s) {
+    memset(g_nv.agents, 0, sizeof g_nv.agents);
+    g_nv.agent_count = s->agent_count;
+    for (u32 i = 0; i < s->agent_count; ++i) {
+        const de_nav_agent_settings *a = &s->agents[i];
+        nv_agent *d = &g_nv.agents[i];
+        memcpy(d->name, a->name, sizeof d->name);
+        d->radius = a->radius, d->height = a->height, d->max_slope_deg = a->max_slope_deg;
+        d->step_height = a->step_height, d->cell_size = a->cell_size;
+        d->cell_height = a->cell_height, d->collision_mask = a->collision_mask;
+    }
+    memset(g_nv.areas, 0, sizeof g_nv.areas);
+    g_nv.area_count = 0;
+    for (u32 id = 0; id < NV_MAX_AREAS; ++id) /* by id, as nav.configure keeps them */
+        for (u32 i = 0; i < s->area_count; ++i)
+            if (s->areas[i].id == id) {
+                nv_area *r = &g_nv.areas[g_nv.area_count++];
+                r->id = id;
+                memcpy(r->name, s->areas[i].name, sizeof r->name);
+                r->cost = s->areas[i].cost;
+            }
+    for (u32 i = 0; i < 3; ++i)
+        g_nv.bmin[i] = s->bounds_min[i], g_nv.bmax[i] = s->bounds_max[i];
+    g_nv.tile_size = s->tile_size;
+    grid_of(g_nv.bmin, g_nv.bmax, g_nv.tile_size, &g_nv.tiles_x, &g_nv.tiles_y);
+    g_nv.auto_rebake = s->auto_rebake;
+}
+
+/* Loads nav.toml when the project path is new. A missing file keeps the settings; a bad one is
+ * logged and ignored (the next nav.configure rewrites it). Not while a bake runs or tiles exist:
+ * the grid cannot change under them. */
+static void load_project(de__editor *ed) {
+    char path[1024];
+    if (!settings_vpath(ed, path, sizeof path) || strcmp(path, g_nv.settings_path) == 0)
+        return;
+    if (g_nv.running || any_baked())
+        return;
+    memcpy(g_nv.settings_path, path, sizeof path);
+    de_nav_settings s;
+    const de_result r = de_nav_settings_load(path, &s);
+    if (r == DE_OK) {
+        from_settings(&s);
+        ++g_nv.revision;
+    } else if (r != DE_ERR_NOT_FOUND) {
+        DE_WARN(ed->log, "nav: %s ignored: %s", path, de_error_last()->message);
+    }
+    de_error_clear();
+}
+
+static void save_project(de__editor *ed) {
+    char path[1024];
+    if (!settings_vpath(ed, path, sizeof path))
+        return; /* no project yet: the settings stay in the session */
+    memcpy(g_nv.settings_path, path, sizeof path);
+    de_nav_settings s;
+    to_settings(&s);
+    if (de_nav_settings_save(path, &s) != DE_OK) {
+        DE_WARN(ed->log, "nav: could not write %s: %s", path, de_error_last()->message);
+        de_error_clear();
+    }
+}
+
 /* ---------- nav.info ---------- */
 
 static bool f64_list(de_ep_arena *a, de_ep_list_f64 *out, const f64 *v, u32 n) {
@@ -1043,6 +1151,7 @@ static void on_configure(de__editor *ed, const de_ep_request *req, de_ep_arena *
     if (q.has_auto_rebake)
         g_nv.auto_rebake = q.auto_rebake;
     ++g_nv.revision;
+    save_project(ed);
 
     de_ep_nav_info o;
     if (!fill_info(a, &o)) {
@@ -1454,6 +1563,7 @@ static void draw_overlay(void) {
 
 static void tick(de__editor *ed) {
     sync_world(ed);
+    load_project(ed);
     if (g_nv.world == NULL)
         return;
     ++g_nv.frame;
@@ -1492,6 +1602,7 @@ void de__ed_nav_register(de__editor *ed) {
         nav_free(&g_nv.navs[i]);
     memset(&g_nv, 0, sizeof g_nv);
     set_defaults();
+    load_project(ed);
     g_nv.cat = de_draw_category_register("navigation", 0x60e060, false);
     sync_world(ed);
     de__ed_on(ed, DE_EP_METHOD_NAV_INFO, on_info);

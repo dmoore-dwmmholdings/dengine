@@ -257,6 +257,8 @@ bool de__ed_asset_source_vpath(de__editor *ed, const char *id, char *out, size_t
 /** DENG-821: the virtual path of `rel`, a project-relative path, below the root manifest's folder;
  * false when there is no manifest or it does not fit. */
 bool de__ed_project_vpath(de__editor *ed, const char *rel, char *out, size_t cap);
+/** DENG-833 (tests): the vpath of nav.toml to use when the project has no manifest; NULL clears. */
+void de__ed_nav_set_settings_path(const char *vpath);
 /** The asset's source path as the manifest lists it (relative to the asset root), or NULL. */
 const char *de__ed_asset_source_path(de__editor *ed, const char *id);
 /** The id of the manifest's `i`th asset of type `type`, in manifest order, or NULL when there are
