@@ -5,8 +5,10 @@
  * agent type, bound (not attached) to the engine's world, and bakes the protocol's tiles one
  * de_nav_rebuild_tiles call each on the nav's task system, a few in flight at a time. The
  * reflected components DeNavLink and DeNavModifier (src/gameplay/nav/nav_components.c) go into
- * every bake as off-mesh links and area or carve volumes; DeNavGrid2D is registered and
- * reflected only (no 2D bake yet).
+ * every bake as off-mesh links and area or carve volumes. DeNavGrid2D is registered and
+ * reflected here; the game runtime builds it with the `nav2d.grid` system (DENG-832,
+ * de_nav2d_grid_attach). The service has no 2D test path or overlay yet (needs a DIDE IDL
+ * change).
  *
  * Axes: the engine is Z-up, so tile (x, y) covers bounds.min + [x, y] * tileSize along world X
  * and Y. Engine tiles lie on a world grid (the navmesh origin is on the 256 m grid), so

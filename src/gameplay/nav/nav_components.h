@@ -3,19 +3,19 @@
  * DeNavLink (an off-mesh link from the entity's position), DeNavModifier (a box volume that
  * marks an area or carves) and DeNavGrid2D (a 2D walkability grid). The editor service
  * (src/host/editor/editor_nav.c) bakes links and modifiers into the editor navmeshes. The game
- * runtime does not read them yet, and nothing bakes DeNavGrid2D yet. Internal, not installed.
+ * runtime does not read links and modifiers yet. DeNavGrid2D is public (de_gameplay.h): the
+ * system `nav2d.grid` (nav2d_grid_system.c, DENG-832) builds a de_nav2d_grid from each one.
+ * Internal, not installed.
  */
 #ifndef DE_GAMEPLAY_NAV_COMPONENTS_H
 #define DE_GAMEPLAY_NAV_COMPONENTS_H
 
 #include <dengine/de_base.h>
 #include <dengine/de_ecs.h>
+#include <dengine/de_gameplay.h> /* DeNavGrid2D, DE_NAV_GRID2D_CELLS */
 #include <dengine/de_math.h>
 
 DE_EXTERN_C_BEGIN
-
-/** Cells of DeNavGrid2D (64 x 64). */
-#define DE_NAV_GRID2D_CELLS 4096u
 
 typedef enum de_nav_modifier_mode {
     DE_NAV_MODIFIER_AREA = 0,  /* the walkable cells inside get `area` */
@@ -36,13 +36,6 @@ typedef struct DeNavModifier {
     de_nav_modifier_mode mode;
     u32 area; /* 1 to 15 in area mode */
 } DeNavModifier;
-
-/** A 2D walkability grid: cells[y * width + x] is the area of a cell, 255 = blocked. */
-typedef struct DeNavGrid2D {
-    u32 width, height; /* 1 to 64 */
-    f32 cell_size;     /* m */
-    u8 cells[DE_NAV_GRID2D_CELLS];
-} DeNavGrid2D;
 
 typedef struct de__nav_component_ids {
     de_component link, modifier, grid;

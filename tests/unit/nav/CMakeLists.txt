@@ -38,3 +38,13 @@ if(TARGET test_nav2d)
     target_include_directories(test_nav2d PRIVATE "${DE_ROOT_DIR}/src"
         "${DE_ROOT_DIR}/tests/unit")
 endif()
+
+# The DeNavGrid2D system `nav2d.grid` (DENG-832). CTest names nav2d_grid.<test>.
+de_add_test(NAME nav2d_grid
+    SOURCES test_nav2d_grid_system.c
+    LIBS de_nav de_ecs de_reflect de_platform de_core
+    TIMEOUT 180)
+if(TARGET test_nav2d_grid)
+    target_include_directories(test_nav2d_grid PRIVATE "${DE_ROOT_DIR}/src"
+        "${DE_ROOT_DIR}/tests/unit")
+endif()
