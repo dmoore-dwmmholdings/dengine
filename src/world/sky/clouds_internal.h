@@ -25,7 +25,7 @@
  *                       sample it through LightingInputs.cloud_shadow (de_input_cloud_shadow).
  *   clouds.march        after sky.render: half width x half height (a quarter of the pixels),
  *                       one of the four pixels of each 2 x 2 block per frame (Bayer order),
- *                       interleaved-gradient-noise start jitter (blue noise: DENG-852), up to
+ *                       blue-noise start jitter (DENG-852), up to
  *                       128 primary steps and 6 light steps, Beer-Powder, a dual-lobe
  *                       Henyey-Greenstein phase,
  *                       multi-scattering octaves, the sky's SH ambient. Out: premultiplied
@@ -70,6 +70,8 @@ DE_EXTERN_C_BEGIN
 #define DE__CLOUDS_DETAIL_TILE_M 384.0
 /** The drift wraps at a common multiple of the three tiles (seamless): 122880 m x 8192. */
 #define DE__CLOUDS_DRIFT_PERIOD_M (122880.0 * 8192.0)
+/** The blue-noise tile (DENG-852): N x N ranks, tiling, generated once on the CPU. */
+#define DE__CLOUDS_BLUE_N        64u
 #define DE__CLOUDS_SHADOW_N      256u
 #define DE__CLOUDS_SHADOW_EXTENT_M 16384.0f
 /** The clouds.shadow stage's order in DE__VIEW_SLOT_LIGHTING: after "sky.ibl", before "lighting". */
@@ -106,6 +108,11 @@ de__clouds_quality de__clouds_quality_for(de_quality q);
 /** (`world` + `drift`) modulo `tile` in double precision, in [0, tile), as f32. Pure. */
 f32 de__clouds_tile_offset(f64 world, f64 drift, f64 tile);
 
+/** DENG-852: a tiling blue-noise tile by void-and-cluster (Ulichney 1993), DE__CLOUDS_BLUE_N^2
+ * bytes, row-major: the rank of each texel scaled to 0..255 (every value 16 times). Deterministic.
+ * Pure; about 10 ms. */
+void de__clouds_blue_noise(u8 *out);
+
 #if DE_HAS_RENDER
 
 struct de__lighting_context;
@@ -113,7 +120,7 @@ struct de__lighting_context;
 /** One view's cloud constants (clouds_common.slang CloudsHeader; 304 bytes). */
 typedef struct de__clouds_header {
     u32 tex[4];       /**< base atlas, detail atlas, weather map, linear wrap sampler */
-    u32 tex2[4];      /**< transmittance LUT, linear clamp sampler, frame (jitter index), flags */
+    u32 tex2[4];      /**< transmittance LUT, linear clamp sampler, frame (jitter index), blue-noise tile (0: none) */
     u32 steps[4];     /**< primary, light, octaves, shadow steps */
     f32 layer[4];     /**< planet radius (m), bottom radius, top radius, camera altitude (m) */
     f32 shape[4];     /**< coverage, density, erosion, history weight (0: none) */

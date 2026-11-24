@@ -218,3 +218,41 @@ TEST(clouds, test_clouds_weather_offset_large_coords) {
     const f64 want = fmod(far, tile);
     EXPECT_FLOAT_EQ((f64)a, want, 1e-2);
 }
+
+/* DENG-852: the blue-noise tile is a rank permutation (every value 16 times), deterministic, and
+ * decorrelated: neighbours differ more than white noise's mean 85.3 and the tile wraps. */
+TEST(clouds, test_clouds_blue_noise_tile) {
+    enum { N = DE__CLOUDS_BLUE_N };
+    static u8 a[N * N], b[N * N];
+    de__clouds_blue_noise(a);
+    de__clouds_blue_noise(b);
+    EXPECT_TRUE(memcmp(a, b, sizeof a) == 0);
+    u32 hist[256] = {0};
+    for (u32 i = 0; i < N * N; ++i)
+        ++hist[a[i]];
+    for (u32 v = 0; v < 256u; ++v)
+        EXPECT_EQ(hist[v], (N * N) / 256u);
+    f64 diff = 0.0;
+    for (u32 y = 0; y < N; ++y)
+        for (u32 x = 0; x < N; ++x) {
+            const int p = a[y * N + x];
+            diff += fabs((f64)(p - (int)a[y * N + (x + 1u) % N]));
+            diff += fabs((f64)(p - (int)a[((y + 1u) % N) * N + x]));
+            /* A 4x4 box of a blue tile is near the mean: little low-frequency energy. */
+        }
+    diff /= 2.0 * N * N;
+    EXPECT_TRUE(diff > 100.0);
+    f64 var = 0.0;
+    for (u32 by = 0; by < N; by += 4u)
+        for (u32 bx = 0; bx < N; bx += 4u) {
+            f64 s = 0.0;
+            for (u32 j = 0; j < 4u; ++j)
+                for (u32 i = 0; i < 4u; ++i)
+                    s += a[(by + j) * N + bx + i];
+            s /= 16.0;
+            var += (s - 127.5) * (s - 127.5);
+        }
+    var /= (N / 4) * (N / 4);
+    /* White noise: the 4x4 mean has sigma 73.9 / 4 = 18.5 (variance 341); blue is far lower. */
+    EXPECT_TRUE(var < 150.0);
+}

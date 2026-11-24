@@ -20,6 +20,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum {
@@ -84,8 +85,8 @@ struct de__clouds {
     de_gpu_device *dev;
     const de_allocator *alloc;
     de_gpu_pipeline pipe[CLOUDS_PIPES];
-    de_gpu_texture base, detail, weather;
-    u32 base_bindless, detail_bindless, weather_bindless;
+    de_gpu_texture base, detail, weather, blue;
+    u32 base_bindless, detail_bindless, weather_bindless, blue_bindless; /* blue: 0 without */
     de_gpu_sampler wrap;
     u32 wrap_bindless;
     bool noise_ready, noise_failed;
@@ -233,6 +234,69 @@ static de_gpu_barrier tex_barrier(de_gpu_texture t, u32 before, u32 after) {
     return b;
 }
 
+/* DENG-852: the blue-noise tile (RGBA8, the rank in r; a 256-byte row pitch suits every backend),
+ * generated on the CPU and uploaded once. Failure is not fatal: the march falls back to its
+ * interleaved gradient noise (blue_bindless 0). */
+static void ensure_blue(de__clouds *c) {
+    const u32 n = DE__CLOUDS_BLUE_N;
+    u8 *rank = (u8 *)malloc((size_t)n * n);
+    de_gpu_buffer staging = {0};
+    de_gpu_fence fence = {0};
+    de_gpu_cmd *cmd = NULL;
+    bool ok = false;
+    if (rank == NULL)
+        goto done;
+    de__clouds_blue_noise(rank);
+    c->blue = de_gpu_texture_create(c->dev, &(de_gpu_texture_desc){.width = n,
+                                                                    .height = n,
+                                                                    .format = DE_FMT_RGBA8_UNORM,
+                                                                    .usage = DE_USAGE_SAMPLED |
+                                                                             DE_USAGE_COPY_DST,
+                                                                    .name = "clouds.blue_noise"});
+    staging = de_gpu_buffer_create(c->dev, &(de_gpu_buffer_desc){.size = (u64)n * n * 4u,
+                                                                 .usage = DE_USAGE_COPY_SRC,
+                                                                 .memory = DE_MEM_UPLOAD,
+                                                                 .name = "clouds.blue_noise up"});
+    fence = de_gpu_fence_create(c->dev, 0);
+    if (!DE_HANDLE_VALID(c->blue) || !DE_HANDLE_VALID(staging) || !DE_HANDLE_VALID(fence))
+        goto done;
+    u8 *map = (u8 *)de_gpu_buffer_map(c->dev, staging);
+    if (map == NULL)
+        goto done;
+    for (u32 i = 0; i < n * n; ++i) {
+        map[i * 4u + 0u] = map[i * 4u + 1u] = map[i * 4u + 2u] = rank[i];
+        map[i * 4u + 3u] = 255u;
+    }
+    cmd = de_gpu_cmd_begin(c->dev, DE_QUEUE_GRAPHICS, "clouds blue noise");
+    if (cmd == NULL)
+        goto done;
+    de_gpu_barrier b = tex_barrier(c->blue, DE_ACCESS_NONE, DE_ACCESS_COPY_DST);
+    de_gpu_cmd_barriers(cmd, &b, 1);
+    de_gpu_cmd_copy_buffer_to_texture(cmd, c->blue, 0, 0, staging, 0, n * 4u);
+    b = tex_barrier(c->blue, DE_ACCESS_COPY_DST, DE_ACCESS_SHADER_READ);
+    de_gpu_cmd_barriers(cmd, &b, 1);
+    ok = de_gpu_queue_submit(c->dev, DE_QUEUE_GRAPHICS,
+                             &(de_gpu_submit){.cmds = &cmd,
+                                              .cmd_count = 1,
+                                              .signal = fence,
+                                              .signal_value = 1}) == DE_OK &&
+         de_gpu_fence_wait(c->dev, fence, 1, 2000000000ull) == DE_OK;
+done:
+    if (DE_HANDLE_VALID(staging))
+        de_gpu_buffer_destroy(c->dev, staging);
+    if (DE_HANDLE_VALID(fence))
+        de_gpu_fence_destroy(c->dev, fence);
+    free(rank);
+    if (ok) {
+        c->blue_bindless = de_gpu_texture_bindless(c->dev, c->blue, 0, false);
+    } else {
+        de_error_clear();
+        destroy_texture(c, &c->blue);
+        c->blue_bindless = 0u;
+        DE_WARN(DE_LOG_CAT_GENERAL, "clouds: no blue-noise tile; the march jitters with IGN");
+    }
+}
+
 /* The base and detail noise atlases and the weather map: made and filled once, in one submission
  * outside the graph (later work on the graphics queue sees them). */
 static bool ensure_noise(de__clouds *c) {
@@ -295,6 +359,7 @@ static bool ensure_noise(de__clouds *c) {
     c->base_bindless = de_gpu_texture_bindless(c->dev, c->base, 0, false);
     c->detail_bindless = de_gpu_texture_bindless(c->dev, c->detail, 0, false);
     c->weather_bindless = de_gpu_texture_bindless(c->dev, c->weather, 0, false);
+    ensure_blue(c);
     c->noise_ready = true;
     return true;
 }
@@ -343,6 +408,7 @@ void de__clouds_destroy(de__clouds *c) {
     destroy_texture(c, &c->base);
     destroy_texture(c, &c->detail);
     destroy_texture(c, &c->weather);
+    destroy_texture(c, &c->blue);
     if (DE_HANDLE_VALID(c->wrap))
         de_gpu_sampler_destroy(c->dev, c->wrap);
     for (u32 i = 0; i < CLOUDS_PIPES; ++i)
@@ -385,7 +451,7 @@ static de__clouds_header *fill_common(const de__clouds *c, clouds_view *v,
     h->tex2[0] = f->transmittance;
     h->tex2[1] = f->sampler;
     h->tex2[2] = (u32)f->frame_index;
-    h->tex2[3] = 0u;
+    h->tex2[3] = c->blue_bindless; /* DENG-852 */
     h->steps[0] = q.primary_steps;
     h->steps[1] = q.light_steps;
     h->steps[2] = q.octaves;
