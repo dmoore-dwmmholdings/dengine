@@ -8,6 +8,9 @@
  *   settings_runtime_load        the runtime path: load a file, take each agent's build desc
  *   tiles_format                 DENG-864: nav.tiles round-trips; malformed files are refused
  *   tiles_runtime_load           DENG-864: de_nav_settings_load_tiles by agent type name
+ *   tiles_scene_path             DENG-877: <scene>.nav.tiles beside a scene file
+ *   tiles_fp_seed_compat         DENG-877: the shared fingerprint seed hashes DENG-864's bytes
+ *   tiles_runtime_check          DENG-877: de_nav_settings_check_tiles: match, stale, other grid
  */
 #if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
 #define _DARWIN_C_SOURCE
@@ -316,4 +319,133 @@ TEST(nav_settings, tiles_runtime_load) {
     ASSERT_EQ(de_file_delete("navtl:/nav.tiles"), DE_OK);
     ASSERT_EQ(de_file_delete("navtl:/nav16.tiles"), DE_OK);
     ASSERT_EQ(de_file_delete("navtl:/bad.tiles"), DE_OK);
+}
+
+/* ---- DENG-877: per-scene files and the runtime check ---- */
+
+TEST(nav_settings, tiles_scene_path) {
+    char p[64];
+    ASSERT_TRUE(de_nav_scene_tiles_path("project:/scenes/main.scene", p, sizeof p));
+    EXPECT_EQ(strcmp(p, "project:/scenes/main.nav.tiles"), 0);
+    ASSERT_TRUE(de_nav_scene_tiles_path("project:/level", p, sizeof p));
+    EXPECT_EQ(strcmp(p, "project:/level.nav.tiles"), 0);
+    ASSERT_TRUE(de_nav_scene_tiles_path("a.scene", p, sizeof p));
+    EXPECT_EQ(strcmp(p, "a.nav.tiles"), 0);
+    EXPECT_FALSE(de_nav_scene_tiles_path("project:/scenes/main.scene", p, 12));
+    EXPECT_FALSE(de_nav_scene_tiles_path(NULL, p, sizeof p));
+    EXPECT_FALSE(de_nav_scene_tiles_path("", p, sizeof p));
+}
+
+static u64 fnv_ref(u64 h, const void *p, size_t n) {
+    const unsigned char *b = (const unsigned char *)p;
+    for (size_t i = 0; i < n; ++i)
+        h = (h ^ b[i]) * 0x100000001b3ull;
+    return h;
+}
+
+/* The seed hashes the bytes DENG-864's editor hashed, so files saved then keep matching. */
+TEST(nav_settings, tiles_fp_seed_compat) {
+    de_nav_settings s;
+    de_nav_settings_default(&s);
+    const de_nav_agent_settings *a = &s.agents[0];
+    u64 h = 0xcbf29ce484222325ull;
+    h = fnv_ref(h, &a->radius, sizeof(f32) * 6);
+    h = fnv_ref(h, &a->collision_mask, sizeof(u32));
+    h = fnv_ref(h, &s.tile_size, sizeof(f32));
+    for (u32 i = 0; i < s.area_count; ++i) {
+        h = fnv_ref(h, &s.areas[i].id, sizeof(u32));
+        h = fnv_ref(h, &s.areas[i].cost, sizeof(f32));
+    }
+    EXPECT_EQ(de__nav_fp_seed(a, s.tile_size, s.areas, s.area_count), h);
+    de__nav_fp_grid g;
+    de__nav_fp_grid_of(&s, &g);
+    EXPECT_EQ(g.tiles_x, 8u);
+    EXPECT_EQ(g.tiles_y, 8u);
+    s.bounds_max[0] = 33; /* a partial tile counts */
+    de__nav_fp_grid_of(&s, &g);
+    EXPECT_EQ(g.tiles_x, 9u);
+}
+
+/* A default-settings file whose records carry fingerprints `fp` for tiles `tiles`. */
+static void check_file(const char *vpath, const de_nav_settings *s, const u32 *tiles,
+                       const u64 *fp, u32 count) {
+    de__nav_container_info info;
+    memset(&info, 0, sizeof info);
+    u8 *dnav = NULL, *file = NULL;
+    u64 dsize = 0, size = 0;
+    ASSERT_EQ(de_nav_settings_build_desc(s, 0, &info.desc), DE_OK);
+    ASSERT_EQ(de__nav_container_write(de_heap_allocator(), &info, NULL, 0, &dnav, &dsize), DE_OK);
+    de__nav_tile_record recs[8];
+    for (u32 i = 0; i < count; ++i)
+        recs[i] = (de__nav_tile_record){tiles[i], 1, 0, fp[i]};
+    de__nav_fp_grid grid;
+    de__nav_fp_grid_of(s, &grid);
+    de__nav_tiles_agent g;
+    memset(&g, 0, sizeof g);
+    snprintf(g.name, sizeof g.name, "%s", s->agents[0].name);
+    g.bmin_x = grid.bmin_x, g.bmin_y = grid.bmin_y;
+    g.tile_size = grid.tile_size;
+    g.tiles_x = grid.tiles_x, g.tiles_y = grid.tiles_y;
+    g.record_count = count;
+    g.records = recs;
+    g.dnav = dnav;
+    g.dnav_size = dsize;
+    ASSERT_EQ(de__nav_tiles_write(de_heap_allocator(), &g, 1, &file, &size), DE_OK);
+    ASSERT_EQ(de_file_write_all_atomic(vpath, file, size), DE_OK);
+    DE_FREE(de_heap_allocator(), file, (size_t)size);
+    DE_FREE(de_heap_allocator(), dnav, (size_t)dsize);
+}
+
+TEST(nav_settings, tiles_runtime_check) {
+    char dir[] = "/tmp/de_nav_check_XXXXXX";
+    ASSERT_TRUE(mkdtemp(dir) != NULL);
+    ASSERT_EQ(de_fs_mount("navck", dir, DE_MOUNT_WRITABLE, 0), DE_OK);
+    de_nav_settings s;
+    de_nav_settings_default(&s);
+    const u64 seed = de__nav_fp_seed(&s.agents[0], s.tile_size, s.areas, s.area_count);
+    /* Tile 27 (x 3, y 3) holds the world origin; tile 0 is a corner. */
+    const u32 tiles[2] = {0, 27};
+    const u64 fps[2] = {seed, seed};
+    check_file("navck:/main.nav.tiles", &s, tiles, fps, 2);
+
+    de_nav *n = NULL;
+    ASSERT_EQ(de_nav_create(de_heap_allocator(), NULL, &n), DE_OK);
+    const char *agent = s.agents[0].name;
+    de_nav_tiles_check c;
+    ASSERT_EQ(de_nav_settings_check_tiles(n, &s, "navck:/main.nav.tiles", agent, &c), DE_OK);
+    EXPECT_TRUE(c.grid_match);
+    EXPECT_EQ(c.tiles, 64u);
+    EXPECT_EQ(c.saved, 2u);
+    EXPECT_EQ(c.stale, 0u);
+    EXPECT_EQ(c.missing, 62u);
+
+    /* A link at the origin changes the inputs of the tiles around it, not of the corner. */
+    const de_dvec3 from = {0, 0, 0}, to = {1, 0, 0};
+    ASSERT_EQ(de_nav_add_offmesh_link(n, from, to, 0.5f, true, 0), DE_OK);
+    ASSERT_EQ(de_nav_settings_check_tiles(n, &s, "navck:/main.nav.tiles", agent, &c), DE_OK);
+    EXPECT_TRUE(c.grid_match);
+    EXPECT_EQ(c.stale, 1u);
+
+    /* Other settings: another grid, or the same grid with other agent settings. */
+    de_nav_settings t = s;
+    t.tile_size = 16.0f;
+    ASSERT_EQ(de_nav_settings_check_tiles(n, &t, "navck:/main.nav.tiles", agent, &c), DE_OK);
+    EXPECT_FALSE(c.grid_match);
+    EXPECT_EQ(c.stale, 2u);
+    EXPECT_EQ(c.missing, 16u);
+    t = s;
+    t.agents[0].radius = 0.6f;
+    ASSERT_EQ(de_nav_settings_check_tiles(n, &t, "navck:/main.nav.tiles", agent, &c), DE_OK);
+    EXPECT_FALSE(c.grid_match);
+
+    /* Errors. */
+    EXPECT_EQ(de_nav_settings_check_tiles(n, &s, "navck:/main.nav.tiles", "tank", &c),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de_nav_settings_check_tiles(n, &s, "navck:/none.nav.tiles", agent, &c),
+              DE_ERR_NOT_FOUND);
+    EXPECT_EQ(de_nav_settings_check_tiles(NULL, &s, "navck:/main.nav.tiles", agent, &c),
+              DE_ERR_INVALID_ARGUMENT);
+    de_error_clear();
+    de_nav_destroy(n);
+    ASSERT_EQ(de_file_delete("navck:/main.nav.tiles"), DE_OK);
 }

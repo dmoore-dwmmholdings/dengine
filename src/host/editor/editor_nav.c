@@ -31,8 +31,16 @@
  * into the agent types of the same name, grid and build settings, so a restart needs no rebake;
  * tiles whose inputs differ in this world show DIRTY and rebake as usual.
  *
- * Limits: one nav.tiles per project, not per scene. tileSize / cellSize must be a whole number of
- * cells from 8 to 1024 (Recast tiles).
+ * Per scene (DENG-877): the file is keyed by the active scene. A scene opened from a file
+ * (`scenes/main.scene`) has `scenes/main.nav.tiles` beside it (de_nav_scene_tiles_path); the game
+ * scene, or no scene, has the legacy `nav.tiles` beside nav.toml. A scene with no file of its own
+ * loads the legacy file as a fallback; a save always writes the active key. When the active
+ * scene changes (and no bake runs) the baked tiles are dropped and the new key's file loads. The
+ * fingerprints are de_nav's (de__nav_fp_*), so the runtime check de_nav_settings_check_tiles
+ * agrees with the editor.
+ *
+ * Limits: additive scenes share one world, and the file is the active scene's. tileSize / cellSize
+ * must be a whole number of cells from 8 to 1024 (Recast tiles).
  */
 #if defined(_WIN32)
 #define _CRT_SECURE_NO_WARNINGS /* snprintf */
@@ -119,7 +127,8 @@ typedef struct nv_state {
     u32 tiles_x, tiles_y;
     bool auto_rebake;
     char settings_path[1024]; /* the nav.toml last loaded or written; empty = no project */
-    bool tiles_pending;       /* nav.tiles to load (new world or new project) */
+    bool tiles_pending;       /* the tiles file to load (new world, project or scene) */
+    char tiles_path[1024];    /* DENG-877: the tiles file key: the active scene's, else legacy */
     u64 revision;
     u64 frame;
 
@@ -194,15 +203,6 @@ static bool bounds_ok(const de_ep_nav_bounds *b) {
         if (!(b->max.items[i] > b->min.items[i]))
             return false;
     return true;
-}
-
-static u64 fnv(u64 h, const void *p, size_t n) {
-    const unsigned char *b = (const unsigned char *)p;
-    for (size_t i = 0; i < n; ++i) {
-        h ^= b[i];
-        h *= 0x100000001b3ull;
-    }
-    return h;
 }
 
 /* ---------- Tiles ---------- */
@@ -426,81 +426,31 @@ static void refresh_inputs(de__editor *ed) {
 
 /* ---------- Fingerprints ---------- */
 
-static u64 settings_hash(const nv_agent *a) {
-    u64 h = 0xcbf29ce484222325ull;
-    h = fnv(h, &a->radius, sizeof(f32) * 6);
-    h = fnv(h, &a->collision_mask, sizeof a->collision_mask);
-    h = fnv(h, &g_nv.tile_size, sizeof g_nv.tile_size);
-    for (u32 i = 0; i < g_nv.area_count; ++i) {
-        h = fnv(h, &g_nv.areas[i].id, sizeof(u32));
-        h = fnv(h, &g_nv.areas[i].cost, sizeof(f32));
-    }
-    return h;
-}
-
-/* Folds element hash `eh` into the tiles a Recast-space xz box (origin 0) meets. */
-static void fold(u64 *fp, f64 margin, f32 rx0, f32 rz0, f32 rx1, f32 rz1, u64 eh) {
-    /* Recast x = world x, Recast z = -world y. */
-    i32 ix0, iy0, ix1, iy1;
-    if (!tile_range((f64)rx0 - margin, -(f64)rz1 - margin, (f64)rx1 + margin,
-                    -(f64)rz0 + margin, &ix0, &iy0, &ix1, &iy1))
-        return;
-    for (i32 y = iy0; y <= iy1; ++y)
-        for (i32 x = ix0; x <= ix1; ++x) {
-            u64 *h = &fp[(u32)y * g_nv.tiles_x + (u32)x];
-            *h = (*h ^ eh) * 0x100000001b3ull;
-        }
-}
-
-static void fold_floats(u64 *fp, f64 margin, const f32 *v, u32 n, const f32 *xz, u32 corners) {
-    f32 x0 = xz[0], x1 = xz[0], z0 = xz[1], z1 = xz[1];
-    for (u32 c = 1; c < corners; ++c) {
-        const f32 x = xz[c * 2], z = xz[c * 2 + 1];
-        x0 = x < x0 ? x : x0;
-        x1 = x > x1 ? x : x1;
-        z0 = z < z0 ? z : z0;
-        z1 = z > z1 ? z : z1;
-    }
-    fold(fp, margin, x0, z0, x1, z1, fnv(0xcbf29ce484222325ull, v, sizeof(f32) * n));
-}
-
-/* Fills navs[i].fp with the current fingerprint of every tile (inputs must be refreshed). */
+/* Fills navs[i].fp with the current fingerprint of every tile (inputs must be refreshed). The
+ * hash is de_nav's (DENG-877), so the runtime check de_nav_settings_check_tiles gives the same. */
 static void fingerprints(u32 i) {
     nv_nav *n = &g_nv.navs[i];
     const nv_agent *a = &g_nv.agents[i];
-    const u32 tc = tile_count();
-    const u64 seed = settings_hash(a);
-    for (u32 t = 0; t < tc; ++t)
-        n->fp[t] = seed;
-    if (n->nav == NULL)
+    de_nav_agent_settings as;
+    memset(&as, 0, sizeof as);
+    as.radius = a->radius, as.height = a->height, as.max_slope_deg = a->max_slope_deg;
+    as.step_height = a->step_height, as.cell_size = a->cell_size;
+    as.cell_height = a->cell_height, as.collision_mask = a->collision_mask;
+    de_nav_area_settings areas[NV_MAX_AREAS];
+    for (u32 k = 0; k < g_nv.area_count; ++k)
+        areas[k].id = g_nv.areas[k].id, areas[k].cost = g_nv.areas[k].cost;
+    const de__nav_fp_grid grid = {g_nv.bmin[0], g_nv.bmin[1], g_nv.tile_size, g_nv.tiles_x,
+                                  g_nv.tiles_y};
+    const u64 seed = de__nav_fp_seed(&as, g_nv.tile_size, areas, g_nv.area_count);
+    if (n->nav == NULL) {
+        de__nav_fp_tiles(&grid, &as, seed, NULL, n->fp);
         return;
+    }
     de__nav_soup soup;
     const de_dvec3 zero = {0, 0, 0};
     de__nav_soup_init(&soup, heap(), zero);
     de__nav_gather_input(n->nav, &soup, a->collision_mask);
-    const f64 margin = (f64)a->radius + 4.0 * (f64)a->cell_size;
-    for (u32 k = 0; k < soup.tri_count; ++k) {
-        f32 v[9], xz[6];
-        for (u32 c = 0; c < 3; ++c) {
-            const f32 *p = &soup.verts[(u32)soup.tris[k * 3 + c] * 3];
-            v[c * 3] = p[0], v[c * 3 + 1] = p[1], v[c * 3 + 2] = p[2];
-            xz[c * 2] = p[0], xz[c * 2 + 1] = p[2];
-        }
-        fold_floats(n->fp, margin, v, 9, xz, 3);
-    }
-    for (u32 k = 0; k < soup.obstacle_count; ++k) {
-        const f32 *o = &soup.obstacles[k * DE__NAV_RC_OBSTACLE_FLOATS];
-        fold_floats(n->fp, margin, o, DE__NAV_RC_OBSTACLE_FLOATS, o, 4);
-    }
-    for (u32 k = 0; k < soup.area_vol_count; ++k) {
-        const f32 *o = &soup.area_vols[k * DE__NAV_RC_AREA_VOL_FLOATS];
-        fold_floats(n->fp, margin, o, DE__NAV_RC_AREA_VOL_FLOATS, o, 4);
-    }
-    for (u32 k = 0; k < soup.offmesh_count; ++k) {
-        const f32 *o = &soup.offmesh[k * DE__NAV_RC_OFFMESH_FLOATS];
-        const f32 xz[2] = {o[0], o[2]}; /* built into the tile of its start */
-        fold_floats(n->fp, margin, o, DE__NAV_RC_OFFMESH_FLOATS, xz, 1);
-    }
+    de__nav_fp_tiles(&grid, &as, seed, &soup, n->fp);
     de__nav_soup_free(&soup);
 }
 
@@ -887,9 +837,43 @@ static bool same_desc(const de_navmesh_build_desc *a, const de_navmesh_build_des
            a->collision_mask == b->collision_mask;
 }
 
-static bool tiles_vpath(de__editor *ed, char *out, size_t cap) {
+/* The legacy project-level tiles file beside nav.toml (DENG-864). */
+static bool legacy_tiles_vpath(de__editor *ed, char *out, size_t cap) {
     char toml[1024];
     return settings_vpath(ed, toml, sizeof toml) && de__nav_tiles_path(toml, out, cap);
+}
+
+/* DENG-877: the tiles file of the active scene, beside its file (".scene" -> ".nav.tiles"). A
+ * vpath scene keeps its mount; a project-relative one is placed below the root manifest's folder.
+ * false for the game scene and for a path that is neither (absolute, "..", a drive letter). */
+static bool scene_tiles_vpath(de__editor *ed, char *out, size_t cap) {
+    char scene[512];
+    if (!de__ed_scene_active_path(ed, scene, sizeof scene))
+        return false;
+    if (strstr(scene, ":/") != NULL && scene[1] != ':')
+        return de_nav_scene_tiles_path(scene, out, cap);
+    if (scene[0] == '/' || scene[0] == '\\' || strchr(scene, ':') != NULL ||
+        strstr(scene, "..") != NULL)
+        return false;
+    char vp[1024];
+    return de__ed_project_vpath(ed, scene, vp, sizeof vp) && de_nav_scene_tiles_path(vp, out, cap);
+}
+
+/* DENG-877: keys the baked tiles by the active scene. A new key drops the baked tiles (they are
+ * the old scene's, already saved) and loads the new key's file. Waits while a bake runs, so the
+ * bake saves to the key it started under. */
+static void update_key(de__editor *ed) {
+    char want[1024];
+    if (!scene_tiles_vpath(ed, want, sizeof want) && !legacy_tiles_vpath(ed, want, sizeof want))
+        want[0] = '\0';
+    if (strcmp(want, g_nv.tiles_path) == 0 || g_nv.running || bake_in_flight())
+        return;
+    if (any_baked()) {
+        drop_all();
+        ++g_nv.revision;
+    }
+    memcpy(g_nv.tiles_path, want, sizeof want);
+    g_nv.tiles_pending = true;
 }
 
 static de__nav_tile_record g_records[NV_MAX_AGENTS][NV_MAX_TILES];
@@ -898,8 +882,8 @@ static i32 g_txz[NV_MAX_TILES * 2];
 /* Writes the baked tiles of every agent type, with their fingerprints, to nav.tiles. Called when
  * a bake ends; a tile baked empty is a record with no Detour data. */
 static void save_tiles(de__editor *ed) {
-    char path[1024];
-    if (!tiles_vpath(ed, path, sizeof path))
+    const char *path = g_nv.tiles_path;
+    if (path[0] == '\0')
         return; /* no project yet */
     de__nav_tiles_agent ags[NV_MAX_AGENTS];
     u8 *dnav[NV_MAX_AGENTS] = {NULL};
@@ -958,13 +942,19 @@ static void save_tiles(de__editor *ed) {
 static void load_tiles(de__editor *ed) {
     g_nv.tiles_pending = false;
     char path[1024];
-    if (g_nv.world == NULL || g_nv.running || any_baked() || !tiles_vpath(ed, path, sizeof path))
+    if (g_nv.world == NULL || g_nv.running || any_baked() || g_nv.tiles_path[0] == '\0')
         return;
+    memcpy(path, g_nv.tiles_path, sizeof path);
     void *data = NULL;
     u64 size = 0;
     if (de_file_read_all(path, heap(), &data, &size) != DE_OK) {
         de_error_clear();
-        return;
+        /* DENG-877: a scene with no file of its own reads the legacy project-level file. */
+        if (!legacy_tiles_vpath(ed, path, sizeof path) || strcmp(path, g_nv.tiles_path) == 0 ||
+            de_file_read_all(path, heap(), &data, &size) != DE_OK) {
+            de_error_clear();
+            return;
+        }
     }
     const u8 *bytes = (const u8 *)data;
     u32 count = 0;
@@ -1898,6 +1888,7 @@ static void tick(de__editor *ed) {
     load_project(ed);
     if (g_nv.world == NULL)
         return;
+    update_key(ed);
     if (g_nv.tiles_pending)
         load_tiles(ed);
     ++g_nv.frame;
@@ -1940,6 +1931,7 @@ void de__ed_nav_register(de__editor *ed) {
     load_project(ed);
     g_nv.cat = de_draw_category_register("navigation", 0x60e060, false);
     sync_world(ed);
+    update_key(ed);
     if (g_nv.tiles_pending)
         load_tiles(ed);
     de__ed_on(ed, DE_EP_METHOD_NAV_INFO, on_info);

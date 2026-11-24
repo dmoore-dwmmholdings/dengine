@@ -7,6 +7,9 @@
  *   settings_persist         DENG-833: nav.configure writes nav.toml; a new service reads it back
  *   tiles_persist            DENG-864: a bake writes nav.tiles; a restart loads it, no rebake;
  *                            moved inputs show dirty; the runtime loads the same file
+ *   tiles_per_scene          DENG-877: a scene's bake writes <scene>.nav.tiles; a scene with no
+ *                            file loads the legacy nav.tiles; a scene switch reloads; a restart
+ *                            loads the scene's file; de_nav_settings_check_tiles agrees
  *   plane2d_in_info          DENG-863: nav.info.plane2d is side_xz by default, or the system's plane
  *   test_path2d_found        DENG-863: nav.testPath2d finds a path around blocked cells (jps on, off)
  *   test_path2d_errors       DENG-863: each not_found and invalid_params case of nav.testPath2d
@@ -34,6 +37,7 @@
 #include <stdlib.h>
 #include <string.h>
 #if !defined(_WIN32)
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -125,6 +129,12 @@ static mpack_node_t call(nav_fx *f, de_ep_method m, const void *params) {
         break;
     case DE_EP_METHOD_NAV_TEST_PATH:
         de_ep_write_nav_test_path_params(&w, (const de_ep_nav_test_path_params *)params);
+        break;
+    case DE_EP_METHOD_SCENE_LOAD:
+        de_ep_write_scene_load_params(&w, (const de_ep_scene_load_params *)params);
+        break;
+    case DE_EP_METHOD_SCENE_SET_ACTIVE:
+        de_ep_write_scene_params(&w, (const de_ep_scene_params *)params);
         break;
     default:
         de_ep_write_nav_overlay_params(&w, (const de_ep_nav_overlay_params *)params);
@@ -686,6 +696,132 @@ TEST_F(editor_nav, tiles_persist, nav_fx) {
     de__ed_nav_set_settings_path(NULL);
     ASSERT_EQ(de_file_delete("ednavt:/nav.tiles"), DE_OK);
     ASSERT_EQ(de_file_delete("ednavt:/nav.toml"), DE_OK);
+}
+
+/* DENG-877: the tiles file follows the active scene. */
+static de__host g_host877;
+static unsigned char g_arena877[1u << 16];
+
+static u64 scene_load(nav_fx *f, const char *path) {
+    const de_ep_scene_load_params q = {de_ep_cstr(path), true};
+    mpack_node_t r = result_of(call(f, DE_EP_METHOD_SCENE_LOAD, &q));
+    return mpack_node_u64(mpack_node_map_cstr(r, "scene"));
+}
+static void scene_activate(nav_fx *f, u64 scene) {
+    const de_ep_scene_params q = {scene};
+    (void)result_of(call(f, DE_EP_METHOD_SCENE_SET_ACTIVE, &q));
+}
+static bool file_exists(const char *vpath) {
+    void *data = NULL;
+    u64 size = 0;
+    if (de_file_read_all(vpath, de_heap_allocator(), &data, &size) != DE_OK) {
+        de_error_clear();
+        return false;
+    }
+    DE_FREE(de_heap_allocator(), data, (size_t)size + 1);
+    return true;
+}
+static u32 count_state(nav_fx *f, const char *state) {
+    tile_rec t[16];
+    read_tiles(f, t);
+    u32 k = 0;
+    for (u32 i = 0; i < 16; ++i)
+        k += strcmp(t[i].state, state) == 0;
+    return k;
+}
+
+TEST_F(editor_nav, tiles_per_scene, nav_fx) {
+    char dir[] = "/tmp/de_ed_nav_sc_XXXXXX";
+    ASSERT_TRUE(mkdtemp(dir) != NULL);
+    ASSERT_EQ(de_fs_mount("ednavs", dir, DE_MOUNT_WRITABLE, 0), DE_OK);
+    memset(&g_host877, 0, sizeof g_host877);
+    f->editor.h = &g_host877;
+    f->editor.arena = g_arena877;
+    f->editor.arena_cap = sizeof g_arena877;
+    de__ed_scene_register(&f->editor);
+    de__ed_nav_set_settings_path("ednavs:/nav.toml");
+    frame(f);
+    add_box(f, 0, 0, -0.5, 16, 16, 0.5);                         /* the ground */
+    const de_entity wall = add_box(f, -4, 0, 1.5, 0.5, 12, 1.5); /* x -4.5..-3.5, y -12..12 */
+    configure_small(f, false);
+
+    /* The game scene has no file: the bake writes the legacy nav.tiles. */
+    bake_all(f);
+    ASSERT_TRUE(run_until_done(f, 400));
+    EXPECT_TRUE(file_exists("ednavs:/nav.tiles"));
+
+    /* A scene with no tiles file of its own: the switch reloads, from the legacy file. */
+    char sub[64];
+    snprintf(sub, sizeof sub, "%s/scenes", dir);
+    ASSERT_EQ(mkdir(sub, 0700), 0);
+    ASSERT_EQ(de_file_write_all_atomic("ednavs:/scenes/a.scene", "", 0), DE_OK);
+    ASSERT_EQ(de_file_write_all_atomic("ednavs:/scenes/b.scene", "", 0), DE_OK);
+    const u64 a = scene_load(f, "ednavs:/scenes/a.scene");
+    ASSERT_GT(a, 1u);
+    frame(f);
+    EXPECT_EQ(count_state(f, "baked"), 16u);
+    EXPECT_FALSE(file_exists("ednavs:/scenes/a.nav.tiles"));
+
+    /* Its bake writes the scene's file and leaves the legacy one. */
+    move(f, wall, 4, 0, 1.5);
+    bake_all(f);
+    ASSERT_TRUE(run_until_done(f, 400));
+    EXPECT_TRUE(file_exists("ednavs:/scenes/a.nav.tiles"));
+    tile_rec ta[16];
+    read_tiles(f, ta);
+
+    /* Scene b (no file) falls back to the legacy file: the moved wall shows dirty there. */
+    const u64 b = scene_load(f, "ednavs:/scenes/b.scene");
+    ASSERT_GT(b, a);
+    frame(f);
+    const u32 dirty = count_state(f, "dirty");
+    EXPECT_GT(dirty, 0u);
+    EXPECT_LT(dirty, 16u);
+    /* Back to a: its own file, nothing dirty. */
+    scene_activate(f, a);
+    frame(f);
+    EXPECT_EQ(count_state(f, "baked"), 16u);
+
+    /* A restart with scene a active loads a's file; no bake runs. */
+    de__ed_nav_shutdown(&f->editor);
+    de__ed_nav_register(&f->editor);
+    frame(f);
+    tile_rec after[16];
+    read_tiles(f, after);
+    for (u32 t = 0; t < 16; ++t) {
+        EXPECT_EQ(strcmp(after[t].state, "baked"), 0);
+        EXPECT_EQ(after[t].polys, ta[t].polys);
+    }
+    f->state[0] = '\0';
+    for (u32 i = 0; i < 5; ++i)
+        frame(f);
+    EXPECT_EQ(f->state[0], '\0');
+
+    /* The runtime check against the same world: a matches, the legacy file has stale tiles. */
+    de_nav_settings s;
+    ASSERT_EQ(de_nav_settings_load("ednavs:/nav.toml", &s), DE_OK);
+    de_nav *rt = NULL;
+    ASSERT_EQ(de_nav_create(de_heap_allocator(), NULL, &rt), DE_OK);
+    de__nav_bind_world(rt, f->engine.world);
+    de_nav_tiles_check c;
+    ASSERT_EQ(de_nav_settings_check_tiles(rt, &s, "ednavs:/scenes/a.nav.tiles", "humanoid", &c),
+              DE_OK);
+    EXPECT_TRUE(c.grid_match);
+    EXPECT_EQ(c.saved, 16u);
+    EXPECT_EQ(c.stale, 0u);
+    EXPECT_EQ(c.missing, 0u);
+    ASSERT_EQ(de_nav_settings_check_tiles(rt, &s, "ednavs:/nav.tiles", "humanoid", &c), DE_OK);
+    EXPECT_TRUE(c.grid_match);
+    EXPECT_EQ(c.stale, dirty);
+    de__nav_bind_world(rt, NULL);
+    de_nav_destroy(rt);
+
+    de__ed_nav_set_settings_path(NULL);
+    ASSERT_EQ(de_file_delete("ednavs:/scenes/a.nav.tiles"), DE_OK);
+    ASSERT_EQ(de_file_delete("ednavs:/scenes/a.scene"), DE_OK);
+    ASSERT_EQ(de_file_delete("ednavs:/scenes/b.scene"), DE_OK);
+    ASSERT_EQ(de_file_delete("ednavs:/nav.tiles"), DE_OK);
+    ASSERT_EQ(de_file_delete("ednavs:/nav.toml"), DE_OK);
 }
 
 /* ---------- DENG-863: nav.testPath2d, NavInfo.plane2d, NavOverlayParams.grids ---------- */

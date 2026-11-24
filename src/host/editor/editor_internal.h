@@ -257,6 +257,9 @@ bool de__ed_asset_source_vpath(de__editor *ed, const char *id, char *out, size_t
 /** DENG-821: the virtual path of `rel`, a project-relative path, below the root manifest's folder;
  * false when there is no manifest or it does not fit. */
 bool de__ed_project_vpath(de__editor *ed, const char *rel, char *out, size_t cap);
+/** DENG-877: the path of the active scene's file as scene.open gave it (a vpath, or a path
+ * relative to the project); false when the active scene is the game scene (no file) or none. */
+bool de__ed_scene_active_path(de__editor *ed, char *out, size_t cap);
 /** DENG-833 (tests): the vpath of nav.toml to use when the project has no manifest; NULL clears. */
 void de__ed_nav_set_settings_path(const char *vpath);
 /** The asset's source path as the manifest lists it (relative to the asset root), or NULL. */

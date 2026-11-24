@@ -44,9 +44,13 @@ DE_API de_navmesh de_asset_navmesh(de_asset_system *s, de_asset_id id);
  * names and costs, bounds, tile size and auto rebake, in the project file `nav.toml` (TOML,
  * `[[agent]]`, `[[area]]`, `[bounds]`). The editor loads it at start and rewrites it on every
  * `nav.configure`; the runtime loads the same file and bakes with it. DENG-864: when a bake ends
- * the editor also writes the baked tiles of every agent type to `nav.tiles` beside nav.toml
- * (format: docs/formats/nav_tiles.md); the runtime adds them with de_nav_settings_load_tiles
- * instead of baking. The `navmesh` asset still holds cooked tiles. Main thread only. */
+ * the editor also writes the baked tiles of every agent type to a tiles file (format:
+ * docs/formats/nav_tiles.md); the runtime adds them with de_nav_settings_load_tiles instead of
+ * baking. DENG-877: the file belongs to the scene the editor has active, `<scene>.nav.tiles`
+ * beside the scene file (de_nav_scene_tiles_path); with no scene file open it is the legacy
+ * project-level `nav.tiles` beside nav.toml, which also stays the fallback for a scene that has no
+ * file of its own. de_nav_settings_check_tiles compares a file with the world. The `navmesh`
+ * asset still holds cooked tiles. Main thread only. */
 #define DE_NAV_MAX_AGENTS     4u
 #define DE_NAV_MAX_AREAS      16u
 #define DE_NAV_AGENT_NAME_MAX 32u
@@ -98,12 +102,38 @@ DE_API de_result de_nav_settings_build_desc(const de_nav_settings *s, u32 agent,
  *  de_nav_rebuild_tiles). Call it once per agent type after the world is attached. */
 DE_API de_result de_nav_settings_bake(de_nav *n, const de_nav_settings *s, u32 agent);
 /** Adds the tiles the editor baked for agent type `agent` from the tiles file `vpath` (the
- *  project's `nav.tiles`, beside nav.toml), as de_nav_add_navmesh does with a cooked navmesh. No
- *  build runs. DE_ERR_NOT_FOUND when the file or the agent type is absent (bake with
- *  de_nav_settings_bake instead), DE_ERR_PARSE when the file is malformed, DE_ERR_INVALID_ARGUMENT
- *  when its tile size or origin differs from the navmesh's. The file is not checked against the
- *  world: the editor rewrites it after each bake. */
+ *  scene's `<scene>.nav.tiles`, else the project's legacy `nav.tiles` beside nav.toml), as
+ *  de_nav_add_navmesh does with a cooked navmesh. No build runs. DE_ERR_NOT_FOUND when the file or
+ *  the agent type is absent (try the legacy file, or bake with de_nav_settings_bake),
+ *  DE_ERR_PARSE when the file is malformed, DE_ERR_INVALID_ARGUMENT when its tile size or origin
+ *  differs from the navmesh's. It does not check the file against the world: call
+ *  de_nav_settings_check_tiles first. */
 DE_API de_result de_nav_settings_load_tiles(de_nav *n, const char *vpath, const char *agent);
+/** DENG-877: the tiles file of scene `scene_vpath`: a trailing `.scene` becomes `.nav.tiles`
+ *  (`levels/a.scene` -> `levels/a.nav.tiles`), else `.nav.tiles` is appended. False when the path
+ *  is empty or does not fit in `cap`. */
+DE_API bool de_nav_scene_tiles_path(const char *scene_vpath, char *out, size_t cap);
+
+/** What de_nav_settings_check_tiles found. */
+typedef struct de_nav_tiles_check {
+    bool grid_match; /**< the file's grid and build settings are those of the settings */
+    u32 tiles;       /**< tiles of the settings' grid */
+    u32 saved;       /**< tiles with a record in the file */
+    u32 stale;       /**< saved tiles whose inputs in this world differ from the bake's */
+    u32 missing;     /**< tiles of the grid with no record (never baked in the editor) */
+} de_nav_tiles_check;
+/** DENG-877: checks the tiles file `vpath` of agent type `agent` against settings `s` and the
+ *  world `n` is attached to, without adding a tile. The grid (bounds min, tile size, tile counts)
+ *  and the DNAV build settings must equal those of `s`; then each saved tile's fingerprint is
+ *  compared with the fingerprint of the inputs `n` gathers now (static colliders of the agent's
+ *  collision mask, obstacles, area volumes and off-mesh links), as the editor computes it. Call it
+ *  before adding obstacles or links the editor did not bake with, or they count as stale. The
+ *  tiles match when `grid_match` is true and `stale` is 0. DE_OK when it could compare (`*out`
+ *  filled); the errors of de_nav_settings_load_tiles otherwise, and DE_ERR_INVALID_ARGUMENT when
+ *  `agent` is not in `s` or `s` is invalid. */
+DE_API de_result de_nav_settings_check_tiles(de_nav *n, const de_nav_settings *s,
+                                             const char *vpath, const char *agent,
+                                             de_nav_tiles_check *out);
 
 /* ---- DENG-77: queries, off-mesh links, dynamic obstacles ----
  * Queries run on the main thread or on a frame worker of the nav's task system (one Detour
