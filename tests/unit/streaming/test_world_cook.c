@@ -7,6 +7,9 @@
  * scratch directories (build tree) and compare the bytes with each other and with the golden.
  * world_cook_proxy (DENG-830) cooks the golden world "near" (tests/golden/world/assets), whose
  * proxies are enabled, and checks the far proxy glTF and its cells.toml entries.
+ * world_cook_terrain_proxy (DENG-871) cooks a scratch world with a DeTerrain and proxies enabled
+ * and checks the terrain heightfield in the far proxies by structure (triangle count, bounds,
+ * the same bytes from two cooks), not against a golden.
  * world_cook_pin (DENG-831) cooks a scratch world whose roots carry DeWorldCellPin.
  * To refresh the golden after an intended format change:
  *   de-cook world tests/assets/world_small/assets.toml --world small
@@ -17,6 +20,7 @@
 #include <dengine/de_platform.h>
 #include "cook/check.h"
 #include "cook/world_cells.h"
+#include "cook/world_proxy.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -207,6 +211,148 @@ TEST(streaming, world_cook_proxy) {
     EXPECT_TRUE(strstr(gl, "\"name\":\"proxy3\"") != NULL);
     EXPECT_TRUE(strstr(gl, "\"name\":\"proxy4\"") == NULL);
     EXPECT_TRUE(strstr(gl, "\"TEXCOORD_0\"") == NULL);
+    free(gl);
+}
+
+/* ---- test_world_cook_terrain_proxy (DENG-871) ---------------------------------------------- */
+
+/* A 128 m terrain (33 x 33 samples, 4 m apart) at (200, 100, 5), heights i * 60 for sample i and
+ * a hole at sample 0, in a world "tp" with proxies at triangle_ratio 0.25 (terrain step 2). Its
+ * x = 0 tiles (200..264 m) overlap cells (0, 0) and (1, 0); the others only (1, 0). No entity draws
+ * a mesh, so each proxy is the terrain alone. Writes into <TMP>/<dir>/ and cooks into
+ * <TMP>/<dir>/out. */
+static int cook_terrain_world(const char *dir, wc_cap *cap) {
+    tmp_mount();
+    static const char manifest[] =
+        "[project]\nasset_root = \".\"\n"
+        "[assets]\n\"levels/t\" = { type = \"scene\", source = \"t.scene.toml\" }\n"
+        "[worlds.tp]\nscenes = [\"levels/t\"]\n[worlds.tp.proxy]\ntriangle_ratio = 0.25\n";
+    char vp[256], out[1024], toml[1024];
+    snprintf(vp, sizeof vp, "wctmp:/%s", dir);
+    if (de_dir_create(vp) != DE_OK)
+        return -1;
+    snprintf(vp, sizeof vp, "wctmp:/%s/out", dir);
+    if (de_dir_create(vp) != DE_OK)
+        return -1;
+    snprintf(vp, sizeof vp, "wctmp:/%s/assets.toml", dir);
+    if (de_file_write_all_atomic(vp, manifest, sizeof manifest - 1) != DE_OK)
+        return -1;
+    size_t scap = 64u * 1024u, len = 0;
+    char *scene = (char *)malloc(scap);
+    if (scene == NULL)
+        return -1;
+    len += (size_t)snprintf(scene + len, scap - len,
+                            "[entity.0x0000000000000100.DeTransform]\n"
+                            "position = [200.0, 100.0, 5.0]\n"
+                            "[entity.0x0000000000000100.DeTerrain]\nsize = 128.0\n"
+                            "height = 10.0\nheights = [");
+    for (unsigned i = 0; i < 33u * 33u; ++i)
+        len += (size_t)snprintf(scene + len, scap - len, "%s%u", i ? ", " : "", i * 60u);
+    len += (size_t)snprintf(scene + len, scap - len, "]\nholes = [1");
+    for (unsigned i = 1; i < 33u * 33u; ++i)
+        len += (size_t)snprintf(scene + len, scap - len, ", 0");
+    len += (size_t)snprintf(scene + len, scap - len, "]\n");
+    snprintf(vp, sizeof vp, "wctmp:/%s/t.scene.toml", dir);
+    de_result wr = len < scap ? de_file_write_all_atomic(vp, scene, len) : DE_ERR_INVALID_ARGUMENT;
+    free(scene);
+    if (wr != DE_OK)
+        return -1;
+    snprintf(toml, sizeof toml, "%s/%s/assets.toml", TMP, dir);
+    snprintf(out, sizeof out, "%s/%s/out", TMP, dir);
+    memset(cap, 0, sizeof *cap);
+    const char *argv[] = {toml, "--world", "tp", "--out", out};
+    de_cook_io io = {wc_cap_write, cap};
+    return de_cook_world_main(5, argv, &io);
+}
+
+/* The first `"key":[x,y,z]` after `from` in `gl`; false when absent. */
+static bool vec3_after(const char *gl, const char *from, const char *key, double v[3]) {
+    const char *p = strstr(gl, from);
+    p = p != NULL ? strstr(p, key) : NULL;
+    if (p == NULL)
+        return false;
+    p += strlen(key);
+    for (int i = 0; i < 3; ++i) {
+        char *end = NULL;
+        v[i] = strtod(p, &end);
+        if (end == p)
+            return false;
+        p = end + 1;
+    }
+    return true;
+}
+
+static unsigned position_count(const char *gl) {
+    static const char k[] = "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":";
+    const char *p = strstr(gl, k);
+    return p != NULL ? (unsigned)strtoul(p + sizeof k - 1, NULL, 10) : 0u;
+}
+
+TEST(streaming, world_cook_terrain_proxy) {
+    /* The decimation step of the triangle ratio. */
+    EXPECT_EQ(de__wproxy_terrain_step(1.0f), 1u);
+    EXPECT_EQ(de__wproxy_terrain_step(0.25f), 2u);
+    EXPECT_EQ(de__wproxy_terrain_step(0.1f), 2u);
+    EXPECT_EQ(de__wproxy_terrain_step(0.05f), 4u);
+    EXPECT_EQ(de__wproxy_terrain_step(0.01f), 8u);
+    EXPECT_EQ(de__wproxy_terrain_step(0.0001f), 16u);
+
+    wc_cap a, b;
+    ASSERT_EQ(cook_terrain_world("tproxy_a", &a), DE_COOK_EXIT_OK);
+    ASSERT_EQ(cook_terrain_world("tproxy_b", &b), DE_COOK_EXIT_OK);
+    if (strstr(a.out, "0 warnings") == NULL)
+        printf("%s", a.out);
+    EXPECT_STREQ(a.out, b.out);
+
+    /* Deterministic: two cooks give the same bytes. */
+    static const char *const files[] = {"cells.toml", "cell_0_0.proxy.gltf",
+                                        "cell_1_0.proxy.gltf"};
+    char pa[1024], pb[1024];
+    for (size_t i = 0; i < 3; ++i) {
+        snprintf(pa, sizeof pa, "%s/tproxy_a/out/%s", TMP, files[i]);
+        snprintf(pb, sizeof pb, "%s/tproxy_b/out/%s", TMP, files[i]);
+        EXPECT_TRUE(same_bytes(pa, pb));
+    }
+
+    /* Both cells list a proxy; the terrain-only cell (1, 0) too. */
+    char *cells = slurp_text("tproxy_a/out", "cells.toml");
+    ASSERT_TRUE(cells != NULL);
+    EXPECT_TRUE(strstr(cells, "[bundles.\"world/tp/proxy_0_0\"]") != NULL);
+    EXPECT_TRUE(strstr(cells, "[bundles.\"world/tp/proxy_1_0\"]") != NULL);
+    free(cells);
+
+    /* Cell (0, 0): step 2 keeps 8 x 8 quads of each 16 x 16 tile. Of the x = 0 tiles, the 7 quad
+     * columns whose centres are below x = 256 m, by 16 rows (tiles y = 0 and 1; y = 2 is one
+     * sample wide), less the quad on the hole: (7 * 16 - 1) * 2 triangles. One primitive. */
+    char *gl = slurp_text("tproxy_a/out", "cell_0_0.proxy.gltf");
+    ASSERT_TRUE(gl != NULL);
+    EXPECT_EQ(position_count(gl), (unsigned)((7u * 16u - 1u) * 2u * 3u));
+    EXPECT_EQ(count_of(gl, "\"name\":\"proxy"), (size_t)3); /* node, mesh, proxy0 */
+    EXPECT_TRUE(strstr(gl, "\"baseColorFactor\":[1.0,1.0,1.0,1.0]") != NULL);
+    /* Bounds in glTF axes (x, z up, -y), metres from the cell origin. Heights: 5 m plus sample
+     * i's i * 60 / 65535 * 10 m; the lowest kept vertex is sample 2 (the hole drops sample 0's
+     * quad), the highest sample 32 * 33 + 14. */
+    double lo[3], hi[3];
+    ASSERT_TRUE(vec3_after(gl, "\"accessors\"", "\"min\":[", lo));
+    ASSERT_TRUE(vec3_after(gl, "\"accessors\"", "\"max\":[", hi));
+    EXPECT_FLOAT_EQ(lo[0], 200.0, 1e-4);
+    EXPECT_FLOAT_EQ(hi[0], 256.0, 1e-4);
+    EXPECT_FLOAT_EQ(lo[1], 5.0 + 2.0 * 60.0 / 65535.0 * 10.0, 1e-4);
+    EXPECT_FLOAT_EQ(hi[1], 5.0 + (32.0 * 33.0 + 14.0) * 60.0 / 65535.0 * 10.0, 1e-4);
+    EXPECT_FLOAT_EQ(lo[2], -228.0, 1e-4);
+    EXPECT_FLOAT_EQ(hi[2], -100.0, 1e-4);
+    free(gl);
+
+    /* Cell (1, 0): the last quad column of the x = 0 tiles and all 8 of the x = 1 tiles. */
+    gl = slurp_text("tproxy_a/out", "cell_1_0.proxy.gltf");
+    ASSERT_TRUE(gl != NULL);
+    EXPECT_EQ(position_count(gl), (unsigned)(9u * 16u * 2u * 3u));
+    ASSERT_TRUE(vec3_after(gl, "\"accessors\"", "\"min\":[", lo));
+    ASSERT_TRUE(vec3_after(gl, "\"accessors\"", "\"max\":[", hi));
+    EXPECT_FLOAT_EQ(lo[0], 0.0, 1e-4);   /* 256 m */
+    EXPECT_FLOAT_EQ(hi[0], 72.0, 1e-4);  /* 328 m */
+    EXPECT_FLOAT_EQ(lo[2], -228.0, 1e-4);
+    EXPECT_FLOAT_EQ(hi[2], -100.0, 1e-4);
     free(gl);
 }
 

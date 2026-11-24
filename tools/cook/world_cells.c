@@ -15,6 +15,8 @@
  * Terrain tiles (DENG-857): wc_terrain_tiles writes each placed DeTerrain's 3 x 3 tile blobs
  * and lists the cells each tile overlaps; those cells join the cell list and their bundles depend
  * on the tile bundles. The terrain entity itself stays in its cell unchanged.
+ * Each tile also keeps the terrain's samples, so wc_proxy_cell adds it to the far proxy of
+ * every cell it overlaps as a decimated heightfield (DENG-871; world_proxy.h).
  *
  * Cross-cell references (DENG-858): a component field whose value is a "0x.." string naming a
  * placed entity of another cell is a cross-cell reference. wc_xrefs_collect reports each one (a
@@ -84,6 +86,9 @@ typedef struct wc_run {
     /* terrain tiles (DENG-857), sorted by terrain, ty, tx */
     struct wc_tile *tiles;
     u32 tile_count, tile_cap;
+    /* the samples of each terrain, for the far proxies (DENG-871) */
+    struct wc_tsamples *tsamples;
+    u32 tsample_count, tsample_cap;
     /* cross-cell references (DENG-858), sorted by source cell, source, component, field */
     struct wc_xref *xrefs;
     u32 xref_count, xref_cap;
@@ -927,27 +932,88 @@ static bool wc_proxy_item(wc_run *run, const de__manifest *m, const wc_ent *e, w
     return true;
 }
 
+/* ---- Terrain tiles (DENG-857) -------------------------------------------------------------- */
+
+/* Tiles a terrain may overlap per axis before the cook refuses it (a 2 km tile at most). */
+#define WC_TILE_CELLS_MAX 9
+
+typedef struct wc_tile {
+    u64 terrain;
+    u32 tx, ty;
+    i32 cx0, cy0, cx1, cy1; /* the cells it overlaps, inclusive */
+    /* for the far proxies (DENG-871): the terrain's samples and placement, the tile's colour */
+    u32 samples; /* index in run->tsamples */
+    f64 origin[3], spacing, height;
+    f32 rgb[3];
+} wc_tile;
+
+/* Splat layers per sample (DE_TERRAIN_LAYERS). */
+#define WC_TERRAIN_LAYERS 4u
+
+/* The height and hole samples of one terrain (DENG-871). */
+typedef struct wc_tsamples {
+    u16 heights[DE__TTILE_RES * DE__TTILE_RES];
+    u8 holes[DE__TTILE_RES * DE__TTILE_RES];
+} wc_tsamples;
+
+static bool wc_tile_in(const wc_tile *t, i32 cx, i32 cy) {
+    return cx >= t->cx0 && cx <= t->cx1 && cy >= t->cy0 && cy <= t->cy1;
+}
+
+/* Tile `t` as a far proxy input of cell (cx, cy), in the cell's frame (DENG-871). */
+static void wc_proxy_tile(const wc_run *run, const wc_tile *t, i32 cx, i32 cy,
+                          de__wproxy_tile *out) {
+    const wc_tsamples *s = &run->tsamples[t->samples];
+    memset(out, 0, sizeof *out);
+    out->origin[0] = t->origin[0] - (f64)cx * DE__CELL_SIZE;
+    out->origin[1] = t->origin[1] - (f64)cy * DE__CELL_SIZE;
+    out->origin[2] = t->origin[2];
+    out->spacing = t->spacing;
+    out->height = t->height;
+    out->res = DE__TTILE_RES;
+    de__ttile_span(t->tx, &out->x0, &out->w);
+    de__ttile_span(t->ty, &out->y0, &out->h);
+    out->heights = s->heights;
+    out->holes = s->holes;
+    out->cell[0] = DE__CELL_SIZE;
+    out->cell[1] = DE__CELL_SIZE;
+    memcpy(out->color, t->rgb, sizeof out->color);
+}
+
 /* Bakes cell (cx, cy)'s proxy into `<sub><leaf>.proxy.gltf` and lists it; no mesh, no proxy. */
 static bool wc_proxy_cell(wc_run *run, const de__manifest *m, const de__manifest_world *w,
                           de__wproxy *bk, wc_pitem *items, i32 cx, i32 cy, const char *sub,
                           const char *cells_dir, const char *leaf, de_strbuf *idx,
                           de_strbuf *bundles, de_strbuf *gltf) {
-    u32 n = 0;
+    u32 n = 0, tn = 0;
     for (u32 i = 0; i < run->ent_count; ++i) {
         const wc_ent *e = &run->ents[i];
         if (e->placed && e->cx == cx && e->cy == cy && wc_proxy_item(run, m, e, &items[n]))
             n++;
     }
-    if (n == 0)
+    for (u32 i = 0; i < run->tile_count; ++i)
+        tn += wc_tile_in(&run->tiles[i], cx, cy) ? 1u : 0u;
+    if (n == 0 && tn == 0)
         return true;
-    de__wproxy_item *list = (de__wproxy_item *)wc_alloc(run, sizeof *list * n);
-    if (list == NULL)
+    de__wproxy_item *list =
+        n > 0 ? (de__wproxy_item *)wc_alloc(run, sizeof *list * n) : NULL;
+    de__wproxy_tile *tl = tn > 0 ? (de__wproxy_tile *)wc_alloc(run, sizeof *tl * tn) : NULL;
+    if ((n > 0 && list == NULL) || (tn > 0 && tl == NULL)) {
+        if (list != NULL)
+            DE_FREE(run->a, list, sizeof *list * n);
         return false;
+    }
     for (u32 i = 0; i < n; ++i)
         list[i] = items[i].it;
+    for (u32 i = 0, k = 0; i < run->tile_count; ++i)
+        if (wc_tile_in(&run->tiles[i], cx, cy))
+            wc_proxy_tile(run, &run->tiles[i], cx, cy, &tl[k++]);
     u32 tris = 0;
-    de_result r = de__wproxy_bake(bk, list, n, w->proxy_triangle_ratio, gltf, &tris);
-    DE_FREE(run->a, list, sizeof *list * n);
+    de_result r = de__wproxy_bake(bk, list, n, tl, tn, w->proxy_triangle_ratio, gltf, &tris);
+    if (list != NULL)
+        DE_FREE(run->a, list, sizeof *list * n);
+    if (tl != NULL)
+        DE_FREE(run->a, tl, sizeof *tl * tn);
     if (r != DE_OK)
         return false;
     if (tris == 0)
@@ -970,16 +1036,7 @@ static bool wc_proxy_cell(wc_run *run, const de__manifest *m, const de__manifest
            wc_str(bundles, pid, strlen(pid)) && de_strbuf_append_cstr(bundles, "]\n") == DE_OK;
 }
 
-/* ---- Terrain tiles (DENG-857) -------------------------------------------------------------- */
-
-/* Tiles a terrain may overlap per axis before the cook refuses it (a 2 km tile at most). */
-#define WC_TILE_CELLS_MAX 9
-
-typedef struct wc_tile {
-    u64 terrain;
-    u32 tx, ty;
-    i32 cx0, cy0, cx1, cy1; /* the cells it overlaps, inclusive */
-} wc_tile;
+/* ---- Terrain tile blobs (DENG-857) --------------------------------------------------------- */
 
 typedef struct wc_terrain {
     f64 size, height;
@@ -1105,6 +1162,65 @@ static bool wc_tile_write(wc_run *run, const wc_ent *e, const wc_terrain *t, con
     return ok;
 }
 
+/* The base colour of each DeTerrain layer slot: its `material`'s base colour, or white. */
+static void wc_terrain_layer_colors(wc_run *run, const de__manifest *m, const toml_datum_t *dt,
+                                    f32 out[WC_TERRAIN_LAYERS][3]) {
+    for (u32 k = 0; k < WC_TERRAIN_LAYERS; ++k)
+        out[k][0] = out[k][1] = out[k][2] = 1.0f;
+    const toml_datum_t *ls = wc_get(dt, "layers");
+    if (ls == NULL || ls->type != TOML_ARRAY)
+        return;
+    for (int32_t k = 0; k < ls->u.arr.size && k < (int32_t)WC_TERRAIN_LAYERS; ++k) {
+        const toml_datum_t *l = &ls->u.arr.elem[k];
+        const toml_datum_t *mat = l->type == TOML_TABLE ? wc_get(l, "material") : NULL;
+        f32 rgb[3];
+        if (mat != NULL && mat->type == TOML_STRING && mat->u.str.ptr[0] != '\0' &&
+            wc_material_color(run, m, mat->u.str.ptr, rgb))
+            memcpy(out[k], rgb, sizeof rgb);
+    }
+}
+
+/* The splat-weighted mean of the layer colours over tile (tx, ty)'s samples; white without
+ * weights. */
+static void wc_tile_color(const wc_terrain *t, const f32 lc[WC_TERRAIN_LAYERS][3], u32 tx,
+                          u32 ty, f32 rgb[3]) {
+    u32 x0, w, y0, h;
+    de__ttile_span(tx, &x0, &w);
+    de__ttile_span(ty, &y0, &h);
+    f64 sum[3] = {0.0, 0.0, 0.0}, wsum = 0.0;
+    for (u32 j = 0; j < h; ++j)
+        for (u32 i = 0; i < w; ++i) {
+            const u8 *sp = &t->splat[((y0 + j) * DE__TTILE_RES + x0 + i) * WC_TERRAIN_LAYERS];
+            for (u32 k = 0; k < WC_TERRAIN_LAYERS; ++k) {
+                for (int c = 0; c < 3; ++c)
+                    sum[c] += (f64)sp[k] * (f64)lc[k][c];
+                wsum += (f64)sp[k];
+            }
+        }
+    for (int c = 0; c < 3; ++c)
+        rgb[c] = wsum > 0.0 ? (f32)(sum[c] / wsum) : 1.0f;
+}
+
+static bool wc_push_samples(wc_run *run, const wc_terrain *t, u32 *index) {
+    if (run->tsample_count == run->tsample_cap) {
+        u32 cap = run->tsample_cap ? run->tsample_cap * 2u : 4u;
+        wc_tsamples *n = (wc_tsamples *)wc_alloc(run, sizeof *n * cap);
+        if (n == NULL)
+            return false;
+        if (run->tsamples != NULL) {
+            memcpy(n, run->tsamples, sizeof *n * run->tsample_count);
+            DE_FREE(run->a, run->tsamples, sizeof *n * run->tsample_cap);
+        }
+        run->tsamples = n;
+        run->tsample_cap = cap;
+    }
+    wc_tsamples *s = &run->tsamples[run->tsample_count];
+    memcpy(s->heights, t->heights, sizeof s->heights);
+    memcpy(s->holes, t->holes, sizeof s->holes);
+    *index = run->tsample_count++;
+    return true;
+}
+
 static bool wc_push_tile(wc_run *run, const wc_tile *t) {
     if (run->tile_count == run->tile_cap) {
         u32 cap = run->tile_cap ? run->tile_cap * 2u : 16u;
@@ -1126,7 +1242,7 @@ static bool wc_push_tile(wc_run *run, const wc_tile *t) {
  * entity ID order, then ty, tx). The grid's columns run along world +x and its rows along +y
  * from the entity's world position; its rotation and scale are not applied. Returns false when
  * out of memory or a write failed; a malformed terrain is an error and is left out. */
-static bool wc_terrain_tiles(wc_run *run, const char *sub) {
+static bool wc_terrain_tiles(wc_run *run, const de__manifest *m, const char *sub) {
     wc_terrain *t = (wc_terrain *)wc_alloc(run, sizeof *t);
     if (t == NULL)
         return false;
@@ -1142,25 +1258,38 @@ static bool wc_terrain_tiles(wc_run *run, const char *sub) {
         }
         if (!wc_terrain_read(run, e, dt, t))
             continue;
-        f64 m[12];
-        wc_world(run, e, m);
+        f64 xf[12];
+        wc_world(run, e, xf);
         for (int r = 0; r < 3; ++r)
             for (int c = 0; c < 3; ++c)
-                if (fabs(m[r * 4 + c] - (r == c ? 1.0 : 0.0)) > 1e-6) {
+                if (fabs(xf[r * 4 + c] - (r == c ? 1.0 : 0.0)) > 1e-6) {
                     wc_msg(run, "warning", e->source, e->line,
                            "terrain 0x%016llx: its rotation and scale are not applied to its "
                            "streaming tiles",
                            (unsigned long long)e->id);
                     r = c = 3;
                 }
-        const f64 o[3] = {m[3], m[7], m[11]};
+        const f64 o[3] = {xf[3], xf[7], xf[11]};
         const f64 sp = t->size / (f64)(DE__TTILE_RES - 1u);
+        f32 lc[WC_TERRAIN_LAYERS][3];
+        wc_terrain_layer_colors(run, m, dt, lc);
+        u32 samples = 0;
+        ok = wc_push_samples(run, t, &samples);
         for (u32 ty = 0; ok && ty < DE__TTILE_COUNT; ++ty)
             for (u32 tx = 0; ok && tx < DE__TTILE_COUNT; ++tx) {
                 u32 x0, w, y0, h;
                 de__ttile_span(tx, &x0, &w);
                 de__ttile_span(ty, &y0, &h);
-                wc_tile tl = {e->id, tx, ty, 0, 0, 0, 0};
+                wc_tile tl;
+                memset(&tl, 0, sizeof tl);
+                tl.terrain = e->id;
+                tl.tx = tx;
+                tl.ty = ty;
+                tl.samples = samples;
+                memcpy(tl.origin, o, sizeof tl.origin);
+                tl.spacing = sp;
+                tl.height = t->height;
+                wc_tile_color(t, (const f32(*)[3])lc, tx, ty, tl.rgb);
                 tl.cx0 = de__cell_coord(o[0] + (f64)x0 * sp);
                 tl.cx1 = de__cell_coord(o[0] + (f64)(x0 + w - 1u) * sp);
                 tl.cy0 = de__cell_coord(o[1] + (f64)y0 * sp);
@@ -1177,10 +1306,6 @@ static bool wc_terrain_tiles(wc_run *run, const char *sub) {
     }
     DE_FREE(run->a, t, sizeof *t);
     return ok;
-}
-
-static bool wc_tile_in(const wc_tile *t, i32 cx, i32 cy) {
-    return cx >= t->cx0 && cx <= t->cx1 && cy >= t->cy0 && cy <= t->cy1;
 }
 
 /* `depends = [...]` of cell (cx, cy): the tiles that overlap it, in run->tiles order. */
@@ -1516,7 +1641,7 @@ static int wc_cook(wc_run *run, const de__manifest *m, const de__manifest_world 
     de_strbuf bundles;
     de_strbuf_init(&bundles, run->a);
     /* Terrain tiles first (DENG-857): a cell that only a tile overlaps is a cell too. */
-    ok = ok && wc_terrain_tiles(run, sub);
+    ok = ok && wc_terrain_tiles(run, m, sub);
     u32 cell_cap = run->ent_count + 1u;
     for (u32 i = 0; i < run->tile_count; ++i)
         cell_cap += (u32)(run->tiles[i].cx1 - run->tiles[i].cx0 + 1) *
@@ -1612,6 +1737,10 @@ static int wc_cook(wc_run *run, const de__manifest *m, const de__manifest_world 
     if (run->tiles != NULL)
         DE_FREE(run->a, run->tiles, sizeof *run->tiles * run->tile_cap);
     run->tiles = NULL;
+    if (run->tsamples != NULL)
+        DE_FREE(run->a, run->tsamples, sizeof *run->tsamples * run->tsample_cap);
+    run->tsamples = NULL;
+    run->tsample_count = run->tsample_cap = 0;
     const u32 tiles = run->tile_count;
     run->tile_count = run->tile_cap = 0;
     if (run->xrefs != NULL)
