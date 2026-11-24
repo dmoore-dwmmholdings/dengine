@@ -58,6 +58,15 @@ static inline bool de__cell_name(char *buf, size_t cap, const char *world, i32 c
     return n > 0 && (size_t)n < cap;
 }
 
+/**
+ * DENG-830: writes "world/<world>/proxy_<cx>_<cy>", the far proxy model (and its bundle) of a
+ * cell; its mesh is the sub-asset "<that>#proxy". Returns false when it does not fit.
+ */
+static inline bool de__cell_proxy_name(char *buf, size_t cap, const char *world, i32 cx, i32 cy) {
+    int n = snprintf(buf, cap, "world/%s/proxy_%d_%d", world, (int)cx, (int)cy);
+    return n > 0 && (size_t)n < cap;
+}
+
 /* Parses a canonical decimal i32 at *s up to `end` char; advances *s. */
 static inline bool de__cell_parse_int(const char **s, char end, i32 *out) {
     const char *p = *s;
@@ -84,16 +93,14 @@ static inline bool de__cell_parse_int(const char **s, char end, i32 *out) {
     return true;
 }
 
-/**
- * Parses a bundle name "world/<world>/cell_<cx>_<cy>" of world `world`. False for any other
- * name, also for non-canonical numbers ("+3", "03", "-0").
- */
-static inline bool de__cell_name_parse(const char *name, const char *world, i32 *cx, i32 *cy) {
-    size_t wl = strlen(world);
+/* "world/<world><kind><cx>_<cy>" with kind "/cell_" or "/proxy_" (DENG-830). */
+static inline bool de__cell_kind_parse(const char *name, const char *world, const char *kind,
+                                       i32 *cx, i32 *cy) {
+    size_t wl = strlen(world), kl = strlen(kind);
     if (strncmp(name, "world/", 6) != 0 || strncmp(name + 6, world, wl) != 0 ||
-        strncmp(name + 6 + wl, "/cell_", 6) != 0)
+        strncmp(name + 6 + wl, kind, kl) != 0)
         return false;
-    const char *p = name + 12 + wl;
+    const char *p = name + 6 + wl + kl;
     i32 x = 0, y = 0;
     if (!de__cell_parse_int(&p, '_', &x))
         return false;
@@ -103,6 +110,19 @@ static inline bool de__cell_name_parse(const char *name, const char *world, i32 
     *cx = x;
     *cy = y;
     return true;
+}
+
+/**
+ * Parses a bundle name "world/<world>/cell_<cx>_<cy>" of world `world`. False for any other
+ * name, also for non-canonical numbers ("+3", "03", "-0").
+ */
+static inline bool de__cell_name_parse(const char *name, const char *world, i32 *cx, i32 *cy) {
+    return de__cell_kind_parse(name, world, "/cell_", cx, cy);
+}
+
+/** The same for a far proxy bundle "world/<world>/proxy_<cx>_<cy>" (DENG-830). */
+static inline bool de__cell_proxy_parse(const char *name, const char *world, i32 *cx, i32 *cy) {
+    return de__cell_kind_parse(name, world, "/proxy_", cx, cy);
 }
 
 /** One cell and a sort key. */

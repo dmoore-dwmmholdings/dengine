@@ -1,0 +1,48 @@
+# DENG-830: far proxy and 100 km goldens of the world partition (tests/golden/world/world_scenes.c).
+# Two worlds with the same content: "near" in cell (0, 0) and "far" 99840 m (390 cells) away on x
+# and y. `de-cook world` writes worlds/<name>/ (committed: cells, proxies and cells.toml); after
+# editing a source scene or a [worlds.*] table, cook both again:
+#   de-cook world tests/golden/world/assets/assets.toml --world near
+#   de-cook world tests/golden/world/assets/assets.toml --world far
+# Geometry and materials are procedural CC0 (copied from base_tier/assets).
+[project]
+asset_root = "."
+include = ["worlds/near/cells.toml", "worlds/far/cells.toml"]
+
+[defaults.model]
+generate_lods = false
+
+[assets]
+"mesh/box" = {type="model", source="meshes/box.gltf"}
+"mesh/sphere" = {type="model", source="meshes/sphere.gltf"}
+"env/sky" = {type="texture",source="env/sky.exr",usage="environment",env_size=32,env_samples=256,compression="none"}
+"mat/white" = {type="material",source="materials/white.mat.toml"}
+"mat/red" = {type="material",source="materials/red.mat.toml"}
+"mat/green" = {type="material",source="materials/green.mat.toml"}
+"mat/ground" = {type="material",source="materials/ground.mat.toml"}
+"src/near" = {type="scene",source="scenes/near_world.scene.toml"}
+"src/far" = {type="scene",source="scenes/far_world.scene.toml"}
+"scenes/near_view" = {type="scene",source="scenes/near_view.scene.toml"}
+"scenes/far_view" = {type="scene",source="scenes/far_view.scene.toml"}
+
+[worlds.near]
+scenes = ["src/near"]
+load_radius = 300.0
+unload_radius = 400.0
+max_loads_per_frame = 4
+
+[worlds.near.proxy]
+enabled = true
+triangle_ratio = 0.1
+fade_seconds = 1.0
+
+[worlds.far]
+scenes = ["src/far"]
+load_radius = 300.0
+unload_radius = 400.0
+max_loads_per_frame = 4
+
+[worlds.far.proxy]
+enabled = true
+triangle_ratio = 0.1
+fade_seconds = 1.0

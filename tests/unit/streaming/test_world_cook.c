@@ -5,6 +5,8 @@
  * The fixture tests/assets/world_small/ holds a world "small" of 2 scenes and 7 entities, and its
  * committed cook output assets/worlds/small/ (4 cells and cells.toml). The tests cook it into two
  * scratch directories (build tree) and compare the bytes with each other and with the golden.
+ * world_cook_proxy (DENG-830) cooks the golden world "near" (tests/golden/world/assets), whose
+ * proxies are enabled, and checks the far proxy glTF and its cells.toml entries.
  * world_cook_pin (DENG-831) cooks a scratch world whose roots carry DeWorldCellPin.
  * To refresh the golden after an intended format change:
  *   de-cook world tests/assets/world_small/assets.toml --world small
@@ -133,6 +135,79 @@ TEST(streaming, world_cook_deterministic) {
     far[n] = '\0';
     EXPECT_TRUE(strstr(far, "position = [160.0, 160.125, 3.0]") != NULL);
     free(far);
+}
+
+/* ---- test_world_cook_proxy (DENG-830) ------------------------------------------------------ */
+
+/* The golden world "near" (tests/golden/world/assets) has proxies enabled: its cell (0, 0) bakes a
+ * far proxy glTF with one primitive per base colour, listed in cells.toml as a model and a
+ * bundle. */
+#define GOLDEN_WORLD FIXTURE "/../../golden/world/assets"
+
+static int run_near(const char *out_dir, wc_cap *cap) {
+    const char *argv[] = {GOLDEN_WORLD "/assets.toml", "--world", "near", "--out", out_dir};
+    de_cook_io io = {wc_cap_write, cap};
+    return de_cook_world_main(5, argv, &io);
+}
+
+static char *slurp_text(const char *dir, const char *file) {
+    char path[1024];
+    snprintf(path, sizeof path, "%s/%s/%s", TMP, dir, file);
+    size_t n = 0;
+    char *t = slurp(path, &n);
+    char *z = t ? (char *)realloc(t, n + 1) : NULL;
+    if (z == NULL) {
+        free(t);
+        return NULL;
+    }
+    z[n] = '\0';
+    return z;
+}
+
+static size_t count_of(const char *hay, const char *needle) {
+    size_t n = 0;
+    for (const char *p = strstr(hay, needle); p; p = strstr(p + 1, needle))
+        ++n;
+    return n;
+}
+
+TEST(streaming, world_cook_proxy) {
+    tmp_mount();
+    ASSERT_EQ(de_dir_create("wctmp:/proxy_a"), DE_OK);
+    ASSERT_EQ(de_dir_create("wctmp:/proxy_b"), DE_OK);
+    wc_cap a, b;
+    memset(&a, 0, sizeof a);
+    memset(&b, 0, sizeof b);
+    ASSERT_EQ(run_near(TMP "/proxy_a", &a), DE_COOK_EXIT_OK);
+    ASSERT_EQ(run_near(TMP "/proxy_b", &b), DE_COOK_EXIT_OK);
+    EXPECT_STREQ(a.out, b.out);
+
+    /* Deterministic, and equal to the committed golden. */
+    char pa[1024], pb[1024], pg[1024];
+    static const char *const files[] = {"cells.toml", "cell_0_0.proxy.gltf"};
+    for (size_t i = 0; i < 2; ++i) {
+        snprintf(pa, sizeof pa, "%s/proxy_a/%s", TMP, files[i]);
+        snprintf(pb, sizeof pb, "%s/proxy_b/%s", TMP, files[i]);
+        snprintf(pg, sizeof pg, "%s/worlds/near/%s", GOLDEN_WORLD, files[i]);
+        EXPECT_TRUE(same_bytes(pa, pb));
+        EXPECT_TRUE(same_bytes(pa, pg));
+    }
+
+    char *cells = slurp_text("proxy_a", "cells.toml");
+    ASSERT_TRUE(cells != NULL);
+    EXPECT_TRUE(strstr(cells, "\"world/near/proxy_0_0\" = { type = \"model\", source = "
+                              "\"worlds/near/cell_0_0.proxy.gltf\"") != NULL);
+    EXPECT_TRUE(strstr(cells, "[bundles.\"world/near/proxy_0_0\"]") != NULL);
+    free(cells);
+
+    /* Four colour groups (ground, red, green, white): four primitives and materials. */
+    char *gl = slurp_text("proxy_a", "cell_0_0.proxy.gltf");
+    ASSERT_TRUE(gl != NULL);
+    EXPECT_EQ(count_of(gl, "\"name\":\"proxy"), (size_t)6); /* mesh, node, proxy0..3 */
+    EXPECT_TRUE(strstr(gl, "\"name\":\"proxy3\"") != NULL);
+    EXPECT_TRUE(strstr(gl, "\"name\":\"proxy4\"") == NULL);
+    EXPECT_TRUE(strstr(gl, "\"TEXCOORD_0\"") == NULL);
+    free(gl);
 }
 
 /* ---- test_world_cook_pin (DENG-831) --------------------------------------------------------- */

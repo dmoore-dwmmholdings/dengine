@@ -11,8 +11,16 @@
  * `[prefab]` table. Writes, into `--out` (default: <manifest dir>/<asset_root>/<cells_dir>):
  *
  *   cell_<cx>_<cy>.scene.toml   one per non-empty cell, keyed layout, entities by ID, keys sorted
- *   cells.toml                  [assets] and [bundles] for every cell; include it from the
- *                               project manifest
+ *   cell_<cx>_<cy>.proxy.gltf   the cell's far proxy mesh (DENG-830), when the world's
+ *                               [worlds.<name>.proxy] is enabled (the default) and the cell
+ *                               draws at least one mesh; see world_proxy.h
+ *   cells.toml                  [assets] and [bundles] for every cell (and, per proxy, a model
+ *                               asset and bundle "world/<name>/proxy_<cx>_<cy>" whose mesh is
+ *                               "#proxy"); include it from the project manifest
+ *
+ * The proxy keeps `triangle_ratio` of the cell's triangles; the partition draws it while the cell
+ * is not loaded and crossfades it over `fade_seconds` (world_partition.c). A mesh the baker
+ * cannot read is left out of the proxy with a warning.
  *
  * The output depends only on the input bytes (no time, no absolute path): cooking twice gives
  * byte-identical files. Sources in cells.toml are `<cells_dir>/cell_<cx>_<cy>.scene.toml`, so

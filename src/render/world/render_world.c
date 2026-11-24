@@ -36,7 +36,8 @@ static u32 inst_arrays(de__rw_instances *x, rw_array *out) {
     out[6] = (rw_array){(void **)&x->layer_mask, sizeof(u32), DE_ALIGNOF(u32)};
     out[7] = (rw_array){(void **)&x->flags, sizeof(u8), DE_ALIGNOF(u8)};
     out[8] = (rw_array){(void **)&x->sprite, sizeof(DeSprite), DE_ALIGNOF(DeSprite)};
-    return 9;
+    out[9] = (rw_array){(void **)&x->fade, sizeof(f32), DE_ALIGNOF(f32)};
+    return 10;
 }
 
 static u32 light_arrays(de__rw_lights *x, rw_array *out) {
@@ -46,7 +47,7 @@ static u32 light_arrays(de__rw_lights *x, rw_array *out) {
     return 3;
 }
 
-#define RW_MAX_ARRAYS 24u
+#define RW_MAX_ARRAYS 32u
 
 static u32 cat_arrays(de__rw_kind k, void *soa, rw_array *out) {
     return k == DE__RW_KIND_INSTANCE ? inst_arrays((de__rw_instances *)soa, out)
@@ -67,8 +68,12 @@ static u32 pool_arrays(de__rw_pool *p, bool bounds, rw_array *out) {
     out[n++] = (rw_array){(void **)&p->removed, sizeof(u32), DE_ALIGNOF(u32)};
     out[n++] = (rw_array){(void **)&p->moved, sizeof(u32), DE_ALIGNOF(u32)};
     out[n++] = (rw_array){(void **)&p->moved_prev, sizeof(u32), DE_ALIGNOF(u32)};
-    if (bounds)
+    if (bounds) {
         out[n++] = (rw_array){(void **)&p->local_bounds, sizeof(de_aabb), DE_ALIGNOF(de_aabb)};
+        out[n++] = (rw_array){(void **)&p->faded, sizeof(u32), DE_ALIGNOF(u32)};
+        out[n++] = (rw_array){(void **)&p->fade_seen, sizeof(u64), DE_ALIGNOF(u64)};
+        out[n++] = (rw_array){(void **)&p->fade_listed, sizeof(u8), DE_ALIGNOF(u8)};
+    }
     return n;
 }
 
@@ -518,6 +523,7 @@ de_result de__rw_pool_end(de__render_world *rw, de__rw_kind k, de__render_world_
                 arrays_copy_slot(dst, src, n, s);
         f->instances.count = count;
         f->instances.live = rw->inst.live;
+        f->instances.faded = rw->inst.faded;
         f->inst_synced = frame;
         copy_list(f->dirty_instances, p->dirty, p->dirty_count);
         copy_list(f->removed_instances, p->removed, p->removed_count);

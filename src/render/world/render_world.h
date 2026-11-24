@@ -96,6 +96,7 @@ enum {
 typedef struct de__rw_instances {
     u32 count; /**< slots, used or free */
     u32 live;  /**< slots holding an instance */
+    u32 faded; /**< DENG-830: slots with a nonzero `fade` (the alpha raster runs for them) */
     u64 *entity;
     de_mesh *mesh;
     de_material *materials;    /**< DE__RW_MATERIALS per slot; zero = the mesh's default */
@@ -106,6 +107,8 @@ typedef struct de__rw_instances {
     u32 *layer_mask;           /**< DeMeshRenderer.layer_mask */
     u8 *flags;                 /**< DE__RW_INST_* */
     DeSprite *sprite;          /**< S19: component snapshot for sprite instances. */
+    f32 *fade;                 /**< DENG-830: signed dither fade from DeRenderFade; 0 = none,
+                                    d > 0 drops a share d, d < 0 keeps the complement of -d */
 } de__rw_instances;
 
 /** Lights, SoA, as de__rw_instances. The light points along its transform; the direction
@@ -237,6 +240,11 @@ typedef struct de__rw_pool {
     u32 *removed, removed_count;
     u32 *moved, moved_count;           /**< slots whose transform changed this frame */
     u32 *moved_prev, moved_prev_count; /**< ... the frame before (their prev catches up) */
+    /* DENG-830, instances only: the slots with a nonzero fade (each once), the frame a
+     * DeRenderFade last set each slot's fade, and whether a slot is on the list */
+    u32 *faded, faded_count;
+    u64 *fade_seen;
+    u8 *fade_listed;
     /* entity index -> slot (DE__RW_NONE), with the generation it belongs to */
     u32 map_capacity;
     u32 *map_slot;

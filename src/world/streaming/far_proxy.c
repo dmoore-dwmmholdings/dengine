@@ -2,8 +2,9 @@
  * DENG-271: far-proxy state per cell. A proxy stands in for a cell that is not loaded. When the
  * cell loads, the proxy fades out over `fade_seconds` (alpha 1 -> 0) while the cell fades in
  * (1 - alpha); the renderer dithers both. When the cell unloads, the proxy is back at once (the
- * cell is gone, so there is nothing to fade from). The proxy mesh bake and its GPU draw are a
- * follow-up; this file owns the timing that both share.
+ * cell is gone, so there is nothing to fade from). This file owns the timing; `de-cook world`
+ * bakes the proxy meshes (tools/cook/world_proxy.c, DENG-830) and world_partition.c draws them
+ * with the render module's dithered DeRenderFade.
  */
 #include "streaming_internal.h"
 

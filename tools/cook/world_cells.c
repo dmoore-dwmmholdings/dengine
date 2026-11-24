@@ -8,11 +8,16 @@
  * A root with DeWorldCellPin { cx, cy } goes, with its children, to that cell instead of the one
  * that holds its DeTransform position (DENG-831); it needs no transform then.
  *
+ * Far proxies (DENG-830): for each cell, wc_proxy_item lists every placed entity's
+ * DeMeshRenderer mesh (with its world transform made relative to the cell origin and its
+ * material overrides' base colours), and world_proxy.c bakes the list into one glTF.
+ *
  * Known gap: an entity reference (a component field that holds another entity's scene ID) that
  * crosses a cell boundary is written unchanged; the cell's scene import then reports it as a
  * reference outside the file. Keep cross-referencing entities under one root.
  */
 #include "world_cells.h"
+#include "world_proxy.h"
 
 #include "asset/manifest_internal.h"
 #include "asset/resolve_internal.h"
@@ -24,6 +29,7 @@
 #include <dengine/de_memory.h>
 #include <dengine/de_platform.h>
 
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,6 +67,9 @@ typedef struct wc_run {
     u32 doc_count, doc_cap;
     wc_ent *ents;
     u32 ent_count, ent_cap;
+    /* far proxies: material base colours read so far (DENG-830) */
+    struct wc_matc *mats;
+    u32 mat_count, mat_cap;
 } wc_run;
 
 /* ---- Output helpers ------------------------------------------------------------------------ */
@@ -666,6 +675,265 @@ static bool wc_write(const char *rel, const de_strbuf *b) {
     return de_file_write_all_atomic(vpath, b->ptr != NULL ? b->ptr : "", (u64)b->len) == DE_OK;
 }
 
+/* ---- Far proxies (DENG-830) ---------------------------------------------------------------- */
+
+/* A 3-vector or quaternion as an array or a table of `names`; `n` values. */
+static bool wc_vec(const toml_datum_t *v, const char *const *names, int n, f64 *out) {
+    if (v == NULL)
+        return false;
+    if (v->type == TOML_ARRAY) {
+        if (v->u.arr.size != n)
+            return false;
+        for (int i = 0; i < n; ++i)
+            if (!wc_num(&v->u.arr.elem[i], &out[i]))
+                return false;
+        return true;
+    }
+    if (v->type == TOML_TABLE) {
+        for (int i = 0; i < n; ++i)
+            if (!wc_num(wc_get(v, names[i]), &out[i]))
+                return false;
+        return true;
+    }
+    return false;
+}
+
+/* The local DeTransform of `tab` as a row-major 3x4 matrix (identity parts where missing). */
+static void wc_local(const toml_datum_t *tab, f64 m[12]) {
+    static const char *const k_xyz[3] = {"x", "y", "z"};
+    static const char *const k_xyzw[4] = {"x", "y", "z", "w"};
+    f64 p[3] = {0, 0, 0}, q[4] = {0, 0, 0, 1}, sc[3] = {1, 1, 1};
+    const toml_datum_t *tf = wc_get(tab, "DeTransform");
+    if (tf != NULL && tf->type == TOML_TABLE) {
+        (void)wc_position(tf, p);
+        if (!wc_vec(wc_get(tf, "rotation"), k_xyzw, 4, q)) {
+            q[0] = q[1] = q[2] = 0.0;
+            q[3] = 1.0;
+        }
+        const toml_datum_t *s = wc_get(tf, "scale");
+        f64 u;
+        if (wc_num(s, &u))
+            sc[0] = sc[1] = sc[2] = u;
+        else if (!wc_vec(s, k_xyz, 3, sc))
+            sc[0] = sc[1] = sc[2] = 1.0;
+    }
+    f64 len = sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    if (!(len > 0.0)) {
+        q[0] = q[1] = q[2] = 0.0;
+        q[3] = len = 1.0;
+    }
+    const f64 x = q[0] / len, y = q[1] / len, z = q[2] / len, w = q[3] / len;
+    const f64 r[9] = {1 - 2 * (y * y + z * z), 2 * (x * y - z * w),     2 * (x * z + y * w),
+                      2 * (x * y + z * w),     1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+                      2 * (x * z - y * w),     2 * (y * z + x * w),     1 - 2 * (x * x + y * y)};
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j)
+            m[i * 4 + j] = r[i * 3 + j] * sc[j];
+        m[i * 4 + 3] = p[i];
+    }
+}
+
+/* a = a * b (3x4 affine). */
+static void wc_mul(f64 a[12], const f64 b[12]) {
+    f64 o[12];
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 4; ++j)
+            o[i * 4 + j] = a[i * 4 + 0] * b[0 * 4 + j] + a[i * 4 + 1] * b[1 * 4 + j] +
+                           a[i * 4 + 2] * b[2 * 4 + j];
+        o[i * 4 + 3] += a[i * 4 + 3];
+    }
+    memcpy(a, o, sizeof o);
+}
+
+typedef struct wc_matc {
+    u64 hash;
+    bool ok;
+    f32 rgb[3];
+} wc_matc;
+
+/* The base colour of material asset `id` (its source TOML's `base_color`); false when it is not
+ * a material with one. Cached per cook. */
+static bool wc_material_color(wc_run *run, const de__manifest *m, const char *id, f32 rgb[3]) {
+    u64 h = 1469598103934665603ull;
+    for (const char *c = id; *c; ++c)
+        h = (h ^ (u8)*c) * 1099511628211ull;
+    for (u32 i = 0; i < run->mat_count; ++i)
+        if (run->mats[i].hash == h) {
+            memcpy(rgb, run->mats[i].rgb, sizeof(f32) * 3u);
+            return run->mats[i].ok;
+        }
+    wc_matc e = {h, false, {1.0f, 1.0f, 1.0f}};
+    const de__manifest_asset *as = de__manifest_find_asset(m, id);
+    char raw[DE_FS_PATH_MAX], vpath[DE_FS_PATH_MAX];
+    const char *ar = m->asset_root != NULL ? m->asset_root : "";
+    void *data = NULL;
+    u64 size = 0;
+    if (as != NULL && strcmp(as->type, "material") == 0 && as->source != NULL &&
+        snprintf(raw, sizeof raw, "%s%s%s%s", WC_IN_PREFIX, ar, ar[0] ? "/" : "", as->source) <
+            (int)sizeof raw &&
+        de_path_normalize(raw, vpath, sizeof vpath) == DE_OK &&
+        de_file_read_all(vpath, run->a, &data, &size) == DE_OK) {
+        if (size <= (u64)INT32_MAX) {
+            toml_result_t tr = de__toml_parse(run->a, (const char *)data, (int)size);
+            if (tr.ok) {
+                const toml_datum_t *bc = wc_get(&tr.toptab, "base_color");
+                if (bc != NULL && bc->type == TOML_ARRAY &&
+                    (bc->u.arr.size == 3 || bc->u.arr.size == 4)) {
+                    e.ok = true;
+                    for (int c = 0; c < 3; ++c) {
+                        f64 v;
+                        if (wc_num(&bc->u.arr.elem[c], &v))
+                            e.rgb[c] = (f32)v;
+                        else
+                            e.ok = false;
+                    }
+                }
+            }
+            if (tr.__internal != NULL)
+                de__toml_free(tr);
+        }
+        DE_FREE(run->a, data, size + 1);
+    }
+    if (run->mat_count == run->mat_cap) {
+        u32 cap = run->mat_cap ? run->mat_cap * 2u : 16u;
+        wc_matc *nm = (wc_matc *)wc_alloc(run, sizeof *nm * cap);
+        if (nm != NULL) {
+            if (run->mat_count > 0) {
+                memcpy(nm, run->mats, sizeof *nm * run->mat_count);
+                DE_FREE(run->a, run->mats, sizeof *nm * run->mat_cap);
+            }
+            run->mats = nm;
+            run->mat_cap = cap;
+        }
+    }
+    if (run->mat_count < run->mat_cap)
+        run->mats[run->mat_count++] = e;
+    memcpy(rgb, e.rgb, sizeof(f32) * 3u);
+    return e.ok;
+}
+
+typedef struct wc_pitem {
+    de__wproxy_item it;
+    char vpath[DE_FS_PATH_MAX];
+    char mesh[160];
+} wc_pitem;
+
+static void wc_proxy_warn(void *user, const de__wproxy_item *it, const char *msg) {
+    wc_msg((wc_run *)user, "warning", it->file, it->line, "%s", msg);
+}
+
+/* The proxy item of entity `e` in its cell's frame; false when it draws no model mesh (a
+ * reason is warned when it names one the bake cannot use). */
+static bool wc_proxy_item(wc_run *run, const de__manifest *m, const wc_ent *e, wc_pitem *pi) {
+    const toml_datum_t *mr = wc_get(e->tab, "DeMeshRenderer");
+    const toml_datum_t *mesh = mr != NULL && mr->type == TOML_TABLE ? wc_get(mr, "mesh") : NULL;
+    if (mesh == NULL || mesh->type != TOML_STRING || mesh->u.str.ptr[0] == '\0')
+        return false;
+    const char *ref = mesh->u.str.ptr;
+    const char *hash = strchr(ref, '#');
+    char model[160];
+    size_t mlen = hash != NULL ? (size_t)(hash - ref) : strlen(ref);
+    if (mlen >= sizeof model || (hash != NULL && strlen(hash + 1) >= sizeof pi->mesh)) {
+        wc_msg(run, "warning", e->source, e->line, "far proxy: mesh `%.64s...` is too long", ref);
+        return false;
+    }
+    memcpy(model, ref, mlen);
+    model[mlen] = '\0';
+    const de__manifest_asset *as = de__manifest_find_asset(m, model);
+    if (as == NULL || strcmp(as->type, "model") != 0 || as->source == NULL) {
+        wc_msg(run, "warning", e->source, e->line,
+               "far proxy: mesh `%s` is not a sub-asset of a model asset; left out", ref);
+        return false;
+    }
+    char raw[DE_FS_PATH_MAX];
+    const char *ar = m->asset_root != NULL ? m->asset_root : "";
+    int n = snprintf(raw, sizeof raw, "%s%s%s%s", WC_IN_PREFIX, ar, ar[0] ? "/" : "", as->source);
+    if (n < 0 || (size_t)n >= sizeof raw ||
+        de_path_normalize(raw, pi->vpath, sizeof pi->vpath) != DE_OK) {
+        wc_msg(run, "warning", e->source, e->line, "far proxy: bad source of `%s`", model);
+        return false;
+    }
+    (void)snprintf(pi->mesh, sizeof pi->mesh, "%s", hash != NULL ? hash + 1 : "");
+    pi->it.model_vpath = pi->vpath;
+    pi->it.mesh = pi->mesh;
+    pi->it.scale = 1.0;
+    const de__manifest_kv *kv = de__manifest_find_setting(as->settings, as->setting_count, "scale");
+    if (kv != NULL && kv->value.type == DE__MANIFEST_FLOAT)
+        pi->it.scale = kv->value.u.f;
+    else if (kv != NULL && kv->value.type == DE__MANIFEST_INT)
+        pi->it.scale = (f64)kv->value.u.i;
+    pi->it.file = e->source;
+    pi->it.line = e->line;
+    pi->it.color_mask = 0;
+    const toml_datum_t *mats = wc_get(mr, "materials");
+    if (mats != NULL && mats->type == TOML_ARRAY)
+        for (int32_t k = 0; k < mats->u.arr.size && k < 8; ++k) {
+            const toml_datum_t *mv = &mats->u.arr.elem[k];
+            if (mv->type == TOML_STRING && mv->u.str.ptr[0] != '\0' &&
+                wc_material_color(run, m, mv->u.str.ptr, pi->it.colors[k]))
+                pi->it.color_mask |= 1u << k;
+        }
+    /* Up the parent chain; the root's translation is relative to the cell origin. */
+    wc_local(e->tab, pi->it.m);
+    u32 cur = (u32)(e - run->ents), steps = 0;
+    while (run->ents[cur].parent_id != 0 && steps++ <= run->ent_count) {
+        u32 p = wc_find(run, run->ents[cur].parent_id);
+        if (p == UINT32_MAX)
+            break;
+        f64 pm[12];
+        wc_local(run->ents[p].tab, pm);
+        wc_mul(pm, pi->it.m);
+        memcpy(pi->it.m, pm, sizeof pm);
+        cur = p;
+    }
+    pi->it.m[3] -= (f64)e->cx * DE__CELL_SIZE;
+    pi->it.m[7] -= (f64)e->cy * DE__CELL_SIZE;
+    return true;
+}
+
+/* Bakes cell (cx, cy)'s proxy into `<sub><leaf>.proxy.gltf` and lists it; no mesh, no proxy. */
+static bool wc_proxy_cell(wc_run *run, const de__manifest *m, const de__manifest_world *w,
+                          de__wproxy *bk, wc_pitem *items, i32 cx, i32 cy, const char *sub,
+                          const char *cells_dir, const char *leaf, de_strbuf *idx,
+                          de_strbuf *bundles, de_strbuf *gltf) {
+    u32 n = 0;
+    for (u32 i = 0; i < run->ent_count; ++i) {
+        const wc_ent *e = &run->ents[i];
+        if (e->placed && e->cx == cx && e->cy == cy && wc_proxy_item(run, m, e, &items[n]))
+            n++;
+    }
+    if (n == 0)
+        return true;
+    de__wproxy_item *list = (de__wproxy_item *)wc_alloc(run, sizeof *list * n);
+    if (list == NULL)
+        return false;
+    for (u32 i = 0; i < n; ++i)
+        list[i] = items[i].it;
+    u32 tris = 0;
+    de_result r = de__wproxy_bake(bk, list, n, w->proxy_triangle_ratio, gltf, &tris);
+    DE_FREE(run->a, list, sizeof *list * n);
+    if (r != DE_OK)
+        return false;
+    if (tris == 0)
+        return true;
+    char pleaf[96], pid[192], file[DE_FS_PATH_MAX];
+    (void)snprintf(pleaf, sizeof pleaf, "%s.proxy.gltf", leaf);
+    de__cell_proxy_name(pid, sizeof pid, w->name, cx, cy);
+    (void)snprintf(file, sizeof file, "%s%s", sub, pleaf);
+    if (!wc_write(file, gltf)) {
+        wc_msg(run, "error", NULL, 0, "cannot write %s", file);
+        return false;
+    }
+    return wc_str(idx, pid, strlen(pid)) &&
+           de_strbuf_appendf(idx,
+                             " = { type = \"model\", source = \"%s/%s\", generate_lods = false }\n",
+                             cells_dir, pleaf) == DE_OK &&
+           de_strbuf_append_cstr(bundles, "\n[bundles.") == DE_OK &&
+           wc_str(bundles, pid, strlen(pid)) &&
+           de_strbuf_append_cstr(bundles, "]\nassets = [") == DE_OK &&
+           wc_str(bundles, pid, strlen(pid)) && de_strbuf_append_cstr(bundles, "]\n") == DE_OK;
+}
+
 /* ---- The command --------------------------------------------------------------------------- */
 
 static int wc_cook(wc_run *run, const de__manifest *m, const de__manifest_world *w) {
@@ -743,6 +1011,15 @@ static int wc_cook(wc_run *run, const de__manifest *m, const de__manifest_world 
     if (ok)
         de__cell_keys_sort(cells, cell_count);
     u32 written = 0;
+    de__wproxy *bk = NULL;
+    wc_pitem *pitems = NULL;
+    de_strbuf gltf;
+    de_strbuf_init(&gltf, run->a);
+    if (ok && w->proxy_enabled) {
+        bk = de__wproxy_create(run->a, wc_proxy_warn, run);
+        pitems = (wc_pitem *)wc_alloc(run, sizeof *pitems * (run->ent_count + 1u));
+        ok = bk != NULL && pitems != NULL;
+    }
     for (u32 c = 0; ok && c < cell_count; ++c) {
         if (c > 0 && cells[c].cx == cells[c - 1].cx && cells[c].cy == cells[c - 1].cy)
             continue;
@@ -771,6 +1048,9 @@ static int wc_cook(wc_run *run, const de__manifest *m, const de__manifest_world 
              wc_str(&bundles, id, strlen(id)) &&
              de_strbuf_append_cstr(&bundles, "]\nassets = [") == DE_OK &&
              wc_str(&bundles, id, strlen(id)) && de_strbuf_append_cstr(&bundles, "]\n") == DE_OK;
+        if (ok && bk != NULL)
+            ok = wc_proxy_cell(run, m, w, bk, pitems, cx, cy, sub, cells_dir, leaf, &idx,
+                               &bundles, &gltf);
         written++;
     }
     ok = ok && de_strbuf_append(&idx, de_strbuf_view(&bundles)) == DE_OK;
@@ -784,6 +1064,14 @@ static int wc_cook(wc_run *run, const de__manifest *m, const de__manifest_world 
     }
     if (cells != NULL)
         DE_FREE(run->a, cells, sizeof *cells * (run->ent_count + 1u));
+    if (pitems != NULL)
+        DE_FREE(run->a, pitems, sizeof *pitems * (run->ent_count + 1u));
+    de__wproxy_destroy(bk);
+    de_strbuf_free(&gltf);
+    if (run->mats != NULL)
+        DE_FREE(run->a, run->mats, sizeof *run->mats * run->mat_cap);
+    run->mats = NULL;
+    run->mat_count = run->mat_cap = 0;
     de_strbuf_free(&bundles);
     de_strbuf_free(&cell);
     de_strbuf_free(&idx);

@@ -615,6 +615,20 @@ typedef struct DeMeshRenderer {
     bool cast_shadows, visible_in_rt;
 } DeMeshRenderer;
 
+/**
+ * DENG-830: a screen-door (dithered) fade for the DeMeshRenderer on the same entity. The visibility
+ * pass drops a fixed 4x4 ordered-dither share of the mesh's pixels, so a fade needs no blending and
+ * no sorting. `fade_out` is the share removed, in [0,1]: 0 draws the mesh whole (as if the
+ * component were absent) and 1 removes it. With `invert` the mask is the exact complement: the
+ * pixels a plain fade of `fade_out` removes are the ones an inverted fade of `1 - fade_out` keeps,
+ * so two meshes that cross-fade with the same value cover every pixel once. The world partition
+ * sets it on a cell's far proxy and on the cell's own meshes while they cross-fade.
+ */
+typedef struct DeRenderFade {
+    f32 fade_out;
+    bool invert;
+} DeRenderFade;
+
 typedef enum de_light_kind {
     DE_LIGHT_DIRECTIONAL,
     DE_LIGHT_POINT,

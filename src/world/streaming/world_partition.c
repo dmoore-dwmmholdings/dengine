@@ -18,13 +18,23 @@
  *  4. Unloaded cells inside a source's load radius are candidates, sorted nearest first (then
  *     cx, cy); loads start in that order, at most max_loads_per_frame and up to
  *     max_resident_cells cells loaded or loading.
- *  5. Far proxies step.
+ *  5. Far proxies step, and (DENG-830, with the render module) their entities follow them.
  *
  * DENG-831 (the editor's world.streaming, partition_editor.h): editor sources join the sources
  * after the entity ones; a cell forced to load is a candidate and never unloads whatever the
  * sources, a cell forced to unload never loads and unloads at the next update. A loaded cell
  * records its resident bytes (de_asset_status_list), its entity count and its content's z extent
  * when it is instantiated; a failed cell records why.
+ *
+ * DENG-830 (far proxies, with the render module): open requests the proxy bundle of each cell
+ * that has one ("world/<name>/proxy_<cx>_<cy>", written by `de-cook world` when the world's proxy
+ * is enabled). Once a proxy bundle is READY, the update spawns the proxy entity: a DeTransform at
+ * the cell origin and a DeMeshRenderer of the mesh "<bundle>#proxy" (no shadows, not in ray
+ * tracing). While the proxy is active it is drawn, with DeRenderFade { 1 - alpha } while it fades
+ * out; when it is not active its DeMeshRenderer is removed. While a loaded cell cross-fades with
+ * its proxy, each entity under the cell root that has a DeMeshRenderer gets DeRenderFade
+ * { alpha, invert }, the complement of the proxy's mask, and loses it when the fade ends. A cell
+ * with no proxy (or whose proxy has not loaded) is drawn whole at once.
  */
 #include "partition_editor.h"
 #include "streaming_internal.h"
@@ -33,6 +43,10 @@
 #include <dengine/de_ecs.h>
 #include <dengine/de_memory.h>
 #include <dengine/de_reflect.h>
+
+#if DE_HAS_RENDER
+#include <dengine/de_render.h>
+#endif
 
 #include <stdlib.h>
 #include <string.h>
@@ -52,6 +66,10 @@ typedef struct wp_cell {
     de_entity root;
     de_world_cell_state state;
     de__far_proxy proxy;
+    de_load_handle proxy_h; /* DENG-830: the proxy bundle; invalid when the cell has none */
+    de_entity proxy_e;      /* the proxy entity once its bundle is READY */
+    bool proxy_failed;      /* the proxy bundle did not load (warned once) */
+    bool cell_faded;        /* the cell's meshes carry DeRenderFade */
     de__wp_force force;
     u64 bytes;
     u32 entities;
@@ -81,6 +99,8 @@ struct de_world_partition {
     u32 max_loads, max_resident;
     bool proxy_enabled;
     f32 fade;
+    bool proxy_draw; /* DENG-830: the render components exist, so proxies are drawn */
+    de_component c_mr, c_fade;
     void (*on_cell)(void *user, i32 cx, i32 cy, de_entity root, bool loaded);
     void *user;
     de_world_partition_stats stats;
@@ -182,6 +202,173 @@ static const wp_cell *wp_find(const de_world_partition *p, i32 cx, i32 cy) {
     }
     return NULL;
 }
+
+/* ---- Far proxy entities (DENG-830) --------------------------------------------------------- */
+
+#if DE_HAS_RENDER
+/* Requests the proxy bundle of each cell that has one. */
+static de_result wp_proxy_open(de_world_partition *p) {
+    for (u32 i = 0; i < p->cell_count; ++i)
+        p->cells[i].proxy_e = DE_ENTITY_NULL;
+    if (!p->proxy_enabled || p->cell_count == 0)
+        return DE_OK;
+    DE_TRY(de_render_register_components(p->world));
+    p->c_mr = de_component_find(p->world, "DeMeshRenderer");
+    p->c_fade = de_component_find(p->world, "DeRenderFade");
+    if (!DE_HANDLE_VALID(p->c_mr) || !DE_HANDLE_VALID(p->c_fade))
+        return DE_FAIL(DE_ERR_INTERNAL, "world partition: the render components are missing");
+    p->proxy_draw = true;
+    u32 nb = de_asset_bundle_count(p->assets);
+    for (u32 i = 0; i < nb; ++i) {
+        const char *bn = de_asset_bundle_name(p->assets, i);
+        i32 cx, cy;
+        if (bn == NULL || !de__cell_proxy_parse(bn, p->name, &cx, &cy))
+            continue;
+        wp_cell *c = (wp_cell *)wp_find(p, cx, cy);
+        if (c == NULL || DE_HANDLE_VALID(c->proxy_h))
+            continue; /* a proxy without a cell is never drawn */
+        c->proxy_h = de_asset_load_bundle(p->assets, bn, DE_LOAD_NO_EVENTS);
+        if (!DE_HANDLE_VALID(c->proxy_h))
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "world partition: cannot request proxy %s", bn);
+    }
+    return DE_OK;
+}
+
+static void wp_proxy_spawn(de_world_partition *p, wp_cell *c) {
+    char name[WP_NAME_MAX + 48];
+    if (!de__cell_proxy_name(name, sizeof name - 8, p->name, c->cx, c->cy))
+        return;
+    strcat(name, "#proxy");
+    de_mesh mesh = de_asset_mesh(p->assets, de_asset_id_from(name));
+    de_entity e = de_entity_spawn(p->world);
+    bool added = de_entity_add(p->world, e, p->c_tf) != NULL &&
+                 de_entity_add(p->world, e, p->c_mr) != NULL;
+    de_transform *tf = added ? (de_transform *)de_entity_get(p->world, e, p->c_tf) : NULL;
+    DeMeshRenderer *mr = added ? (DeMeshRenderer *)de_entity_get(p->world, e, p->c_mr) : NULL;
+    if (tf == NULL || mr == NULL || !DE_HANDLE_VALID(mesh)) {
+        de_entity_despawn(p->world, e);
+        DE_WARN(p->log, "world %s: cannot spawn the far proxy of cell (%d, %d)", p->name,
+                (int)c->cx, (int)c->cy);
+        c->proxy_failed = true;
+        return;
+    }
+    tf->position = de__cell_origin(c->cx, c->cy);
+    tf->rotation.x = tf->rotation.y = tf->rotation.z = 0.0f;
+    tf->rotation.w = 1.0f;
+    tf->scale.x = tf->scale.y = tf->scale.z = 1.0f;
+    mr->mesh = mesh;
+    mr->layer_mask = ~0u;
+    mr->cast_shadows = false;
+    mr->visible_in_rt = false;
+    c->proxy_e = e;
+}
+
+/* Sets (fade_out >= 0) or removes (fade_out < 0) DeRenderFade on `e`. */
+static void wp_fade_set(de_world_partition *p, de_entity e, f32 fade_out, bool invert) {
+    if (fade_out < 0.0f) {
+        if (de_entity_has(p->world, e, p->c_fade))
+            de_entity_remove(p->world, e, p->c_fade);
+        return;
+    }
+    DeRenderFade *f = (DeRenderFade *)de_entity_get(p->world, e, p->c_fade);
+    if (f == NULL)
+        f = (DeRenderFade *)de_entity_add(p->world, e, p->c_fade);
+    if (f != NULL) {
+        f->fade_out = fade_out;
+        f->invert = invert;
+    }
+}
+
+/* The meshes under `e` (the cell root's tree). */
+static void wp_fade_tree(de_world_partition *p, de_entity e, f32 fade_out, u32 depth) {
+    for (de_entity ch = de_entity_children_first(p->world, e); ch.bits != 0;
+         ch = de_entity_children_next(p->world, ch)) {
+        if (de_entity_has(p->world, ch, p->c_mr))
+            wp_fade_set(p, ch, fade_out, true);
+        if (depth + 1 < WP_TREE_DEPTH)
+            wp_fade_tree(p, ch, fade_out, depth + 1);
+    }
+}
+
+static void wp_proxy_update(de_world_partition *p, wp_cell *c) {
+    if (!DE_HANDLE_VALID(c->proxy_h) || c->proxy_failed)
+        return;
+    if (c->proxy_e.bits == 0) {
+        de_load_state st = de_asset_status(p->assets, c->proxy_h, NULL);
+        if (st == DE_LOAD_PENDING || st == DE_LOAD_LOADING)
+            return;
+        if (st != DE_LOAD_READY) {
+            DE_WARN(p->log, "world %s: the far proxy of cell (%d, %d) failed to load", p->name,
+                    (int)c->cx, (int)c->cy);
+            c->proxy_failed = true;
+            return;
+        }
+        wp_proxy_spawn(p, c);
+        if (c->proxy_e.bits == 0)
+            return;
+    }
+    if (!de_entity_alive(p->world, c->proxy_e)) {
+        c->proxy_failed = true; /* despawned by someone else */
+        c->proxy_e = DE_ENTITY_NULL;
+        return;
+    }
+    const bool fading = c->state == DE_WORLD_CELL_LOADED && c->proxy.active;
+    if (c->proxy.active) {
+        if (!de_entity_has(p->world, c->proxy_e, p->c_mr)) {
+            de_mesh mesh = {0};
+            char name[WP_NAME_MAX + 48];
+            if (de__cell_proxy_name(name, sizeof name - 8, p->name, c->cx, c->cy)) {
+                strcat(name, "#proxy");
+                mesh = de_asset_mesh(p->assets, de_asset_id_from(name));
+            }
+            DeMeshRenderer *mr = (DeMeshRenderer *)de_entity_add(p->world, c->proxy_e, p->c_mr);
+            if (mr != NULL) {
+                mr->mesh = mesh;
+                mr->layer_mask = ~0u;
+            }
+        }
+        wp_fade_set(p, c->proxy_e, fading ? 1.0f - c->proxy.alpha : -1.0f, false);
+    } else {
+        wp_fade_set(p, c->proxy_e, -1.0f, false);
+        if (de_entity_has(p->world, c->proxy_e, p->c_mr))
+            de_entity_remove(p->world, c->proxy_e, p->c_mr);
+    }
+    if (fading && de_entity_alive(p->world, c->root)) {
+        wp_fade_tree(p, c->root, c->proxy.alpha, 0);
+        c->cell_faded = true;
+    } else if (c->cell_faded) {
+        if (c->state == DE_WORLD_CELL_LOADED && de_entity_alive(p->world, c->root))
+            wp_fade_tree(p, c->root, -1.0f, 0);
+        c->cell_faded = false;
+    }
+}
+
+/* Despawns the proxy entities (close) and releases the proxy bundles (close and abandon). */
+static void wp_proxy_close(de_world_partition *p, bool despawn) {
+    for (u32 i = 0; i < p->cell_count; ++i) {
+        wp_cell *c = &p->cells[i];
+        if (despawn && c->proxy_e.bits != 0 && de_entity_alive(p->world, c->proxy_e))
+            de_entity_despawn(p->world, c->proxy_e);
+        c->proxy_e = DE_ENTITY_NULL;
+        if (DE_HANDLE_VALID(c->proxy_h))
+            de_asset_release(p->assets, c->proxy_h);
+        c->proxy_h = (de_load_handle){0};
+    }
+}
+#else
+static de_result wp_proxy_open(de_world_partition *p) {
+    (void)p;
+    return DE_OK;
+}
+static void wp_proxy_update(de_world_partition *p, wp_cell *c) {
+    (void)p;
+    (void)c;
+}
+static void wp_proxy_close(de_world_partition *p, bool despawn) {
+    (void)p;
+    (void)despawn;
+}
+#endif
 
 /* ---- Open and close ------------------------------------------------------------------------ */
 
@@ -291,6 +478,11 @@ de_result de_world_partition_open(de_asset_system *assets, de_world *world, cons
         qsort(p->cells, n, sizeof *p->cells, wp_cell_cmp);
     }
     p->stats.cell_count = n;
+    r = wp_proxy_open(p);
+    if (r != DE_OK) {
+        de_world_partition_close(p);
+        return r;
+    }
     *out = p;
     return DE_OK;
 }
@@ -309,6 +501,7 @@ static void wp_unload(de_world_partition *p, wp_cell *c) {
     c->h = (de_load_handle){0};
     c->root = DE_ENTITY_NULL;
     c->state = DE_WORLD_CELL_UNLOADED;
+    c->cell_faded = false;
     c->bytes = 0;
     c->error[0] = '\0';
 }
@@ -318,6 +511,7 @@ void de_world_partition_close(de_world_partition *p) {
         return;
     for (u32 i = 0; i < p->cell_count; ++i)
         wp_unload(p, &p->cells[i]);
+    wp_proxy_close(p, true);
     de_query_destroy(p->world, p->q_src);
     wp_free(p);
 }
@@ -328,6 +522,7 @@ void de__wp_abandon(de_world_partition *p) {
     for (u32 i = 0; i < p->cell_count; ++i)
         if (DE_HANDLE_VALID(p->cells[i].h))
             de_asset_release(p->assets, p->cells[i].h);
+    wp_proxy_close(p, false);
     wp_free(p);
 }
 
@@ -522,6 +717,8 @@ de_result de_world_partition_update(de_world_partition *p, f32 dt) {
         loaded += c->state == DE_WORLD_CELL_LOADED;
         loading += c->state == DE_WORLD_CELL_LOADING;
         de__far_proxy_step(&c->proxy, c->state == DE_WORLD_CELL_LOADED, dt, p->fade);
+        if (p->proxy_draw)
+            wp_proxy_update(p, c);
     }
     p->stats.cells_loaded = loaded;
     p->stats.cells_loading = loading;

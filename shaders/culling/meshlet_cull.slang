@@ -275,20 +275,23 @@ bool meshlet_visible(DeGpuInstance inst, MeshletBounds m, DeVisCullView v, Meshl
 
 /// The output bucket of a visible meshlet: forward when the submesh's material is blended or
 /// transmissive (DENG-305), alpha-tested when it is a READY material with alpha_mode mask
-/// (DENG-236), else opaque.
+/// (DENG-236), else opaque. DENG-830: a dithered instance (DE_GPU_INSTANCE_DITHER, DeRenderFade)
+/// that is not forward goes to the alpha bucket too (vis_alpha.slang drops its dithered pixels).
 uint meshlet_bucket(DeGpuInstance inst, uint submesh, MeshletCullParams pc)
 {
+    bool dither = (inst.flags & DE_GPU_INSTANCE_DITHER) != 0;
+    uint bucket = dither ? DE_VIS_BUCKET_ALPHA : DE_VIS_BUCKET_OPAQUE;
     if (submesh >= DE_GPU_INSTANCE_MATERIALS || pc.materials == 0)
-        return DE_VIS_BUCKET_OPAQUE;
+        return bucket;
     uint slot = inst.materials[submesh >> 2][submesh & 3];
     if (slot == DE_GPU_NONE || slot >= pc.material_count)
-        return DE_VIS_BUCKET_OPAQUE;
+        return bucket;
     DeGpuMaterial mat = de_robuffer<DeGpuMaterial>(pc.materials)[slot];
     if (de_material_forward(mat))
         return DE_VIS_BUCKET_FORWARD; // DENG-305: the forward transparent pass draws it
     if ((mat.flags & DE_GPU_MATERIAL_READY) != 0 && mat.alpha_mode == DE_VIS_ALPHA_MODE_MASK)
         return DE_VIS_BUCKET_ALPHA;
-    return DE_VIS_BUCKET_OPAQUE;
+    return bucket;
 }
 
 /// Appends `e` to list `list` (capacity `capacity`) for the lanes with `want`, with one atomic
