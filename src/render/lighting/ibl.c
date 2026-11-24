@@ -167,10 +167,16 @@ void de__lighting_set_sky(de__lighting *lt, const de__ibl_sky *sky) {
         if (lt->sky.strip.id != sky->strip.id || !lt->sky.valid)
             lt->sky_bindless = de_gpu_texture_bindless(lt->dev, sky->strip, 0, false);
         lt->sky = *sky;
+        ++lt->sky_serial;
     } else {
         memset(&lt->sky, 0, sizeof lt->sky);
         lt->sky_bindless = 0;
+        lt->sky_lit_serial = lt->sky_serial;
     }
+}
+
+u32 de__lighting_sky_unlit(const de__lighting *lt) {
+    return lt != NULL ? lt->sky_serial - lt->sky_lit_serial : 0u;
 }
 
 void de__lighting_prepare_environment(de__lighting *lt, de_asset_system *assets,
@@ -330,6 +336,7 @@ void de__ibl_build(de__lighting *lt, de_rg *g, de__lighting_context *lc) {
             memcpy(sky.sh9, lt->sky.sh9, sizeof sky.sh9);
             sky.intensity = 1.0f;
             lc->strip_sky = true;
+            lt->sky_lit_serial = lt->sky_serial;
             de__ibl_pack(&sky, lt->sky_bindless, lt->sky.strip_mips, lt->ibl_sampler_bindless,
                          ambient, &lc->view.ibl);
             return;

@@ -22,6 +22,7 @@
 #include <dengine/de_task.h>
 
 #include "render/components_internal.h"
+#include "render/lighting/lighting.h"
 #include "render/renderer_internal.h"
 #include "render/passes/vis/vis_stages.h"
 #include "render/views_internal.h"
@@ -400,11 +401,29 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
         return;
     }
 
-    for (u32 i = 0; i < SKY_FRAMES; ++i)
+    /* DENG-844: the sky's IBL lights the frame that receives it. A frame that handed an
+     * environment to lighting must have packed it in its own lighting build (the "sky.ibl" stage
+     * runs before it); the old order (the sky stage after lighting) left one unpacked after every
+     * handover, until the next frame. At least one handover must happen. */
+    const de__lighting *lt = de__views_lighting(s.r);
+    for (u32 i = 0; i < SKY_FRAMES; ++i) {
         if (!sky_frame(&s)) {
             sky_close(&s);
             return;
         }
+        if (lt != NULL && de__lighting_sky_unlit(lt) != 0u) {
+            de_golden_fail(ctx, "frame %u: a sky environment was handed over after the lighting "
+                                "build (a frame of lag)", i);
+            sky_close(&s);
+            return;
+        }
+    }
+    if (lt == NULL || lt->sky_serial == 0u) {
+        de_golden_fail(ctx, "the sky's IBL environment never reached lighting in %u frames",
+                       SKY_FRAMES);
+        sky_close(&s);
+        return;
+    }
     de_sky_state st;
     if (!de_sky_get_state(s.sky, &st)) {
         de_golden_fail(ctx, "the sky has no state after %u frames", SKY_FRAMES);

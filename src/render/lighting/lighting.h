@@ -297,6 +297,11 @@ typedef struct de__ibl_sky {
  * must outlive its use: clear it before destroying the texture. */
 void de__lighting_set_sky(de__lighting *lt, const de__ibl_sky *sky);
 
+/** DENG-844: how many installed sky environments no lighting build has packed yet (0 once the
+ * frame that received one built its lighting; a swap after the build leaves it 1 until the next
+ * frame: the one-frame lag). Render thread, or a test between frames. */
+u32 de__lighting_sky_unlit(const de__lighting *lt);
+
 /** Sets the environment of the next builds. Main thread with the render thread idle (the kick), or
  * a test between frames. NULL: none. */
 void de__lighting_set_environment(de__lighting *lt, const de__ibl_environment *env);
@@ -456,6 +461,8 @@ struct de__lighting {
     /* DENG-838: the sky's environment (de__lighting_set_sky), used without an HDRI. */
     de__ibl_sky sky;
     u32 sky_bindless;
+    u32 sky_serial;     /**< DENG-844: environments installed by de__lighting_set_sky */
+    u32 sky_lit_serial; /**< the `sky_serial` the last lighting build packed (de__ibl_build) */
     de_cvar cv_ambient, cv_ev100_default;
     /* Exposure (exposure.c), per view slot. */
     de__exposure_state exposure[DE__VIEW_MAX];
