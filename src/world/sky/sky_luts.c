@@ -2,7 +2,8 @@
  * sky_luts.c: the sky on the GPU (DENG-206, SPEC §12.13): the transmittance and multi-scattering
  * LUTs (regenerated when the turbidity or the ground albedo changes), and the view stage that
  * renders the sky-view LUT and the sky (with the sun and moon disks) into the lighting target
- * where no geometry is. Views lit by an HDRI environment keep it: the stage skips them.
+ * where no geometry is. Views lit by an HDRI environment keep it: the stage skips the sky for
+ * them (DENG-849: the froxel fog still runs, without aerial perspective).
  * DENG-840 adds the aerial perspective (Hillaire 2020 §5.5; SPEC §12.13, §12.7): a per-view 32^3
  * froxel volume of in-scatter and transmittance (a 2D atlas), applied to the opaque surfaces in
  * the lighting target and exported to the forward transparency pass through the lighting context.
@@ -630,7 +631,7 @@ static void clouds_shadow_stage(de__view_frame *vf, void *user) {
 /* DENG-207: the froxel fog after the sky, before transparency; it hands the integrated volume to
  * the forward transparent pass through `lc`. */
 static void add_fog(de__sky_render *sr, const de__view_frame *vf, de__vis_context *vc,
-                    de__lighting_context *lc, f32 pre) {
+                    de__lighting_context *lc, f32 pre, bool with_aerial) {
     const de__fog_inputs in = {
         .settings = vf->settings,
         .volumes = vf->world->fog,
@@ -648,9 +649,10 @@ static void add_fog(de__sky_render *sr, const de__view_frame *vf, de__vis_contex
         .target = lc->target,
         .lc = lc,
         .ambient = 1u,
-        .aerial = lc->aerial,
-        .aerial_sampler = lc->aerial_sampler,
-        .aerial_range_km = lc->aerial_range_km,
+        /* DENG-849: with no sky drawn there is no aerial perspective behind the fog. */
+        .aerial = with_aerial ? lc->aerial : (de_rg_resource){0},
+        .aerial_sampler = with_aerial ? lc->aerial_sampler : 0u,
+        .aerial_range_km = with_aerial ? lc->aerial_range_km : 0.0f,
         .sampler = sr->luts->smp_bindless,
     };
     de__fog_output out;
@@ -659,10 +661,25 @@ static void add_fog(de__sky_render *sr, const de__view_frame *vf, de__vis_contex
     lc->fog_header = out.header;
 }
 
+/* DENG-849: the froxel fog of a view whose sky is not drawn (no sky attached, an HDRI environment,
+ * the LUTs or pipelines missing): no aerial perspective, the fog alone over the lit target. */
+static void fog_only(de__sky_render *sr, const de__view_frame *vf, de__vis_context *vc,
+                     de__lighting_context *lc) {
+    if (!de__fog_ready(sr->fog) || vf->world == NULL || sr->luts == NULL ||
+        !de__fog_enabled(vf->settings, vf->world->fog, vf->world->fog_count,
+                         de__fog_max_distance(sr->fog)))
+        return;
+    de__lighting *lt = de__views_lighting(vf->renderer);
+    const u32 slot = (vf->view.id & 0xFFu) - 1u;
+    const f32 pre = de__lighting_view_exposure(
+        lt, slot, vf->view, vf->frame_index,
+        vf->camera != NULL ? vf->camera->camera.exposure_ev100 : (f32)NAN, NULL);
+    add_fog(sr, vf, vc, lc, pre, false);
+}
+
 static void stage(de__view_frame *vf, void *user) {
     de__sky_render *sr = (de__sky_render *)user;
-    if (sr->failed || !DE_HANDLE_VALID(sr->pipe_view) || !DE_HANDLE_VALID(sr->pipe_sky) ||
-        !de__sky_luts_ready(sr->luts) || vf->graph == NULL)
+    if (vf->graph == NULL)
         return;
     de_renderer *r = vf->renderer;
     de__vis_context *vc =
@@ -671,11 +688,17 @@ static void stage(de__view_frame *vf, void *user) {
     de__lighting_context *lc =
         vc != NULL ? de__lighting_frame_context(lt, vf->view, vf->graph, vf->frame_index) : NULL;
     if (vc == NULL || lc == NULL || !lc->lit || !DE_HANDLE_VALID(lc->target) ||
-        !DE_HANDLE_VALID(vc->depth) || (DE_HANDLE_VALID(lc->strip) && !lc->strip_sky))
-        return; /* nothing lit, or an HDRI environment lights the view */
+        !DE_HANDLE_VALID(vc->depth))
+        return; /* nothing lit */
     de__sky_snapshot sn;
-    if (!de__sky_snapshot_get(sr->sky, &sn))
+    if (sr->failed || !DE_HANDLE_VALID(sr->pipe_view) || !DE_HANDLE_VALID(sr->pipe_sky) ||
+        !de__sky_luts_ready(sr->luts) || (DE_HANDLE_VALID(lc->strip) && !lc->strip_sky) ||
+        !de__sky_snapshot_get(sr->sky, &sn)) {
+        /* No sky for this view (none attached, or an HDRI environment lights it): the fog runs
+         * on its own, DENG-849. */
+        fog_only(sr, vf, vc, lc);
         return;
+    }
     const de_result lr = de__sky_luts_update(sr->luts, sn.mie_scale, sn.albedo);
     if (lr != DE_OK) {
         const de_error *e = de_error_last();
@@ -789,7 +812,7 @@ static void stage(de__view_frame *vf, void *user) {
         (void)de__clouds_add_passes(sr->clouds, g, vc->arena, &ci);
     }
     if (fog_on)
-        add_fog(sr, vf, vc, lc, pre);
+        add_fog(sr, vf, vc, lc, pre, true);
 }
 
 void de__sky_render_destroy(de__sky_render *sr) {

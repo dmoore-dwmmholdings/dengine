@@ -696,6 +696,13 @@ tiers = ["base"]
 threshold_mean = 0.005
 threshold_p99 = 0.05
 
+[scene.fog_no_sky]
+description = "Froxel fog with no DeSky: the spot-lit column in global fog still shows its shaft, with no aerial perspective (DENG-849)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
 [scene.fog_ap_seam]
 description = "Froxel fog: the aerial perspective scene in thin global fog; the fog's 128 m range blends into the aerial perspective with no seam (DENG-207)"
 size = [1280, 720]

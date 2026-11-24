@@ -3,7 +3,7 @@
 // view: it marches one pixel of the block per frame (frame & 3 in Bayer order), so the four
 // frames of a block cover all its pixels (clouds.reconstruct puts them together).
 // Per pixel: the ray's part inside the layer (up to the opaque depth), at most steps.x steps with
-// an interleaved-gradient jitter that changes every frame; per sample with density: steps.y light
+// a blue-noise jitter (DENG-852) shifted every frame; per sample with density: steps.y light
 // steps toward the sun (Beer-Powder), the dual-lobe phase over steps.z multi-scattering octaves,
 // the sky's SH ambient (the IBL, DENG-838) from above and below. Energy-conserving integration.
 // Out: rgb in-scatter (pre-exposed), a transmittance; and the transmittance-weighted distance (m).
@@ -19,9 +19,18 @@ struct MarchParams
     uint height, mw, mh, flags; // flags: 1 the IBL ambient
 };
 
-float ign(float2 p)
+/// DENG-852: the start jitter. A 64x64 blue-noise tile (tex2.w, r channel) indexed by the pixel,
+/// shifted by the golden ratio each frame (a low-discrepancy sequence per pixel, so the error
+/// averages out in the temporal history). Without the tile, interleaved gradient noise.
+float march_jitter(CloudsHeader h, uint2 px, uint frame)
 {
-    return frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));
+    float n;
+    if (h.tex2.w != 0u)
+        n = de_tex2d(h.tex2.w).Load(int3(int2(px & 63u), 0)).r;
+    else
+        n = frac(52.9829189 * frac(dot(float2(px) + float(frame & 63u) * 5.588238,
+                                       float2(0.06711056, 0.00583715))));
+    return frac(n + float(frame & 255u) * 0.61803398875);
 }
 
 [shader("compute")]
@@ -68,7 +77,7 @@ void cs_clouds_march(uint3 id : SV_DispatchThreadID, uniform MarchParams pc)
         uint octaves = clamp(h.steps.z, 1u, 4u);
         float len = seg.y - seg.x;
         float dt = len / float(steps);
-        float jitter = ign(float2(px) + float(frame & 63u) * 5.588238);
+        float jitter = march_jitter(h, px, frame);
         float cos_theta = dot(dir, h.sun.xyz);
         float bottom = h.layer.y - h.layer.x, thick = h.layer.z - h.layer.y;
         for (uint i = 0; i < steps; ++i)
