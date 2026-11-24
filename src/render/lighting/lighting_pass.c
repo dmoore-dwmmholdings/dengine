@@ -483,8 +483,9 @@ typedef struct lp_pass {
     de_rg_resource depth, gb[3], lighting, diffuse, specular, lists, args, tile_counters;
     de_rg_resource lights, dir_lights, grid, list, counters, ltc1, ltc2;
     de_rg_resource ids, visible; /**< DENG-429: the vis IDs and the visible list */
-    de_rg_resource inputs[15];
+    de_rg_resource inputs[16];
     u32 rt_shadow_extent, rt_shadow_config;
+    u32 cloud_shadow_header, cloud_shadow_entry; /**< DENG-208 */
     u32 probe_entry, probe_sampler;
     f32 probe_view_z[4];
     u8 *inputs_dst;  /**< the inputs of this frame's constants entry (the deferred pass) */
@@ -548,6 +549,8 @@ static void deferred_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user
         .rt_shadow_keys = buf_index(p, pass, p->inputs[11]),
         .rt_shadow_extent = p->rt_shadow_extent,
         .rt_shadow_config = p->rt_shadow_config,
+        .cloud_shadow = DE_HANDLE_VALID(p->inputs[15]) ? p->cloud_shadow_header : 0u,
+        .cloud_shadow_entry = p->cloud_shadow_entry,
         .ao = tex_index(p, pass, p->inputs[0], false),
         .shadow_directional = (p->input_flags & DE__INPUT_SHADOW_METADATA)
                                   ? buf_index(p, pass, p->inputs[1])
@@ -722,6 +725,7 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     const bool sss = in.subsurface; /* DENG-306 */
     fill_view(lt, vc, &in, split, sss, lc);
     lc->shadow_records = in.shadow_records;
+    lc->cloud_shadow = in.cloud_shadow; /* DENG-208 */
     lc->atlas_records = in.atlas_records;
     lc->contact_records = in.contact_records;
     lc->atlas_texture = in.atlas_texture;
@@ -845,7 +849,7 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         b.visible = vc->visible_meshlets;
         b.pc.ids_pitch = vc->vis_ids_pitch;
         b.pc.visible_count = vc->visible_capacity + vc->visible_alpha_capacity;
-        const de_rg_resource inputs[15] = {
+        const de_rg_resource inputs[16] = {
             in.ao,
             DE_HANDLE_VALID(in.shadow_records) ? in.shadow_records : in.shadow_directional,
             DE_HANDLE_VALID(in.atlas_records) ? in.atlas_records : in.shadow_local,
@@ -860,10 +864,13 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
             in.rt_shadow_keys,
             in.restir_diffuse,
             in.restir_specular,
-            in.restir_distance};
+            in.restir_distance,
+            in.cloud_shadow}; /* DENG-208 */
         memcpy(b.inputs, inputs, sizeof inputs);
         b.rt_shadow_extent = in.rt_shadow_extent;
         b.rt_shadow_config = in.rt_shadow_config;
+        b.cloud_shadow_header = in.cloud_shadow_header;
+        b.cloud_shadow_entry = in.cloud_shadow_entry;
         b.probe_entry = in.probe_entry;
         b.probe_sampler = in.probe_sampler;
         memcpy(b.probe_view_z, in.probe_view_z, sizeof b.probe_view_z);
@@ -913,7 +920,7 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         de_rg_read(p, ltc2, DE_ACCESS_SHADER_READ);
         if (DE_HANDLE_VALID(lc->strip))
             de_rg_read(p, lc->strip, DE_ACCESS_SHADER_READ); /* DENG-304: the environment */
-        for (u32 i = 0; i < 15; ++i)
+        for (u32 i = 0; i < 16; ++i)
             if (DE_HANDLE_VALID(inputs[i]))
                 de_rg_read(p, inputs[i], DE_ACCESS_SHADER_READ);
         for (u32 i = 0; i < in.shadow_texture_count; ++i)

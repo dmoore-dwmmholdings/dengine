@@ -175,6 +175,7 @@ public DeDirect evaluate_direct_clustered<M : IMaterialSplitModel>(SurfaceData s
         else if (i == 0u)
             vis *= de_input_contact_shadow(lv.inputs, px);
         vis=de_input_rt_shadow(lv.inputs,px,0x80000000u|i,vis);
+        vis *= de_input_cloud_shadow(lv.inputs, p, h.wi); // DENG-208
         add_light<M>(r, s, f, wo, h.wi, h.illuminance * vis, split);
     }
     uint2 cell = de_robuffer<uint2>(cl.grid)[cluster];

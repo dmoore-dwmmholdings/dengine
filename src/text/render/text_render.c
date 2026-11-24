@@ -302,7 +302,8 @@ static void lighting_reads(de_rg_pass *p, de__lighting_context *lc) {
                               lc->list,          lc->counters,      lc->ltc1,
                               lc->ltc2,          lc->strip,         lc->shadow_records,
                               lc->atlas_records, lc->atlas_texture, lc->contact_records,
-                              lc->gi_records,    lc->probe_records, lc->probe_list};
+                              lc->gi_records,    lc->probe_records, lc->probe_list,
+                              lc->cloud_shadow};
     for (u32 i = 0; i < sizeof reads / sizeof reads[0]; ++i)
         if (reads[i].id)
             de_rg_read(p, reads[i], DE_ACCESS_SHADER_READ);

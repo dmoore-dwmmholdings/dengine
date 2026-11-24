@@ -58,11 +58,22 @@ typedef struct sky_opts {
     u32 fog_count;
     de_vec3 fog_pos[2];
     DeFogVolume fog_volume[2];
+    /* DENG-208: volumetric clouds (volumetrics High) at DeSky.cloud_coverage `coverage`. */
+    bool clouds;
+    f32 coverage;
+    f32 cam_z;           /**< the camera height (m); 0: the scene's */
+    f32 pan_deg;         /**< > 0: a temporal pan of this many degrees a frame over 30 frames,
+                              captured at frame 30 and checked against the converged still */
+    bool coverage_pair;  /**< left half coverage 0, right half coverage 1 (one run) */
 } sky_opts;
 
 /* DENG-207: the largest mean sRGB change allowed between two consecutive frames of a static fog
  * scene (the jittered slices with the 0.9 history blend). */
 #define SKY_FOG_STABLE_MEAN 1.0
+/* DENG-208: the frames of the clouds' temporal pan, and the largest mean sRGB difference allowed
+ * between its last frame and the converged still at the same heading (ghosting trails). */
+#define SKY_CLOUDS_PAN_FRAMES 30u
+#define SKY_CLOUDS_GHOST_MEAN 3.0
 
 #if DE_GOLDEN_COOK
 
@@ -251,6 +262,86 @@ static void sky_block_mean(const sky_run *s, f32 fx, u32 y0, u32 w, u32 h, f32 o
         out[k] = n != 0u ? (f32)(sum[k] / n) : 0.0f;
 }
 
+/* DENG-208: the clouds' extra frames, after the first capture (in s->pixels).
+ *   coverage_pair: the capture (coverage 0) must show the clear blue sky; then coverage 1 for
+ *     SKY_FRAMES must turn the top grey (overcast). The left half of the result is coverage 0, the
+ *     right half coverage 1.
+ *   pan_deg: SKY_CLOUDS_PAN_FRAMES frames of panning, then the capture; then SKY_FRAMES still
+ *     frames at the same heading: the converged picture. Their mean difference is the ghosting. */
+static bool sky_clouds_checks(sky_run *s, const sky_opts *o, DeSky *sky, DeTransform *cam_xf,
+                              size_t bytes) {
+    de_golden_ctx *ctx = s->ctx;
+    if (o->coverage_pair) {
+        f32 clear[3];
+        sky_block_mean(s, 0.5f, 4u, 64u, 16u, clear);
+        printf("  clouds coverage 0: top sRGB %.1f %.1f %.1f\n", (f64)clear[0], (f64)clear[1],
+               (f64)clear[2]);
+        if (!(clear[2] > clear[0] + 8.0f))
+            de_golden_fail(ctx, "coverage 0 is not the clear sky (%.0f %.0f %.0f)", (f64)clear[0],
+                           (f64)clear[1], (f64)clear[2]);
+        u8 *first = (u8 *)malloc(bytes);
+        if (first == NULL) {
+            de_golden_fail(ctx, "no memory for the coverage pair");
+            return false;
+        }
+        memcpy(first, s->pixels, bytes);
+        sky->cloud_coverage = 1.0f;
+        bool ok = true;
+        for (u32 i = 0; ok && i < SKY_FRAMES; ++i)
+            ok = sky_frame(s);
+        ok = ok && sky_read(s);
+        if (ok) {
+            f32 over[3];
+            sky_block_mean(s, 0.5f, 4u, 64u, 16u, over);
+            printf("  clouds coverage 1: top sRGB %.1f %.1f %.1f\n", (f64)over[0], (f64)over[1],
+                   (f64)over[2]);
+            if (over[2] > over[0] + 25.0f)
+                de_golden_fail(ctx, "coverage 1 is not overcast: the top is still blue (%.0f %.0f "
+                                    "%.0f)", (f64)over[0], (f64)over[1], (f64)over[2]);
+            for (u32 y = 0; y < ctx->height; ++y)
+                memcpy(s->pixels + (size_t)y * s->pitch, first + (size_t)y * s->pitch,
+                       (size_t)s->pitch / 2u);
+        }
+        free(first);
+        return ok;
+    }
+    if (o->pan_deg > 0.0f) {
+        f32 heading = o->heading_deg;
+        bool ok = true;
+        for (u32 i = 0; ok && i < SKY_CLOUDS_PAN_FRAMES; ++i) {
+            heading += o->pan_deg;
+            cam_xf->rotation = sky_camera_rotation(heading, o->pitch_deg);
+            ok = sky_frame(s);
+        }
+        ok = ok && sky_read(s);
+        u8 *pan = ok ? (u8 *)malloc(bytes) : NULL;
+        if (pan == NULL) {
+            if (ok)
+                de_golden_fail(ctx, "no memory for the pan readback");
+            return false;
+        }
+        memcpy(pan, s->pixels, bytes);
+        for (u32 i = 0; ok && i < SKY_FRAMES; ++i)
+            ok = sky_frame(s);
+        ok = ok && sky_read(s);
+        f64 diff = 0.0;
+        for (size_t i = 0; ok && i < bytes; ++i)
+            if (i % 4u != 3u)
+                diff += fabs((f64)s->pixels[i] - (f64)pan[i]);
+        diff /= (f64)ctx->width * (f64)ctx->height * 3.0;
+        memcpy(s->pixels, pan, bytes);
+        free(pan);
+        if (!ok)
+            return false;
+        printf("  clouds pan frame %u vs converged: sRGB mean difference %.3f\n",
+               SKY_CLOUDS_PAN_FRAMES, diff);
+        if (diff > SKY_CLOUDS_GHOST_MEAN)
+            de_golden_fail(ctx, "the clouds ghost in a pan: a mean difference of %.3f from the "
+                                "converged frame (limit %.1f)", diff, SKY_CLOUDS_GHOST_MEAN);
+    }
+    return true;
+}
+
 static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
     if (!ctx->caps->base_tier_ok) {
         de_golden_skip(ctx, "below the Base tier (the renderer needs it): %s",
@@ -320,6 +411,8 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
         rs.volumetrics = DE_QUALITY_HIGH;
         rs.shadows = DE_QUALITY_MEDIUM;
     }
+    if (o->clouds)
+        rs.volumetrics = DE_QUALITY_HIGH; /* DENG-208: the clouds' quality */
     rs.rt_shadows = rs.rt_ao = rs.rt_reflections = rs.rt_gi = rs.rt_refraction = false;
     de_renderer_set_settings(s.r, &rs);
 
@@ -393,6 +486,8 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
     camera->exposure_ev100 = o->ev100;
     camera->tonemapper = de_tonemapper_builtin(s.r, DE_TM_AGX);
     cam_xf->rotation = sky_camera_rotation(o->heading_deg, o->pitch_deg);
+    if (o->cam_z > 0.0f)
+        cam_xf->position.z = o->cam_z;
 
     /* The sky: latitude 45, day 80, the reference turbidity, the real moon. */
     const de_component c_sky = de_component_find(s.world, "DeSky");
@@ -409,7 +504,9 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
                    .day_of_year = 80.0f,
                    .moon_phase = o->moon_phase > 0.0f ? o->moon_phase : -1.0f,
                    .ground_albedo = 0.3f,
-                   .drive_sun = true};
+                   .drive_sun = true,
+                   .clouds = o->clouds,
+                   .cloud_coverage = o->coverage_pair ? 0.0f : o->coverage};
     if (de_sky_attach(s.world, s.r, &s.sky) != DE_OK) {
         de_golden_fail(ctx, "de_sky_attach: %s", sky_err());
         sky_close(&s);
@@ -491,10 +588,37 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
     f32 top[3];
     sky_block_mean(&s, 0.5f, 4u, 64u, 16u, top);
     printf("  sky top-centre sRGB mean %.1f %.1f %.1f\n", (f64)top[0], (f64)top[1], (f64)top[2]);
-    if (!o->fog && o->sun_elev_min > 0.0f && !(top[2] > top[0] + 8.0f))
+    if (o->clouds && !sky_clouds_checks(&s, o, sky, cam_xf, bytes)) {
+        sky_close(&s);
+        return;
+    }
+    if (o->clouds) {
+        sky_block_mean(&s, 0.5f, 4u, 64u, 16u, top);
+        /* The frame budget (AC4), after the capture: r.rg_gpu_timers on for 16 more frames, the
+         * clouds' passes against the whole frame averaged over the last 8 (printed only; on Metal
+         * the timers serialise the passes, so these are upper bounds). */
+        sky_cvar("r.rg_gpu_timers", "1");
+        f64 cms = 0.0, fms = 0.0;
+        u32 timed = 0;
+        for (u32 i = 0; i < 16u && sky_frame(&s); ++i) {
+            const de_render_stats *st = de_renderer_stats(s.r);
+            if (i < 8u || st == NULL || st->pass_gpu_ms == NULL || st->gpu_ms <= 0.0f)
+                continue;
+            for (u32 k = 0; k < st->pass_count; ++k)
+                if (strncmp(st->pass_names[k], "clouds.", 7) == 0)
+                    cms += st->pass_gpu_ms[k];
+            fms += st->gpu_ms;
+            ++timed;
+        }
+        sky_cvar("r.rg_gpu_timers", "0");
+        if (timed > 0u)
+            printf("  clouds GPU %.3f ms of a %.3f ms frame (%ux%u, volumetrics High, %u frames)\n",
+                   cms / timed, fms / timed, ctx->width, ctx->height, timed);
+    }
+    if (!o->fog && !o->clouds && o->sun_elev_min > 0.0f && !(top[2] > top[0] + 8.0f))
         de_golden_fail(ctx, "the daytime sky is not blue at the top (%.0f %.0f %.0f)",
                        (f64)top[0], (f64)top[1], (f64)top[2]);
-    if (!o->fog && o->sun_elev_min > 0.0f && top[2] < 40.0f)
+    if (!o->fog && !o->clouds && o->sun_elev_min > 0.0f && top[2] < 40.0f)
         de_golden_fail(ctx, "the daytime sky is dark at the top (%.0f)", (f64)top[2]);
     if (o->fog) {
         /* DENG-207 temporal stability: a static scene's next frame stays within
@@ -687,4 +811,59 @@ DE_GOLDEN_SCENE(fog_ap_seam) {
                                    .fog = true,
                                    .fog_count = 1u,
                                    .fog_volume = {sky_fog_global(0.006f, 0.02f, 0.4f)}});
+}
+
+/* ---- DENG-208: volumetric clouds (S34) ---- */
+
+DE_GOLDEN_SCENE(clouds_overcast) {
+    sky_run_scene(ctx, &(sky_opts){.hours = 12.0f,
+                                   .heading_deg = 180.0f,
+                                   .pitch_deg = 22.0f,
+                                   .ev100 = 14.0f,
+                                   .sun_elev_min = 44.0f,
+                                   .sun_elev_max = 46.5f,
+                                   .clouds = true,
+                                   .coverage = 0.95f});
+}
+DE_GOLDEN_SCENE(clouds_cumulus_noon) {
+    sky_run_scene(ctx, &(sky_opts){.hours = 12.0f,
+                                   .heading_deg = 180.0f,
+                                   .pitch_deg = 22.0f,
+                                   .ev100 = 14.5f,
+                                   .sun_elev_min = 44.0f,
+                                   .sun_elev_max = 46.5f,
+                                   .clouds = true,
+                                   .coverage = 0.45f,
+                                   .pan_deg = 0.5f});
+}
+DE_GOLDEN_SCENE(clouds_sunset) {
+    sky_run_scene(ctx, &(sky_opts){.hours = 17.5f,
+                                   .heading_deg = 270.0f,
+                                   .pitch_deg = 12.0f,
+                                   .ev100 = 12.0f,
+                                   .sun_elev_min = 2.0f,
+                                   .sun_elev_max = 12.0f,
+                                   .clouds = true,
+                                   .coverage = 0.5f});
+}
+DE_GOLDEN_SCENE(clouds_shadow) {
+    sky_run_scene(ctx, &(sky_opts){.hours = 12.0f,
+                                   .heading_deg = 180.0f,
+                                   .pitch_deg = -35.0f,
+                                   .ev100 = 14.5f,
+                                   .sun_elev_min = 44.0f,
+                                   .sun_elev_max = 46.5f,
+                                   .clouds = true,
+                                   .coverage = 0.5f,
+                                   .cam_z = 600.0f});
+}
+DE_GOLDEN_SCENE(clouds_coverage_pair) {
+    sky_run_scene(ctx, &(sky_opts){.hours = 12.0f,
+                                   .heading_deg = 180.0f,
+                                   .pitch_deg = 22.0f,
+                                   .ev100 = 14.5f,
+                                   .sun_elev_min = 44.0f,
+                                   .sun_elev_max = 46.5f,
+                                   .clouds = true,
+                                   .coverage_pair = true});
 }

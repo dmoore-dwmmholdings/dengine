@@ -373,7 +373,7 @@ static fog_pass *new_pass(de__fog *f, de_arena *arena, u32 pipe, u32 bytes) {
 static void read_lighting(de_rg_pass *pass, const de__lighting_context *lc) {
     const de_rg_resource bufs[] = {lc->lights,         lc->dir_lights,    lc->grid_buf,
                                    lc->list,           lc->counters,      lc->shadow_records,
-                                   lc->atlas_records,  lc->atlas_texture};
+                                   lc->atlas_records,  lc->atlas_texture, lc->cloud_shadow};
     for (u32 i = 0; i < (u32)(sizeof bufs / sizeof bufs[0]); ++i)
         if (DE_HANDLE_VALID(bufs[i]))
             de_rg_read(pass, bufs[i], DE_ACCESS_SHADER_READ);

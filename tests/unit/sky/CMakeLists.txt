@@ -49,3 +49,12 @@ de_add_test(NAME sky_fog
 if(TARGET test_sky_fog)
     target_include_directories(test_sky_fog PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# test_sky_clouds (render builds; CTest names sky_clouds.clouds.<test>): the volumetric clouds'
+# settings, pass list on a null-backend device and large-coordinate weather offsets (DENG-208).
+de_add_test(NAME sky_clouds
+    SOURCES test_clouds.c
+    LIBS ${_de_sky_libs})
+if(TARGET test_sky_clouds)
+    target_include_directories(test_sky_clouds PRIVATE "${DE_ROOT_DIR}/src")
+endif()

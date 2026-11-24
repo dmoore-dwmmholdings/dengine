@@ -67,6 +67,11 @@ typedef struct de__lighting_inputs {
     u32 rt_shadow_extent, rt_shadow_config;
     de_rg_resource restir_diffuse, restir_specular, restir_distance;
     bool indirect_specular_layers; /**< Full material response, including Standard layers. */
+    /** DENG-208: the clouds' shadow map (sampled, top-down around the camera) and the bindless
+     * index and ring entry of its CloudShadow header (shaders/volumetrics/clouds_common.slang).
+     * Invalid = no clouds: the sun is not dimmed. */
+    de_rg_resource cloud_shadow;
+    u32 cloud_shadow_header, cloud_shadow_entry;
     /* ---- append new inputs here (and in de__lighting_inputs_gpu, lighting_inputs.slang) ---- */
 } de__lighting_inputs;
 
@@ -79,7 +84,10 @@ typedef struct de__lighting_inputs_gpu {
     u32 probe_records, probe_list, probe_entry, probe_sampler;
     f32 probe_view_z[4];
     u32 rt_shadow_visibility, rt_shadow_distance, rt_shadow_keys, rt_shadow_extent;
-    u32 rt_shadow_config, rt_reserved0, rt_reserved1, rt_reserved2;
+    u32 rt_shadow_config;
+    u32 cloud_shadow;       /**< DENG-208: the CloudShadow header ring (de_bytes), 0 = none */
+    u32 cloud_shadow_entry; /**< DENG-208: this frame's entry in it */
+    u32 rt_reserved2;
     u32 restir_diffuse, restir_specular, restir_distance, restir_reserved;
 } de__lighting_inputs_gpu;
 DE_STATIC_ASSERT(sizeof(de__lighting_inputs_gpu) == 112, "LightingInputs is 112 bytes");

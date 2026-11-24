@@ -29,6 +29,7 @@ struct de_sky {
     /* The game thread's cache: the inputs of the last computation. */
     DeSky last;
     bool has_last;
+    f64 cloud_drift[2]; /* DENG-208: the weather map's drift, accumulated with dt */
     de_sky_state computed;
     de__sky_snapshot computed_snapshot;
 #if DE_HAS_RENDER
@@ -171,6 +172,14 @@ static void sky_system(de_system_ctx *ctx) {
     de_query_each(ctx->world, ctx->queries[0], find_sky_fn, &fs);
     if (!fs.found)
         return;
+    /* DENG-208: the clouds follow DeSky every frame and drift with the wind. */
+    const de__clouds_settings clouds = de__clouds_resolve(&fs.sky);
+    const f64 dt = ctx->dt > 0.0f && ctx->dt < 1.0f ? (f64)ctx->dt : 0.0;
+    s->cloud_drift[0] = fmod(s->cloud_drift[0] + (f64)clouds.wind_x * dt, DE__CLOUDS_DRIFT_PERIOD_M);
+    s->cloud_drift[1] = fmod(s->cloud_drift[1] + (f64)clouds.wind_y * dt, DE__CLOUDS_DRIFT_PERIOD_M);
+    s->computed_snapshot.clouds = clouds;
+    s->computed_snapshot.cloud_drift[0] = s->cloud_drift[0];
+    s->computed_snapshot.cloud_drift[1] = s->cloud_drift[1];
     if (!s->has_last || !same_inputs(&s->last, &fs.sky)) {
         compute(s, &fs.sky);
         s->last = fs.sky;
@@ -181,6 +190,11 @@ static void sky_system(de_system_ctx *ctx) {
         s->has_state = true;
         de_mutex_unlock(&s->mutex);
     }
+    de_mutex_lock(&s->mutex);
+    s->snapshot.clouds = clouds;
+    s->snapshot.cloud_drift[0] = s->cloud_drift[0];
+    s->snapshot.cloud_drift[1] = s->cloud_drift[1];
+    de_mutex_unlock(&s->mutex);
     if (!fs.sky.drive_sun)
         return;
     find_light fl = {.found = false};

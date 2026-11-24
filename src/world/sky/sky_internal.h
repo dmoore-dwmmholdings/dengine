@@ -8,6 +8,8 @@
 
 #include <dengine/de_base.h>
 #include <dengine/de_math.h>
+
+#include "world/sky/clouds_internal.h"
 #if DE_HAS_RENDER
 #include <dengine/de_gpu.h>
 #include <dengine/de_memory.h>
@@ -151,6 +153,9 @@ typedef struct de__sky_snapshot {
     f32 moon_weight;           /**< moon illuminance at the top of the atmosphere, lux */
     f32 mie_scale, albedo;
     bool valid;
+    /* DENG-208: the cloud layer (updated every frame, unlike the fields above). */
+    de__clouds_settings clouds;
+    f64 cloud_drift[2]; /**< the wind's accumulated drift of the weather map, m (x, y) */
 } de__sky_snapshot;
 
 struct de_sky;

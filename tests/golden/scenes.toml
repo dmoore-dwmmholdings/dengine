@@ -673,3 +673,38 @@ size = [1280, 720]
 tiers = ["base"]
 threshold_mean = 0.005
 threshold_p99 = 0.05
+
+[scene.clouds_overcast]
+description = "Volumetric clouds at coverage 0.95 (overcast) at noon, looking south over the ground slab (DENG-208 AC1)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.clouds_cumulus_noon]
+description = "Volumetric clouds at coverage 0.45 (cumulus) at noon, looking south; captured at frame 30 of a 0.5 deg/frame pan and checked against the converged still (DENG-208 AC1, AC3)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.clouds_sunset]
+description = "Volumetric clouds at coverage 0.5 at sunset, looking west into the sun: backlit edges (DENG-208 AC1)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.clouds_shadow]
+description = "Volumetric clouds at coverage 0.5 at noon from 600 m, looking down at the 4 km ground: the clouds' shadow map on the terrain (DENG-208 AC1)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.clouds_coverage_pair]
+description = "Volumetric clouds: left half coverage 0 (clear sky), right half coverage 1 (overcast), at noon looking south (DENG-208 AC2)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05

@@ -221,6 +221,8 @@ typedef struct de__lighting_context {
     /* ---- DENG-207: the froxel fog (src/world/sky/fog.c), for the forward transparent pass ---- */
     de_rg_resource fog; /**< the integrated froxel volume (invalid: no fog this frame) */
     u32 fog_header;     /**< its FogHeader ring (bindless; 0: none); entry constants_entry */
+    /* ---- DENG-208: the clouds' shadow map that lighting sampled (invalid: none) ---- */
+    de_rg_resource cloud_shadow;
 } de__lighting_context;
 
 /**
