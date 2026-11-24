@@ -103,6 +103,9 @@ u32 de__nav_mesh_poly_count(const de__nav_mesh *m);
  * xz plane, and within `max_dy` m of the polygon's height range.
  */
 bool de__nav_mesh_point_on_poly(const de__nav_mesh *m, const f32 p[3], f32 max_dy);
+/** The Detour data of tile (tx, tz), owned by the navmesh (DENG-864: saved as is, as Detour's own
+ *  samples do; addTile rebuilds the links it holds); false when there is no tile there. */
+bool de__nav_mesh_tile_data(const de__nav_mesh *m, i32 tx, i32 tz, const u8 **data, i32 *size);
 /** Ground polygons and off-mesh links of tile (tx, tz); false when there is no tile there. */
 bool de__nav_mesh_tile_stats(const de__nav_mesh *m, i32 tx, i32 tz, i32 *polys, i32 *links);
 /**

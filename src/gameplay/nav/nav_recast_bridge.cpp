@@ -490,6 +490,19 @@ bool de__nav_mesh_point_on_poly(const de__nav_mesh *m, const f32 p[3], f32 max_d
     return false;
 }
 
+bool de__nav_mesh_tile_data(const de__nav_mesh *m, i32 tx, i32 tz, const u8 **data, i32 *size) {
+    *data = nullptr;
+    *size = 0;
+    if (m == nullptr)
+        return false;
+    const dtMeshTile *t = m->nav->getTileAt(tx, tz, 0);
+    if (t == nullptr || t->header == nullptr || t->data == nullptr || t->dataSize <= 0)
+        return false;
+    *data = t->data;
+    *size = t->dataSize;
+    return true;
+}
+
 bool de__nav_mesh_tile_stats(const de__nav_mesh *m, i32 tx, i32 tz, i32 *polys, i32 *links) {
     *polys = 0;
     *links = 0;

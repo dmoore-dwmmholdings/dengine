@@ -15,6 +15,7 @@
 #include <dengine/de_ecs.h>
 #include <dengine/de_gameplay.h>
 #include <dengine/de_memory.h>
+#include <dengine/de_platform.h>
 #include <dengine/de_reflect.h>
 #include <dengine/de_task.h>
 
@@ -548,6 +549,77 @@ de_result de__nav_add_container(de_nav *n, const u8 *data, u64 size) {
             return DE_FAIL(r, "navmesh: tile (%d, %d)", (int)b.tx, (int)b.tz);
     }
     return DE_OK;
+}
+
+de_result de__nav_write_container(const de_nav *n, const de_allocator *a, const i32 *txz, u32 count,
+                                  u8 **out, u64 *size) {
+    *out = NULL;
+    *size = 0;
+    if (n == NULL || a == NULL || (count > 0 && txz == NULL))
+        return DE_ERR_INVALID_ARGUMENT;
+    if (count == 0 || n->mesh == NULL || !n->has_settings || !n->has_origin)
+        return DE_OK;
+    de__nav_tile_blob *blobs =
+        (de__nav_tile_blob *)DE_ALLOC(a, sizeof(de__nav_tile_blob) * count, 16, DE_MEM_GENERAL);
+    if (blobs == NULL)
+        return DE_ERR_OUT_OF_MEMORY;
+    u32 used = 0;
+    for (u32 i = 0; i < count; ++i) {
+        const u8 *data = NULL;
+        i32 bytes = 0;
+        if (!de__nav_mesh_tile_data(n->mesh, txz[i * 2u], txz[i * 2u + 1u], &data, &bytes))
+            continue;
+        bool dup = false;
+        for (u32 k = 0; k < used && !dup; ++k)
+            dup = blobs[k].tx == txz[i * 2u] && blobs[k].tz == txz[i * 2u + 1u];
+        if (dup)
+            continue;
+        blobs[used].tx = txz[i * 2u];
+        blobs[used].tz = txz[i * 2u + 1u];
+        blobs[used].data = data;
+        blobs[used].size = (u32)bytes;
+        ++used;
+    }
+    de_result r = DE_OK;
+    if (used > 0) {
+        de__nav_container_info info;
+        memset(&info, 0, sizeof info);
+        info.origin = n->origin;
+        info.desc = n->settings.desc;
+        info.tile_count = used;
+        r = de__nav_container_write(a, &info, blobs, used, out, size);
+    }
+    DE_FREE(a, blobs, sizeof(de__nav_tile_blob) * count);
+    return r;
+}
+
+de_result de_nav_settings_load_tiles(de_nav *n, const char *vpath, const char *agent) {
+    if (n == NULL || vpath == NULL || agent == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_nav_settings_load_tiles: NULL argument");
+    void *data = NULL;
+    u64 size = 0;
+    const de_result rd = de_file_read_all(vpath, de_heap_allocator(), &data, &size);
+    if (rd != DE_OK)
+        return rd;
+    const u8 *bytes = (const u8 *)data;
+    u32 count = 0;
+    const char *why = NULL;
+    de_result r = DE_ERR_NOT_FOUND;
+    if (!de__nav_tiles_read(bytes, size, &count, &why)) {
+        r = DE_FAIL(DE_ERR_PARSE, "%s: %s", vpath, why != NULL ? why : "malformed");
+    } else {
+        for (u32 i = 0; i < count; ++i) {
+            de__nav_tiles_agent g;
+            if (!de__nav_tiles_agent_at(bytes, size, i, &g) || strcmp(g.name, agent) != 0)
+                continue;
+            r = g.dnav_size > 0 ? de__nav_add_container(n, g.dnav, g.dnav_size) : DE_OK;
+            break;
+        }
+        if (r == DE_ERR_NOT_FOUND)
+            r = DE_FAIL(DE_ERR_NOT_FOUND, "%s: no agent type %s", vpath, agent);
+    }
+    DE_FREE(de_heap_allocator(), data, (size_t)size + 1);
+    return r;
 }
 
 void de_nav_add_navmesh(de_nav *n, de_navmesh mesh) {

@@ -5,6 +5,8 @@
  *   jump_link_used           AC2: a DeNavLink across a gap is used by nav.testPath
  *   cancel_and_overlay       nav.cancelBake and nav.overlay round-trip through nav.info
  *   settings_persist         DENG-833: nav.configure writes nav.toml; a new service reads it back
+ *   tiles_persist            DENG-864: a bake writes nav.tiles; a restart loads it, no rebake;
+ *                            moved inputs show dirty; the runtime loads the same file
  *   plane2d_in_info          DENG-863: nav.info.plane2d is side_xz by default, or the system's plane
  *   test_path2d_found        DENG-863: nav.testPath2d finds a path around blocked cells (jps on, off)
  *   test_path2d_errors       DENG-863: each not_found and invalid_params case of nav.testPath2d
@@ -20,6 +22,7 @@
 #if !defined(DE_SHIPPING)
 #include "ecs/ecs_internal.h"
 #include "gameplay/nav/nav_components.h"
+#include "gameplay/nav/nav_internal.h"
 #include "host/editor/editor_internal.h"
 #include "host/host_internal.h"
 #include <dengine/de_debug.h>
@@ -600,6 +603,89 @@ TEST_F(editor_nav, settings_persist, nav_fx) {
     EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(r, "areas")), 2u);
     de__ed_nav_set_settings_path(NULL);
     ASSERT_EQ(de_file_delete("ednav:/nav.toml"), DE_OK);
+}
+
+/* DENG-864: a finished bake writes nav.tiles beside nav.toml. A restarted service loads the tiles
+ * (baked, same polygons, no rebake, the test path works); tiles whose inputs moved show dirty and
+ * rebake; the runtime adds the same tiles with de_nav_settings_load_tiles. */
+TEST_F(editor_nav, tiles_persist, nav_fx) {
+    char dir[] = "/tmp/de_ed_nav_XXXXXX";
+    ASSERT_TRUE(mkdtemp(dir) != NULL);
+    ASSERT_EQ(de_fs_mount("ednavt", dir, DE_MOUNT_WRITABLE, 0), DE_OK);
+    de__ed_nav_set_settings_path("ednavt:/nav.toml");
+    frame(f);
+    add_box(f, 0, 0, -0.5, 16, 16, 0.5);                         /* the ground */
+    const de_entity wall = add_box(f, -4, 0, 1.5, 0.5, 12, 1.5); /* x -4.5..-3.5, y -12..12 */
+    configure_small(f, false);
+    void *data = NULL;
+    u64 size = 0;
+    EXPECT_EQ(de_file_read_all("ednavt:/nav.tiles", de_heap_allocator(), &data, &size),
+              DE_ERR_NOT_FOUND); /* not before a bake */
+    de_error_clear();
+    bake_all(f);
+    ASSERT_TRUE(run_until_done(f, 400));
+    tile_rec before[16];
+    read_tiles(f, before);
+    ASSERT_EQ(de_file_read_all("ednavt:/nav.tiles", de_heap_allocator(), &data, &size), DE_OK);
+    EXPECT_GT(size, 16u);
+    DE_FREE(de_heap_allocator(), data, (size_t)size + 1);
+    const path_rec p0 = test_path(f, -10, -2, 10, -2);
+    ASSERT_TRUE(p0.ok);
+
+    /* A restart: every tile comes back baked with its polygons, and nothing rebakes. */
+    for (u32 i = 0; i < f->editor.reset_count; ++i)
+        f->editor.resets[i](&f->editor);
+    de__ed_nav_shutdown(&f->editor);
+    de__ed_nav_register(&f->editor);
+    tile_rec after[16];
+    read_tiles(f, after);
+    u32 polys = 0;
+    for (u32 t = 0; t < 16; ++t) {
+        EXPECT_EQ(strcmp(after[t].state, "baked"), 0);
+        EXPECT_EQ(after[t].polys, before[t].polys);
+        polys += after[t].polys;
+    }
+    EXPECT_GT(polys, 0u);
+    f->state[0] = '\0';
+    for (u32 i = 0; i < 20; ++i)
+        frame(f);
+    EXPECT_EQ(f->state[0], '\0'); /* no bake note */
+    const path_rec p1 = test_path(f, -10, -2, 10, -2);
+    ASSERT_TRUE(p1.ok);
+    EXPECT_FALSE(p1.partial);
+    EXPECT_NEAR(p1.length, p0.length, 1e-3);
+
+    /* Moving the wall marks its old and new tiles dirty; a dirty-only bake redoes just those. */
+    move(f, wall, 4, 0, 1.5);
+    tile_rec moved[16];
+    read_tiles(f, moved);
+    u32 dirty = 0;
+    for (u32 t = 0; t < 16; ++t)
+        dirty += strcmp(moved[t].state, "dirty") == 0;
+    EXPECT_GT(dirty, 0u);
+    EXPECT_LT(dirty, 16u);
+    de_ep_nav_bake_params bq;
+    memset(&bq, 0, sizeof bq);
+    bq.has_dirty_only = true;
+    bq.dirty_only = true;
+    result_of(call(f, DE_EP_METHOD_NAV_BAKE, &bq));
+    ASSERT_TRUE(run_until_done(f, 400));
+    EXPECT_EQ(f->done, dirty);
+
+    /* The runtime: the same file, by agent type name. */
+    de_nav *rt = NULL;
+    ASSERT_EQ(de_nav_create(de_heap_allocator(), NULL, &rt), DE_OK);
+    EXPECT_EQ(de_nav_settings_load_tiles(rt, "ednavt:/nav.tiles", "humanoid"), DE_OK);
+    EXPECT_GT(de__nav_tile_count(rt), 0u);
+    EXPECT_EQ(de_nav_settings_load_tiles(rt, "ednavt:/nav.tiles", "tank"), DE_ERR_NOT_FOUND);
+    EXPECT_EQ(de_nav_settings_load_tiles(rt, "ednavt:/missing.tiles", "humanoid"),
+              DE_ERR_NOT_FOUND);
+    de_error_clear();
+    de_nav_destroy(rt);
+
+    de__ed_nav_set_settings_path(NULL);
+    ASSERT_EQ(de_file_delete("ednavt:/nav.tiles"), DE_OK);
+    ASSERT_EQ(de_file_delete("ednavt:/nav.toml"), DE_OK);
 }
 
 /* ---------- DENG-863: nav.testPath2d, NavInfo.plane2d, NavOverlayParams.grids ---------- */

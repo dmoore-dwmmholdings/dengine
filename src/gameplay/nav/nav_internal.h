@@ -158,6 +158,10 @@ typedef struct de__nav_path_detail {
 de_result de__nav_find_path_detail(de_nav *n, de_dvec3 from, de_dvec3 to, u32 area_mask,
                                    const de_allocator *a, de_nav_path *out,
                                    de__nav_path_detail *d);
+/** A DNAV container (from `a`, free with size `*size`) of the listed tiles that have data:
+ *  `txz` holds `count` (tx, tz) pairs. `*out` is NULL when none has data (DENG-864). */
+de_result de__nav_write_container(const de_nav *n, const de_allocator *a, const i32 *txz, u32 count,
+                                  u8 **out, u64 *size);
 /** Ground polygons and links of tile (tx, tz); false when it has no data. */
 bool de__nav_tile_stats(const de_nav *n, i32 tx, i32 tz, i32 *polys, i32 *links);
 /** World-space detail triangles of tile (tx, tz): up to `cap` (3 points in `pts`, an area in
