@@ -176,6 +176,9 @@ void de__manifest_destroy(de__manifest *m);
 const de__manifest_asset *de__manifest_find_asset(const de__manifest *m, const char *id);
 /** The bundle with this name, or NULL. Linear. */
 const de__manifest_bundle *de__manifest_find_bundle(const de__manifest *m, const char *name);
+/** DENG-856: sets the `[worlds.<name>]` defaults of every setting field (cells_dir "", cell
+ * size, radii, load cap, proxy settings); leaves name, file, line and scenes alone. */
+void de__manifest_world_defaults(de__manifest_world *w);
 /** The world named `name`, or NULL (DENG-271). */
 const de__manifest_world *de__manifest_find_world(const de__manifest *m, const char *name);
 /** The defaults of `type`, or NULL. Linear. */

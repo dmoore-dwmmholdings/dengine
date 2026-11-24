@@ -188,6 +188,7 @@ de_result de_asset_pack_mount(de_asset_system *s, const char *vpath, i32 priorit
     memmove(st->packs + at + 1, st->packs + at, sizeof(de__pack *) * (st->count - at));
     st->packs[at] = p;
     st->count++;
+    de__asset_bundle_names_invalidate(s); /* DENG-856 */
     DE_INFO(s->log, "mounted pack \"%s\" (priority %d, %u assets, %u bundles)", norm, (int)priority,
             dpak_entry_count(r), dpak_bundle_count(r));
     return DE_OK;
@@ -207,6 +208,7 @@ void de_asset_pack_unmount(de_asset_system *s, const char *vpath) {
     memmove(st->packs + i, st->packs + i + 1, sizeof(de__pack *) * (st->count - (u32)i - 1u));
     st->count--;
     p->mounted = false;
+    de__asset_bundle_names_invalidate(s); /* DENG-856: before the pack can close */
     if (p->refs > 1) { /* jobs still read it: closed when the last one is freed */
         p->retired_next = st->retired;
         st->retired = p;
@@ -249,6 +251,23 @@ static bool find_bundle(const de__mount_stack *st, u64 hash, de__pack **pack,
         return true;
     }
     return false;
+}
+
+u32 de__mount_bundle_names(const de_asset_system *s, const char **out, u32 capacity) {
+    const de__mount_stack *st = s != NULL ? s->mounts : NULL;
+    u32 n = 0;
+    for (u32 i = 0; st != NULL && i < st->count; ++i) {
+        const dpak_reader *r = st->packs[i]->reader;
+        u32 bc = dpak_bundle_count(r);
+        for (u32 k = 0; k < bc; ++k, ++n) {
+            if (n >= capacity)
+                continue;
+            dpak_bundle_entry b;
+            dpak_bundle(r, k, &b);
+            out[n] = dpak_bundle_name(r, &b);
+        }
+    }
+    return n;
 }
 
 static bool ids_grow(de_asset_system *s, de_asset_id **ids, u32 *capacity, u32 count, u32 more) {

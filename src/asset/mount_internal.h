@@ -114,6 +114,13 @@ typedef struct de__mount_bundle {
  *         DE_ERR_OUT_OF_MEMORY. Main thread.
  */
 de_result de__mount_bundle_closure(de_asset_system *s, const char *name, de__mount_bundle *out);
+/**
+ * DENG-856: the bundle names of the mounted packs, topmost pack first, each pack in its table
+ * order. Writes at most `capacity` names to `out` (may be NULL when `capacity` is 0) and returns
+ * the total, so a caller can size its array with a first call. A name repeats when several packs
+ * define the bundle. The strings live while their pack is mounted. Main thread.
+ */
+u32 de__mount_bundle_names(const de_asset_system *s, const char **out, u32 capacity);
 /** Pins the resident members of `b` in the budget (after the request was created). */
 void de__mount_bundle_pin(de_asset_system *s, const de__mount_bundle *b);
 void de__mount_bundle_free(de_asset_system *s, de__mount_bundle *b);

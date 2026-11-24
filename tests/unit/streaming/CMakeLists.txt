@@ -4,7 +4,8 @@
 #   test_world_cook.c      `de-cook world` (tools/cook/world_cells.c): determinism, the golden
 #                          fixture tests/assets/world_small/, manifest checks. Tools builds only.
 #   test_world_partition.c streaming over a real asset system (SOURCE mode, in-process cooker):
-#                          load order, per-frame cap, hysteresis, memory, far origin, proxies.
+#                          load order, per-frame cap, hysteresis, memory, far origin, proxies,
+#                          and PACKED mode on a pack cooked in-process by de_cook_cmd (DENG-856).
 set(_de_streaming_tests test_cell_grid.c test_world_partition.c)
 set(_de_streaming_libs de_streaming de_asset de_ecs de_reflect de_task de_platform)
 if(DE_BUILD_TOOLS)
@@ -20,7 +21,7 @@ if(TARGET test_streaming)
     if(DE_BUILD_TOOLS)
         target_compile_definitions(test_streaming PRIVATE DE_STREAMING_HAS_WORLD_COOK=1)
         # de_cook_world is defined later (tools/ sorts after tests/); resolved at generate time.
-        target_link_libraries(test_streaming PRIVATE de_cook_world
+        target_link_libraries(test_streaming PRIVATE de_cook_world de_cook_cmd
             "$<$<CONFIG:Debug,Dev>:de_cooker>")
     endif()
 endif()

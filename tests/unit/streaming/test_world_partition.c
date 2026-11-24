@@ -13,6 +13,8 @@
  *   no_alloc      steady update frames allocate nothing.
  *   editor        world_small, the editor extensions (DENG-831, partition_editor.h): editor
  *                 sources, forces, the dry-run preview, per-cell bytes and entities.
+ *   packed        world_small plus far proxies, packed by `de-cook cook` (DENG-856): PACKED mode
+ *                 finds the same cells and proxies as SOURCE mode, with or without the manifest.
  */
 #include "de_test.h"
 #include <dengine/de_asset.h>
@@ -26,6 +28,7 @@
 #include "world/streaming/streaming_internal.h"
 
 #if defined(DE_STREAMING_HAS_WORLD_COOK)
+#include "cook/cook_cmd.h"
 #include "cook/world_cells.h"
 #endif
 
@@ -638,4 +641,209 @@ TEST_F(streaming, world_partition_editor, wp_fx) {
     EXPECT_EQ(st.cells_loaded, 0u);
     de__wp_extra_stats(f->p, &failed, &bytes);
     EXPECT_EQ(bytes, 0u);
+}
+
+/* ---- test_world_partition_packed (DENG-856) -------------------------------------------------- */
+
+/* world_small copied under <TMP>/packw, plus proxies.toml: a far proxy for cell (0, 0) and one for
+ * (7, 7), which has no cell. `de-cook cook` packs it into <TMP>/packw/out/small.dpak. */
+#define PACKW TMP "/packw"
+
+#if defined(DE_STREAMING_HAS_WORLD_COOK)
+static bool packw_copy(const char *rel) {
+    char src[256], dst[256];
+    snprintf(src, sizeof src, "wsmall:/%s", rel);
+    snprintf(dst, sizeof dst, "wpkw:/packw/%s", rel);
+    const de_allocator *a = de_heap_allocator();
+    void *data = NULL;
+    u64 size = 0;
+    if (de_file_read_all(src, a, &data, &size) != DE_OK)
+        return false;
+    bool ok = de_file_write_all_atomic(dst, data, size) == DE_OK;
+    DE_FREE(a, data, size + 1);
+    return ok;
+}
+#endif
+
+/* Writes and packs the project once. False when it cannot. */
+static bool packw_make(void) {
+#if defined(DE_STREAMING_HAS_WORLD_COOK)
+    static int made; /* 0 not tried, 1 made, -1 failed */
+    if (made != 0)
+        return made > 0;
+    made = -1;
+    if (!g_small_mounted) {
+        if (de_fs_mount("wsmall", FIXTURE, DE_MOUNT_READ_ONLY, 0) != DE_OK)
+            return false;
+        g_small_mounted = true;
+    }
+    if (de_fs_mount("wpkw", TMP, DE_MOUNT_WRITABLE, 0) != DE_OK)
+        return false;
+    static const char *const files[] = {
+        "assets/scenes/props.scene.toml",           "assets/scenes/terrain.scene.toml",
+        "assets/worlds/small/cells.toml",           "assets/worlds/small/cell_0_0.scene.toml",
+        "assets/worlds/small/cell_-1_-3.scene.toml", "assets/worlds/small/cell_1_0.scene.toml",
+        "assets/worlds/small/cell_390_390.scene.toml"};
+    bool ok = de_dir_create("wpkw:/packw/assets/scenes") == DE_OK &&
+              de_dir_create("wpkw:/packw/assets/worlds/small") == DE_OK;
+    for (u32 i = 0; ok && i < (u32)(sizeof files / sizeof files[0]); ++i)
+        ok = packw_copy(files[i]);
+    static const char manifest[] =
+        "# DENG-856 test project: world_small plus far proxies (test_world_partition.c).\n"
+        "[project]\nasset_root = \"assets\"\n"
+        "include = [\"assets/worlds/small/cells.toml\", \"assets/worlds/small/proxies.toml\"]\n"
+        "[assets]\n"
+        "\"levels/small_terrain\" = { type = \"scene\", source = \"scenes/terrain.scene.toml\" }\n"
+        "\"levels/small_props\" = { type = \"scene\", source = \"scenes/props.scene.toml\" }\n"
+        "[worlds.small]\nscenes = [\"levels/small_terrain\", \"levels/small_props\"]\n"
+        "load_radius = 384.0\nunload_radius = 512.0\nmax_loads_per_frame = 2\n";
+    /* Scene assets stand in for the proxy models: the partition only requests them here. */
+    static const char proxies[] =
+        "[assets]\n"
+        "\"world/small/proxy_0_0\" = { type = \"scene\", source = "
+        "\"worlds/small/cell_0_0.scene.toml\" }\n"
+        "\"world/small/proxy_7_7\" = { type = \"scene\", source = "
+        "\"worlds/small/cell_1_0.scene.toml\" }\n"
+        "[bundles.\"world/small/proxy_0_0\"]\nassets = [\"world/small/proxy_0_0\"]\n"
+        "[bundles.\"world/small/proxy_7_7\"]\nassets = [\"world/small/proxy_7_7\"]\n";
+    ok = ok &&
+         de_file_write_all_atomic("wpkw:/packw/assets.toml", manifest, sizeof manifest - 1) ==
+             DE_OK &&
+         de_file_write_all_atomic("wpkw:/packw/assets/worlds/small/proxies.toml", proxies,
+                                  sizeof proxies - 1) == DE_OK;
+    if (ok) {
+#if defined(_WIN32)
+        const char *plat = "windows";
+#elif defined(__APPLE__)
+        const char *plat = "macos";
+#else
+        const char *plat = "linux";
+#endif
+        const char *argv[] = {PACKW "/assets.toml", "--platform", plat, "--out", PACKW "/out",
+                              "--pack-name", "small", "--quiet", "--no-cache", "--jobs", "1"};
+        de_cook_io io = {path_cook_sink, NULL};
+        ok = de_cook_cook_run((int)(sizeof argv / sizeof argv[0]), argv, &io, NULL) == DE_COOK_EXIT_OK;
+    }
+    if (ok)
+        made = 1;
+    return ok;
+#else
+    return false;
+#endif
+}
+
+#define PACKW_MAX 8
+typedef struct packw_cells {
+    u32 count;
+    i32 cx[PACKW_MAX], cy[PACKW_MAX];
+    bool proxy[PACKW_MAX];
+    f32 load_radius; /* de_asset_world_info_get */
+} packw_cells;
+
+/* Opens world "small" in `mode`, on the manifest (NULL: none) and the pack (NULL: none), and
+ * returns the cells the partition found. Closes everything again. */
+static packw_cells packw_discover(wp_fx *f, de_asset_mode mode, const char *manifest,
+                                  const char *pack) {
+    packw_cells out;
+    memset(&out, 0, sizeof out);
+    ASSERT_EQ(de_world_create(&(de_world_desc){.allocator = &f->a_world, .types = f->reg},
+                                  &f->w),
+              DE_OK);
+    de_asset_system_desc d = {.allocator = &f->a_asset,
+                              .tasks = f->tasks,
+                              .io_threads = 1,
+                              .cache_dir = "nocache:/decache",
+                              .types = f->reg,
+                              .mode = mode};
+    ASSERT_EQ(de_asset_system_create(&d, &f->s), DE_OK);
+    if (manifest != NULL)
+        ASSERT_EQ(de_asset_manifest_load(f->s, manifest), DE_OK);
+    if (pack != NULL)
+        ASSERT_EQ(de_asset_pack_mount(f->s, pack, 0), DE_OK);
+    de_asset_world_info wi;
+    ASSERT_EQ(de_asset_world_info_get(f->s, "small", &wi), DE_OK);
+    out.load_radius = wi.load_radius;
+    de_world_partition_desc pd = {.allocator = &f->a_part, .on_cell = on_cell, .user = f};
+    ASSERT_EQ(de_world_partition_open(f->s, f->w, "small", &pd, &f->p), DE_OK);
+    out.count = de__wp_cell_count(f->p);
+    for (u32 i = 0; i < out.count && i < PACKW_MAX; ++i) {
+        de__wp_cell_info c;
+        EXPECT_TRUE(de__wp_cell_info_at(f->p, i, &c));
+        out.cx[i] = c.cx;
+        out.cy[i] = c.cy;
+        out.proxy[i] = c.has_proxy;
+    }
+    de_world_partition_close(f->p);
+    f->p = NULL;
+    de_asset_system_destroy(f->s);
+    f->s = NULL;
+    de_world_destroy(f->w);
+    f->w = NULL;
+    return out;
+}
+
+static void packw_expect_same(const packw_cells *want, const packw_cells *got) {
+    ASSERT_EQ(got->count, want->count);
+    for (u32 i = 0; i < want->count && i < PACKW_MAX; ++i) {
+        EXPECT_EQ(got->cx[i], want->cx[i]);
+        EXPECT_EQ(got->cy[i], want->cy[i]);
+        EXPECT_EQ(got->proxy[i], want->proxy[i]);
+    }
+}
+
+TEST_F(streaming, world_partition_packed, wp_fx) {
+#if !DE_HAS_COOKER || !defined(DE_STREAMING_HAS_WORLD_COOK)
+    SKIP(NO_COOKER_MSG);
+#endif
+    if (!packw_make())
+        SKIP("cannot write or pack the test project in the build tree");
+    mount_once("wpk", PACKW, DE_MOUNT_READ_ONLY);
+
+    /* SOURCE mode on the manifest: the reference. */
+    packw_cells src = packw_discover(f, DE_ASSET_MODE_SOURCE, "wpk:/assets.toml", NULL);
+    ASSERT_EQ(src.count, 4u);
+    EXPECT_FLOAT_EQ(src.load_radius, 384.0f, 0.0);
+    static const i32 want_cx[] = {-1, 0, 1, 390}, want_cy[] = {-3, 0, 0, 390};
+    for (u32 i = 0; i < 4; ++i) {
+        EXPECT_EQ(src.cx[i], want_cx[i]);
+        EXPECT_EQ(src.cy[i], want_cy[i]);
+    }
+#if DE_HAS_RENDER
+    EXPECT_TRUE(src.proxy[1]); /* (0, 0); the (7, 7) proxy has no cell */
+    EXPECT_FALSE(src.proxy[0] || src.proxy[2] || src.proxy[3]);
+#endif
+
+    /* PACKED mode on the pack alone: the same cells and proxies, the default world settings. */
+    packw_cells pk = packw_discover(f, DE_ASSET_MODE_PACKED, NULL, "wpk:/out/small.dpak");
+    packw_expect_same(&src, &pk);
+    EXPECT_FLOAT_EQ(pk.load_radius, 512.0f, 0.0);
+
+    /* PACKED mode on the pack and the manifest: the same cells, the manifest's settings. */
+    pk = packw_discover(f, DE_ASSET_MODE_PACKED, "wpk:/assets.toml", "wpk:/out/small.dpak");
+    packw_expect_same(&src, &pk);
+    EXPECT_FLOAT_EQ(pk.load_radius, 384.0f, 0.0);
+
+    /* SOURCE mode with the pack mounted too: each bundle name is listed once. */
+    ASSERT_EQ(de_world_create(&(de_world_desc){.allocator = &f->a_world, .types = f->reg}, &f->w),
+              DE_OK);
+    de_asset_system_desc d = {.allocator = &f->a_asset,
+                              .tasks = f->tasks,
+                              .io_threads = 1,
+                              .cache_dir = "nocache:/decache",
+                              .types = f->reg};
+    ASSERT_EQ(de_asset_system_create(&d, &f->s), DE_OK);
+    ASSERT_EQ(de_asset_manifest_load(f->s, "wpk:/assets.toml"), DE_OK);
+    u32 n_manifest = de_asset_bundle_count(f->s);
+    ASSERT_EQ(de_asset_pack_mount(f->s, "wpk:/out/small.dpak", 0), DE_OK);
+    u32 n = de_asset_bundle_count(f->s);
+    EXPECT_EQ(n, n_manifest);
+    for (u32 i = 0; i < n; ++i)
+        for (u32 j = i + 1; j < n; ++j)
+            EXPECT_NE(strcmp(de_asset_bundle_name(f->s, i), de_asset_bundle_name(f->s, j)), 0);
+    EXPECT_TRUE(de_asset_bundle_name(f->s, n) == NULL);
+    /* A world no pack or manifest has stays NOT_FOUND. */
+    de_asset_world_info wi;
+    EXPECT_EQ(de_asset_world_info_get(f->s, "nope", &wi), DE_ERR_NOT_FOUND);
+    de_asset_pack_unmount(f->s, "wpk:/out/small.dpak");
+    EXPECT_EQ(de_asset_bundle_count(f->s), n_manifest);
 }
