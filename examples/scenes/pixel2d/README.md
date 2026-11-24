@@ -79,6 +79,8 @@ also passes under ASan/UBSan with both validation layers enabled. The original
 
 The snapping negative control fails at FLIP mean 0.015315 / p99 0.469646;
 reversed sorting fails at mean 0.002215 / p99 0.100163, against the original
-thresholds. The separate RT golden still fails at mean 0.009874 / p99 0.356973;
-its RGBA output is identical before and after this reconstruction fix, and its
-reference is unchanged.
+thresholds. The separate RT golden then failed at mean 0.009874 / p99 0.356973; its
+RGBA output was identical before and after this reconstruction fix. DENG-842
+refreshed `pixel2d_rt_int4x`: the old reference had the torch, glass and left
+plant sprites one internal pixel right of where the Base reference and the
+snapping grid put them. The new capture matches the Base sprite positions.
