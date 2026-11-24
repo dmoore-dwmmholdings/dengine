@@ -33,6 +33,10 @@ typedef struct de__asset_destroy_observer {
     struct de__asset_destroy_observer **list;
 } de__asset_destroy_observer;
 
+/** DENG-856: longest world name (with its NUL) that de_asset_world_info_get can take from the
+ * packs alone. */
+#define DE__ASSET_PACK_WORLD_NAME_MAX 128
+
 struct de_asset_system {
     /* ---- DENG-138: system, manifest, locale ---------------------------------------------- */
     const de_allocator *alloc; /**< desc.allocator, or de_heap_allocator() */
@@ -110,7 +114,22 @@ struct de_asset_system {
     /* ---- DENG-271: streaming sources (world_stream.c) ------------------------------------ */
     de_streaming_source stream_sources[DE_ASSET_MAX_STREAMING_SOURCES];
     u32 stream_source_count;
+
+    /* ---- DENG-856: merged bundle names (world_stream.c) ---------------------------------- */
+    /** de_asset_bundle_count/name: the bundles of the manifest and of the mounted packs, each
+     * name once, in load precedence order. Built on first use; dropped by
+     * de__asset_bundle_names_invalidate when the manifest or the mount stack changes. The
+     * strings belong to the manifest and the pack readers. */
+    const char **bundle_names;
+    u32 bundle_name_count, bundle_name_capacity;
+    bool bundle_names_valid;
+    /** de_asset_world_info_get of a world that only the packs define: its name. */
+    char pack_world_name[DE__ASSET_PACK_WORLD_NAME_MAX];
 };
+
+/** DENG-856: drops the merged bundle name list (manifest swap, pack mount and unmount, destroy).
+ * Main thread. */
+void de__asset_bundle_names_invalidate(de_asset_system *s);
 
 /** Main thread; observer is zero-initialized and not already registered. No allocation. */
 void de__asset_destroy_observe(de_asset_system *s, de__asset_destroy_observer *observer,

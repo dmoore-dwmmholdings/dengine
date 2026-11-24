@@ -978,14 +978,7 @@ static bool mf_world(mf_parser *p, const char *name, size_t name_len, const toml
     w.name = name_copy;
     w.file = p->cur_file;
     w.line = line > 0 ? (u32)line : 0u;
-    w.cells_dir = "";
-    w.cell_size = 256;
-    w.load_radius = 512.0f;
-    w.unload_radius = 640.0f;
-    w.max_loads_per_frame = 4;
-    w.proxy_enabled = true;
-    w.proxy_triangle_ratio = 0.05f;
-    w.proxy_fade_seconds = 0.5f;
+    de__manifest_world_defaults(&w);
     bool broken = false, has_scenes = false, has_unload = false;
     for (int32_t i = 0; i < t->u.tab.size; ++i) {
         const toml_datum_t *v = &t->u.tab.value[i];
@@ -1537,6 +1530,17 @@ const char *de__manifest_source_for(const de__manifest *m, const de__manifest_as
             --len; /* the separator */
     }
     return asset->source;
+}
+
+void de__manifest_world_defaults(de__manifest_world *w) {
+    w->cells_dir = "";
+    w->cell_size = 256;
+    w->load_radius = 512.0f;
+    w->unload_radius = 640.0f;
+    w->max_loads_per_frame = 4;
+    w->proxy_enabled = true;
+    w->proxy_triangle_ratio = 0.05f;
+    w->proxy_fade_seconds = 0.5f;
 }
 
 const de__manifest_world *de__manifest_find_world(const de__manifest *m, const char *name) {

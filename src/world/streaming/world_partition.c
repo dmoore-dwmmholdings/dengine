@@ -775,6 +775,7 @@ bool de__wp_cell_info_at(const de_world_partition *p, u32 i, de__wp_cell_info *o
     out->zmax = c->zmax;
     out->proxy_visible = p->proxy_enabled && c->proxy.active;
     out->proxy_alpha = p->proxy_enabled ? c->proxy.alpha : 0.0f;
+    out->has_proxy = DE_HANDLE_VALID(c->proxy_h);
     out->error = c->state == DE_WORLD_CELL_FAILED && c->error[0] != '\0' ? c->error : NULL;
     return true;
 }

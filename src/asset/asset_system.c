@@ -156,6 +156,7 @@ void de_asset_system_destroy(de_asset_system *s) {
     de__load_shutdown(s);              /* DENG-141: releases every request and its slot refs */
     de__pipeline_shutdown(s);          /* DENG-142: after the requests cancelled its jobs */
     de__asset_reload_shutdown(s);      /* DENG-214: no reload job left; before the slots */
+    de__asset_bundle_names_invalidate(s); /* DENG-856: before the packs and the manifest */
     de__mount_shutdown(s);             /* DENG-212: no job reads a pack any more */
     de__slots_shutdown(s);             /* DENG-140: unloads objects through their types, so first */
     de__asset_types_shutdown(s);       /* DENG-140 */
@@ -233,6 +234,7 @@ de_result de_asset_manifest_load(de_asset_system *s, const char *vpath) {
                        error_count, error_count == 1 ? "" : "s", first->file, first->line,
                        first->key_path, first->key_path[0] != '\0' ? ": " : "", first->message);
     }
+    de__asset_bundle_names_invalidate(s); /* DENG-856: it points into the old manifest */
     de__resolved_destroy(s->resolved);
     de__manifest_destroy(s->manifest);
     s->manifest = m;

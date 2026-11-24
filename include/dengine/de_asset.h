@@ -849,7 +849,15 @@ DE_API void de_asset_set_streaming_sources(de_asset_system *s, const de_streamin
 DE_API u32 de_asset_get_streaming_sources(const de_asset_system *s,
                                           const de_streaming_source **out);
 
-/** `[worlds.<name>]` with defaults applied. Strings live until the next manifest load. */
+/**
+ * `[worlds.<name>]` with defaults applied. Strings live until the next manifest load.
+ *
+ * DENG-856: a world that no loaded manifest declares but whose cell bundles
+ * ("world/<name>/cell_<cx>_<cy>") a mounted pack defines (a PACKED game without assets.toml) gets
+ * the `[worlds]` defaults, with `cells_dir` "" and `scene_count` 0: packs do not store the
+ * `[worlds]` table. Load the manifest too to keep its settings. Its `name` then lives until the
+ * next de_asset_world_info_get.
+ */
 typedef struct de_asset_world_info {
     const char *name;
     const char *cells_dir;
@@ -863,9 +871,15 @@ typedef struct de_asset_world_info {
 /** Looks up a world of the active manifest. DE_ERR_NOT_FOUND when there is none. */
 DE_API de_result de_asset_world_info_get(const de_asset_system *s, const char *name,
                                          de_asset_world_info *out);
-/** Bundles of the active manifest, in declaration order (0 without a manifest). */
+/**
+ * The bundles de_asset_load_bundle can load: those of the active manifest (declaration order) and
+ * of the mounted packs (topmost pack first), each name once. PACKED mode lists the packs' bundles
+ * first, SOURCE mode the manifest's, as de_asset_load_bundle looks them up (DENG-856). 0 without
+ * a manifest and packs. The list is built on the first call after a change. Main thread.
+ */
 DE_API u32 de_asset_bundle_count(const de_asset_system *s);
-/** The name of bundle `index`, or NULL when out of range. Lives until the next manifest load. */
+/** The name of bundle `index`, or NULL when out of range. Lives until the next manifest load,
+ * pack mount or pack unmount. Main thread. */
 DE_API const char *de_asset_bundle_name(const de_asset_system *s, u32 index);
 
 /* ---- World partition (src/world/streaming) ----

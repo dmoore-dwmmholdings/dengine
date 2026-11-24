@@ -42,6 +42,7 @@ typedef struct de__wp_cell_info {
     u32 entities;   /* entities under the cell root at its last load (0 before one) */
     f64 zmin, zmax; /* content extent along z at its last load (0, 0 before one) */
     bool proxy_visible;
+    bool has_proxy; /* DENG-856: a far proxy bundle was found for the cell (render builds) */
     f32 proxy_alpha;
     const char *error; /* state FAILED: why; NULL otherwise */
 } de__wp_cell_info;
