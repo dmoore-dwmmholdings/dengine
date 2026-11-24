@@ -105,8 +105,10 @@ bool alpha_keep(DeSceneConstants sc, uint material, float2 uv, uint sampler, flo
     {
         if (!dither_test(dither, pixel))
             return false;
-        if (material >= sc.material_count ||
-            de_robuffer<DeGpuMaterial>(sc.materials)[material].alpha_mode != DE_GPU_MATERIAL_ALPHA_MASK)
+        if (material >= sc.material_count)
+            return true;
+        if (de_robuffer<DeGpuMaterial>(sc.materials)[material].alpha_mode !=
+            DE_GPU_MATERIAL_ALPHA_MASK)
             return true;
     }
     return alpha_test(sc, material, uv, sampler);
