@@ -337,6 +337,7 @@ struct de__sky_render {
     u32 smp_wrap_bindless;
     de_cvar cv_aerial; /* r.sky_aerial_perspective */
     de__sky_ibl *ibl;  /* DENG-838 */
+    de__sky_ibl_owner ibl_owner; /* DENG-845: the view whose altitude the IBL follows */
     u64 ibl_swap_frame; /* DENG-844: frame_index + 1 of the frame a new environment was handed over */
     bool registered, ibl_registered, failed, ibl_failed;
 };
@@ -545,6 +546,9 @@ static void ibl_stage(de__view_frame *vf, void *user) {
     de__sky_render *sr = (de__sky_render *)user;
     if (sr->failed || sr->ibl_failed || !de__sky_luts_ready(sr->luts) || vf->graph == NULL ||
         vf->camera == NULL || vf->probe_capture)
+        return;
+    /* DENG-845: one view owns the IBL altitude; the rest leave it alone. */
+    if (!de__sky_ibl_owner_claim(&sr->ibl_owner, vf->view.id, vf->frame_index))
         return;
     de_renderer *r = vf->renderer;
     de__lighting *lt = de__views_lighting(r);

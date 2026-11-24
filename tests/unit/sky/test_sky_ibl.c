@@ -95,6 +95,49 @@ TEST(sky_ibl, test_sky_ibl_sh_lit_up_face) {
     EXPECT_TRUE(down[0] < 0.2f * up[0]);
 }
 
+TEST(sky_ibl, test_sky_ibl_two_views_bounded_regeneration) {
+    /* Two views at 0 km and 5 km, both running every frame: counts the regenerations a stage
+     * would start (the owner's staleness test) over 600 frames. Without an owner each view flips
+     * the last altitude and it regenerates every frame. */
+    de__sky_snapshot sn;
+    memset(&sn, 0, sizeof sn);
+    sn.valid = true;
+    sn.sun_dir = (de_vec3){0.0f, -0.70710678f, 0.70710678f};
+    sn.moon_dir = (de_vec3){0.0f, 0.0f, -1.0f};
+    sn.sun_weight = 120000.0f;
+    sn.mie_scale = 1.0f;
+    sn.albedo = 0.3f;
+    const f32 r_km[2] = {6360.0f, 6365.0f};
+    for (int owned = 0; owned < 2; ++owned) {
+        de__sky_ibl_owner o = {0, 0};
+        de__sky_snapshot last = {0};
+        f32 last_r = 0.0f;
+        int regen = 0;
+        for (u64 frame = 0; frame < 600; ++frame) {
+            for (u32 v = 1; v <= 2; ++v) {
+                if (owned && !de__sky_ibl_owner_claim(&o, v, frame))
+                    continue;
+                if (de__sky_ibl_stale(last.valid ? &last : NULL, last_r, &sn, r_km[v - 1])) {
+                    ++regen;
+                    last = sn;
+                    last_r = r_km[v - 1];
+                }
+            }
+        }
+        if (owned)
+            EXPECT_EQ(regen, 1);
+        else
+            EXPECT_TRUE(regen > 100); /* the thrash this fixes */
+    }
+    /* The owner lapses: view 2 takes over once view 1 has not run for a whole frame. */
+    de__sky_ibl_owner o = {0, 0};
+    EXPECT_TRUE(de__sky_ibl_owner_claim(&o, 1, 10));
+    EXPECT_FALSE(de__sky_ibl_owner_claim(&o, 2, 10));
+    EXPECT_FALSE(de__sky_ibl_owner_claim(&o, 2, 11));
+    EXPECT_TRUE(de__sky_ibl_owner_claim(&o, 2, 13));
+    EXPECT_FALSE(de__sky_ibl_owner_claim(&o, 1, 13));
+}
+
 TEST(sky_ibl, test_sky_ibl_stale_threshold) {
     de__sky_snapshot a;
     memset(&a, 0, sizeof a);

@@ -170,6 +170,18 @@ bool de__sky_snapshot_get(struct de_sky *s, de__sky_snapshot *out);
 /** The viewer's altitude change (km) that regenerates it. */
 #define DE__SKY_IBL_ALT_KM 0.1f
 
+/** DENG-845: which view's altitude drives the sky IBL. One view owns it; the others never start
+ * a generation, so views at different altitudes cannot make it regenerate every frame. The owner
+ * is the first view to reach the "sky.ibl" stage; it keeps the role while it runs at least every
+ * other frame, and any view takes it over after that (the owner view was destroyed or hidden). */
+typedef struct de__sky_ibl_owner {
+    u32 view_id;
+    u64 last_frame_plus1; /**< frame_index + 1 of the owner's latest frame; 0: no owner */
+} de__sky_ibl_owner;
+/** True when the view `view_id` runs in `frame_index` as the IBL owner (claiming the role when it
+ * is free or lapsed). False: another view owns it. Pure, no allocation. */
+bool de__sky_ibl_owner_claim(de__sky_ibl_owner *o, u32 view_id, u64 frame_index);
+
 /** Projects a face strip (`n` x 6 `n` RGBA16F texels, rows `pitch_texels` apart; the face order
  * and directions of de_cooked_env.h) of radiance onto the SH9 irradiance E_k = A_l L_k
  * (de_cooked_env.h's basis and A_l). Pure. */

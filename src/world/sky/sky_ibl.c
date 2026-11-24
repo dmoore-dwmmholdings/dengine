@@ -135,6 +135,16 @@ bool de__sky_ibl_stale(const de__sky_snapshot *last, f32 last_r_km, const de__sk
            fabsf(last_r_km - r_km) > DE__SKY_IBL_ALT_KM;
 }
 
+bool de__sky_ibl_owner_claim(de__sky_ibl_owner *o, u32 view_id, u64 frame_index) {
+    const bool free_or_lapsed = o->last_frame_plus1 == 0 || o->view_id == view_id ||
+                                frame_index > o->last_frame_plus1; /* unseen for a whole frame */
+    if (!free_or_lapsed)
+        return false;
+    o->view_id = view_id;
+    o->last_frame_plus1 = frame_index + 1u;
+    return true;
+}
+
 /* ---------- The generator (render builds) ---------- */
 
 #if DE_HAS_RENDER
