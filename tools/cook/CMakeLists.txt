@@ -268,10 +268,16 @@ target_link_libraries(de_cooker PRIVATE de_nav_build)
 # 256 m streaming cells (cell_<x>_<y>.scene.toml) and writes their cells.toml. A library, so
 # tests/unit/streaming/ runs it in-process. Reads the manifest internals through the src/ root and
 # shares the cell math of src/world/streaming/streaming_internal.h (header-only).
-add_library(de_cook_world STATIC world_cells.c world_cells.h)
+# DENG-830: with [worlds.<name>.proxy] enabled it also bakes each cell's far proxy
+# (world_proxy.c: the model importer's glTF front end, then meshoptimizer), built with the mesh
+# stage's deterministic float flags.
+add_library(de_cook_world STATIC world_cells.c world_cells.h world_proxy.c world_proxy.h)
 target_include_directories(de_cook_world PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
     PRIVATE "${DE_ROOT_DIR}/src")
 target_link_libraries(de_cook_world PUBLIC de_cook_check
-    PRIVATE de_asset de_reflect de_core de_platform de_tp_tomlc17 de_build_flags)
+    PRIVATE de_cooker de_tp_meshoptimizer de_asset de_reflect de_core de_platform de_tp_tomlc17
+    de_build_flags)
+set_source_files_properties(world_proxy.c TARGET_DIRECTORY de_cook_world
+    PROPERTIES COMPILE_OPTIONS "${DE_DETERMINISTIC_FLAGS}")
 set_target_properties(de_cook_world PROPERTIES FOLDER "dengine/tools")
 target_link_libraries(de-cook PRIVATE de_cook_world)

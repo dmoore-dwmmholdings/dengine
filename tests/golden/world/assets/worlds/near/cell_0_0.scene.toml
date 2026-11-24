@@ -1,0 +1,56 @@
+# world/near/cell_0_0: cell (0, 0) of world "near" (de-cook world)
+
+[entity.0x0000000000000010]
+[entity.0x0000000000000010.DeMeshRenderer]
+cast_shadows = true
+layer_mask = 1
+materials = ["mat/ground"]
+mesh = "mesh/box#box"
+[entity.0x0000000000000010.DeTransform]
+position = [128.0, 128.0, -0.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [240.0, 240.0, 1.0]
+
+[entity.0x0000000000000011]
+[entity.0x0000000000000011.DeMeshRenderer]
+cast_shadows = true
+layer_mask = 1
+materials = ["mat/red"]
+mesh = "mesh/box#box"
+[entity.0x0000000000000011.DeTransform]
+position = [96.0, 150.0, 3.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [6.0, 6.0, 6.0]
+
+[entity.0x0000000000000012]
+[entity.0x0000000000000012.DeMeshRenderer]
+cast_shadows = true
+layer_mask = 1
+materials = ["mat/green"]
+mesh = "mesh/sphere#sphere"
+[entity.0x0000000000000012.DeTransform]
+position = [136.0, 140.0, 5.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [5.0, 5.0, 5.0]
+
+[entity.0x0000000000000013]
+[entity.0x0000000000000013.DeMeshRenderer]
+cast_shadows = true
+layer_mask = 1
+materials = ["mat/white"]
+mesh = "mesh/box#box"
+[entity.0x0000000000000013.DeTransform]
+position = [170.0, 118.0, 8.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [3.0, 3.0, 16.0]
+
+[entity.0x0000000000000014]
+[entity.0x0000000000000014.DeMeshRenderer]
+cast_shadows = true
+layer_mask = 1
+materials = ["mat/white"]
+mesh = "mesh/box#box"
+[entity.0x0000000000000014.DeTransform]
+position = [60.0, 200.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [4.0, 12.0, 4.0]

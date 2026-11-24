@@ -299,6 +299,35 @@ size = [384, 256]
 threshold_mean = 0.005
 threshold_p99 = 0.05
 
+[scene.world_proxy_far]
+description = "DENG-830 world partition: cell (0, 0) not loaded, its baked far proxy draws"
+backends = ["metal"]
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.world_proxy_crossfade]
+description = "DENG-830 world partition: mid crossfade (alpha 0.5), proxy and cell dithered"
+backends = ["metal"]
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.world_near_origin]
+description = "DENG-830 world partition: cell (0, 0) loaded, fade done"
+backends = ["metal"]
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.world_100km]
+description = "DENG-830 world partition: world_near_origin 99840 m from the origin (no jitter)"
+backends = ["metal"]
+size = [384, 256]
+reference = "world_near_origin"
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
 [scene.pathtracer_cornell]
 description = "S17 fixed-seed 4096-spp Cornell path-tracing reference, denoise and auto exposure off"
 size = [64, 64]

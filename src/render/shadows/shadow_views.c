@@ -236,7 +236,9 @@ de_result de__shadow_view_build(de__shadow_views *s, de_rg *g, const de__shadow_
     bool missing = it.count &&
                    (!DE_HANDLE_VALID(vc->work_items[0]) || !DE_HANDLE_VALID(vc->visible_meshlets) ||
                     !DE_HANDLE_VALID(vc->raster_args[0]) || !vc->raster_recorded ||
-                    (de__gpu_scene_stats_get(d->scene)->mask_materials && !vc->alpha_recorded));
+                    ((de__gpu_scene_stats_get(d->scene)->mask_materials ||
+                      de__gpu_scene_stats_get(d->scene)->dither_instances) &&
+                     !vc->alpha_recorded));
     if (missing || g->oom || g->error_count) {
         de__vis_shadow_abort(b->vis, slot, d->frame);
         const de_error *err = de_error_last();

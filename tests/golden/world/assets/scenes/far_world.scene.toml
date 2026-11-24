@@ -1,0 +1,62 @@
+# DENG-830 world golden "far": the source scene `de-cook world` splits into cells.
+# All in cell (390, 390): a ground slab, a red box, a green sphere and two white boxes.
+
+[[entity]]
+id = "0x0000000000000010"
+[entity.DeTransform]
+position = [99968.0, 99968.0, -0.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [240.0, 240.0, 1.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/ground"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000011"
+[entity.DeTransform]
+position = [99936.0, 99990.0, 3.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [6.0, 6.0, 6.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/red"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000012"
+[entity.DeTransform]
+position = [99976.0, 99980.0, 5.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [5.0, 5.0, 5.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/green"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000013"
+[entity.DeTransform]
+position = [100010.0, 99958.0, 8.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [3.0, 3.0, 16.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/white"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000014"
+[entity.DeTransform]
+position = [99900.0, 100040.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [4.0, 12.0, 4.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/white"]
+layer_mask = 1
+cast_shadows = true

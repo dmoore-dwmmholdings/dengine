@@ -76,6 +76,14 @@ TEST(streaming, cell_grid_coords_large) {
     EXPECT_FALSE(de__cell_name_parse("world/small/cell_1_0x", "small", &px, &py));
     EXPECT_FALSE(de__cell_name_parse("world/small/cell_1", "small", &px, &py));
     EXPECT_FALSE(de__cell_name_parse("world/small/cell_99999999999_0", "small", &px, &py));
+    /* DENG-830: the far proxy bundles use the same rules under "proxy_". */
+    EXPECT_TRUE(de__cell_proxy_parse("world/small/proxy_-3_12", "small", &px, &py));
+    EXPECT_EQ(px, -3);
+    EXPECT_EQ(py, 12);
+    EXPECT_FALSE(de__cell_proxy_parse("world/small/cell_1_0", "small", &px, &py));
+    EXPECT_FALSE(de__cell_name_parse("world/small/proxy_1_0", "small", &px, &py));
+    EXPECT_FALSE(de__cell_proxy_parse("world/small/proxy_01_0", "small", &px, &py));
+    EXPECT_FALSE(de__cell_proxy_parse("world/smal/proxy_1_0", "small", &px, &py));
 
     /* Distance to a cell rectangle: 0 inside, edge and corner distances outside. */
     EXPECT_FLOAT_EQ(de__cell_dist2(0, 0, 10.0, 10.0), 0.0, 0.0);

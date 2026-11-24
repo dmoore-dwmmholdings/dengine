@@ -206,6 +206,21 @@ static de_result reg_mesh_renderer(de_world *w, de_component *out) {
                               out);
 }
 
+/* ---- DeRenderFade (DENG-830) ------------------------------------------------------------- */
+
+static void construct_render_fade(void *obj) { memset(obj, 0, sizeof(DeRenderFade)); }
+
+static de_result reg_render_fade(de_world *w, de_component *out) {
+    static const de_field_info k_fields[] = {
+        DE_FIELD_EX(DeRenderFade, fade_out, DE_FK_F32, AUTHORED,
+                    {0, 0, 0, "Share of the mesh's pixels dithered away, 0..1", 0, 0}),
+        DE_FIELD_EX(DeRenderFade, invert, DE_FK_BOOL, AUTHORED,
+                    {0, 0, 0, "Use the complement of the dither mask", 0, 0}),
+    };
+    return register_component(w, DE_TYPE_DESC(DeRenderFade, 1, k_fields), construct_render_fade,
+                              out);
+}
+
 /* ---- DeLight ----------------------------------------------------------------------------- */
 
 static void construct_light(void *obj) {
@@ -944,6 +959,7 @@ static const struct {
     {reg_irradiance_volume, offsetof(DeRenderComponents, irradiance_volume)},
     {reg_foliage, offsetof(DeRenderComponents, foliage)},
     {reg_foliage_page, offsetof(DeRenderComponents, foliage_page)},
+    {reg_render_fade, offsetof(DeRenderComponents, render_fade)},
 };
 
 /* The resource type: component ids only, no reflected fields (never serialized). */

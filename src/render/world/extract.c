@@ -278,6 +278,61 @@ static void inst_changed_xform(const de_query_chunk *c, void *user) {
     }
 }
 
+/* DENG-830: the signed dither fade of a DeRenderFade (render_world.h, de__rw_instances.fade). */
+static f32 fade_value(const DeRenderFade *f) {
+    f32 d = f->fade_out;
+    if (!(d > 0.0f)) /* also NaN */
+        return 0.0f;
+    if (d >= 1.0f)
+        return 1.0f; /* removed whole, either mode */
+    /* The GPU value: d > 0 removes the pixels whose dither threshold is below d; d < 0 keeps only
+     * those below -d. An inverted fade of d removes the share d from the other end. */
+    return f->invert ? -(1.0f - d) : d;
+}
+
+static void inst_fade(const de_query_chunk *c, void *user) {
+    cat_ctx *x = (cat_ctx *)user;
+    de__render_world *rw = x->rw;
+    de__rw_pool *p = &rw->inst_pool;
+    const DeRenderFade *fd = (const DeRenderFade *)c->columns[0];
+    for (u32 i = 0; i < c->count; ++i) {
+        const u32 s = de__rw_pool_find(rw, DE__RW_KIND_INSTANCE, c->entities[i]);
+        if (s == DE__RW_NONE)
+            continue;
+        const f32 d = fade_value(&fd[i]);
+        if (rw->inst.fade[s] != d) {
+            rw->inst.fade[s] = d;
+            de__rw_pool_touch(rw, DE__RW_KIND_INSTANCE, s);
+        }
+        p->fade_seen[s] = rw->frame;
+        if (d != 0.0f && !p->fade_listed[s]) {
+            p->fade_listed[s] = 1u;
+            p->faded[p->faded_count++] = s; /* each slot once: faded_count <= capacity */
+        }
+    }
+}
+
+/* Clears the fade of the slots whose DeRenderFade is gone and drops the zero ones from the
+ * list. A freed slot's fade is already zero (the pool zeroes it). */
+static void inst_fade_sweep(de__render_world *rw) {
+    de__rw_pool *p = &rw->inst_pool;
+    u32 kept = 0;
+    for (u32 i = 0; i < p->faded_count; ++i) {
+        const u32 s = p->faded[i];
+        if (p->fade_seen[s] != rw->frame && rw->inst.fade[s] != 0.0f) {
+            rw->inst.fade[s] = 0.0f;
+            de__rw_pool_touch(rw, DE__RW_KIND_INSTANCE, s);
+        }
+        if (rw->inst.fade[s] == 0.0f) {
+            p->fade_listed[s] = 0u;
+            continue;
+        }
+        p->faded[kept++] = s;
+    }
+    p->faded_count = kept;
+    rw->inst.faded = kept;
+}
+
 /* ---------- Lights ---------- */
 
 static void light_all(const de_query_chunk *c, void *user) {
@@ -344,6 +399,8 @@ static void run_category(de_system_ctx *ctx, de__rw_kind k) {
         de__sprite_extract(rw, ctx->world, ctx->queries[3]);
         x.failed += de__rw_foliage_extract(rw, ctx->world, ctx->queries[4], ctx->queries[5],
                                            ctx->queries[6]);
+        de_query_each(ctx->world, ctx->queries[7], inst_fade, &x);
+        inst_fade_sweep(rw);
     }
     if (x.failed > 0)
         DE_ERROR(rw->log, "render world: out of memory: %u %s not extracted in frame %llu",
@@ -378,7 +435,8 @@ static de_system add_category_system(de__render_world *rw, de_world *w, const ch
     const de_query_term foliage_terms[1] = {{rw->ids.foliage, DE_READ}};
     const de_query_term page_terms[1] = {{rw->ids.foliage_page, DE_READ}};
     const de_query_filter changed_page = {rw->ids.foliage_page, DE_CHANGED};
-    const de_query_desc queries[7] = {
+    const de_query_term fade_terms[2] = {{rw->ids.render_fade, DE_READ}, {comp, DE_READ}};
+    const de_query_desc queries[8] = {
         {.terms = terms, .term_count = 2},
         {.terms = terms, .term_count = 2, .filters = &changed_comp, .filter_count = 1},
         {.terms = terms, .term_count = 2, .filters = &changed_global, .filter_count = 1},
@@ -388,6 +446,8 @@ static de_system add_category_system(de__render_world *rw, de_world *w, const ch
         {.terms = foliage_terms, .term_count = 1},
         {.terms = page_terms, .term_count = 1},
         {.terms = page_terms, .term_count = 1, .filters = &changed_page, .filter_count = 1},
+        /* DENG-830: DeRenderFade on mesh instances, every frame (few entities carry it). */
+        {.terms = fade_terms, .term_count = 2},
     };
     const char *const after[1] = {SYS_VIEWS};
     return de_system_add(
@@ -396,7 +456,7 @@ static de_system add_category_system(de__render_world *rw, de_world *w, const ch
                              .fn = fn,
                              .user = rw,
                              .queries = queries,
-                             .query_count = comp.id == rw->ids.mesh_renderer.id ? 7u : 3u,
+                             .query_count = comp.id == rw->ids.mesh_renderer.id ? 8u : 3u,
                              .after = after,
                              .after_count = 1});
 }

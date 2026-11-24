@@ -162,6 +162,14 @@ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/base_tier_cache")
 
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/base_tier_bakes")
 
+# DENG-830 world partition goldens: far proxies, the crossfade and a 100 km camera.
+target_sources(de_golden PRIVATE world/world_scenes.c)
+target_link_libraries(de_golden PRIVATE de_streaming)
+target_compile_definitions(de_golden PRIVATE
+    "DE_GOLDEN_WORLD_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/world/assets\""
+    "DE_GOLDEN_WORLD_CACHE=\"${CMAKE_CURRENT_BINARY_DIR}/world_cache\"")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/world_cache")
+
 # S17 reference scenes use the existing asset loader and original S14 gallery assets.
 target_sources(de_golden PRIVATE pathtracer/pathtracer_scenes.c)
 target_compile_definitions(de_golden PRIVATE

@@ -27,8 +27,9 @@
  *     vis.raster_alpha.draw[.phase2]   vs_alpha + ps_alpha_draw           as raster_compute.c
  *
  * Zero work without alpha-tested materials: when the GPU scene references no READY mask material
- * (de__gpu_scene_stats.mask_materials, counted where the materials are packed), the stage adds no
- * pass. With some referenced but none in view, the bucket is empty and the GPU-written arguments
+ * (de__gpu_scene_stats.mask_materials, counted where the materials are packed) and no instance
+ * has a dithered fade (dither_instances, DENG-830: meshlet_cull sends those here), the stage adds
+ * no pass. With some referenced but none in view, the bucket is empty and the GPU-written arguments
  * make the passes one empty mesh-shader group, or one empty expansion group and an indexed draw of
  * zero indices.
  *
@@ -482,8 +483,10 @@ void de__vis_raster_alpha(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
         !DE_HANDLE_VALID(vc->scene_instances) || !DE_HANDLE_VALID(vc->scene_meshes) ||
         !DE_HANDLE_VALID(vc->scene_views) || !vc->depth_target || !DE_HANDLE_VALID(vc->depth))
         return;
-    /* No alpha-tested material referenced: no alpha pass at all (and no alpha pipeline bound). */
-    if (vc->gpu_scene == NULL || de__gpu_scene_stats_get(vc->gpu_scene)->mask_materials == 0)
+    /* No alpha-tested material referenced and no dithered instance (DENG-830): no alpha pass at
+     * all (and no alpha pipeline bound). */
+    if (vc->gpu_scene == NULL || (de__gpu_scene_stats_get(vc->gpu_scene)->mask_materials == 0 &&
+                                  de__gpu_scene_stats_get(vc->gpu_scene)->dither_instances == 0))
         return;
     const bool mesh = vc->raster_path == (u32)DE__VIS_RASTER_MESH && DE_HANDLE_VALID(st->mesh);
     const bool compute = vc->raster_path == (u32)DE__VIS_RASTER_COMPUTE;

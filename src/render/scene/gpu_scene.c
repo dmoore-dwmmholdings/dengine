@@ -82,6 +82,7 @@ static const de__gs_layout_const k_consts[] = {
     {"DE_GPU_INSTANCE_HAS_BOUNDS", DE__GS_INSTANCE_HAS_BOUNDS},
     {"DE_GPU_INSTANCE_SKINNED", DE__GS_INSTANCE_SKINNED},
     {"DE_GPU_INSTANCE_SPRITE", DE__GS_INSTANCE_SPRITE},
+    {"DE_GPU_INSTANCE_DITHER", DE__GS_INSTANCE_DITHER},
     {"DE_GPU_MESH_READY", DE__GS_MESH_READY},
     {"DE_GPU_MESH_MESHLETS", DE__GS_MESH_MESHLETS},
     {"DE_GPU_MATERIAL_MODEL_STANDARD", DE__GS_MATERIAL_MODEL_STANDARD},
@@ -482,6 +483,10 @@ void de__gpu_scene_pack_frame_instance(const de__gpu_scene *gs, const de__render
         flags |= DE__GS_INSTANCE_SPRITE;
         memcpy(&o->reserved0, &in->sprite[s].thickness, sizeof(u32));
         o->reserved1 = (in->sprite[s].flip_x ? 1u : 0u) | (in->sprite[s].flip_y ? 2u : 0u);
+    } else if (in->fade && in->fade[s] != 0.0f) { /* fixtures may leave fade NULL */
+        /* DENG-830: a dithered fade (DeRenderFade); the visibility pass reads reserved0. */
+        flags |= DE__GS_INSTANCE_DITHER;
+        memcpy(&o->reserved0, &in->fade[s], sizeof(u32));
     }
     o->flags = flags;
     o->layer_mask = in->layer_mask[s];
@@ -1234,6 +1239,7 @@ de_result de__gpu_scene_update(de__gpu_scene *gs, const de__render_world_frame *
     gs->stats.frames++;
     gs->frame = f;
     gs->origin = f->origin;
+    gs->stats.dither_instances = f->instances.faded; /* DENG-830 */
     DE_TRY(de__skin_prepare(gs->renderer, f, &gs->assets));
     /* The lists of a frame are complete only after the frame before: a first frame, or a skipped
      * one, resolves every slot. The same frame again (Extract did not run) changes nothing. */

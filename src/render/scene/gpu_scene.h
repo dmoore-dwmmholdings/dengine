@@ -111,7 +111,8 @@ enum {
     DE__GS_INSTANCE_VISIBLE_IN_RT = 4u,
     DE__GS_INSTANCE_SKINNED = 16u,
     DE__GS_INSTANCE_SPRITE = 32u,
-    DE__GS_INSTANCE_HAS_BOUNDS = 8u
+    DE__GS_INSTANCE_HAS_BOUNDS = 8u,
+    DE__GS_INSTANCE_DITHER = 64u /**< DENG-830: reserved0 holds the signed fade (f32 bits) */
 };
 /** DeGpuMesh.flags */
 enum { DE__GS_MESH_READY = 1u, DE__GS_MESH_MESHLETS = 2u };
@@ -499,6 +500,9 @@ typedef struct de__gpu_scene_stats {
     /** DENG-236: referenced materials that are READY and alpha-tested (alpha_mode mask), as the
      * last update packed them. 0: the alpha-tested raster adds no pass. */
     u32 mask_materials;
+    /** DENG-830: instances with a dithered fade (DeRenderFade) in the last packed frame. They go
+     * to the alpha-tested raster whatever their material, so it runs for them too. */
+    u32 dither_instances;
     /** DENG-302: material blocks the last update packed (marked, new or re-checked). */
     u32 material_packs;
     /** DENG-302: READY referenced materials whose resolve permutation or model changed in the
