@@ -22,6 +22,7 @@
 #include "cook/world_cells.h"
 #include "cook/world_proxy.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -226,6 +227,8 @@ static int cook_terrain_world(const char *dir, wc_cap *cap) {
     static const char manifest[] =
         "[project]\nasset_root = \".\"\n"
         "[assets]\n\"levels/t\" = { type = \"scene\", source = \"t.scene.toml\" }\n"
+        "\"mats/red\" = { type = \"material\", source = \"red.material.toml\" }\n"
+        "\"mats/blue\" = { type = \"material\", source = \"blue.material.toml\" }\n"
         "[worlds.tp]\nscenes = [\"levels/t\"]\n[worlds.tp.proxy]\ntriangle_ratio = 0.25\n";
     char vp[256], out[1024], toml[1024];
     snprintf(vp, sizeof vp, "wctmp:/%s", dir);
@@ -236,6 +239,14 @@ static int cook_terrain_world(const char *dir, wc_cap *cap) {
         return -1;
     snprintf(vp, sizeof vp, "wctmp:/%s/assets.toml", dir);
     if (de_file_write_all_atomic(vp, manifest, sizeof manifest - 1) != DE_OK)
+        return -1;
+    static const char red[] = "base_color = [1.0, 0.0, 0.0, 1.0]\n";
+    static const char blue[] = "base_color = [0.0, 0.0, 1.0, 1.0]\n";
+    snprintf(vp, sizeof vp, "wctmp:/%s/red.material.toml", dir);
+    if (de_file_write_all_atomic(vp, red, sizeof red - 1) != DE_OK)
+        return -1;
+    snprintf(vp, sizeof vp, "wctmp:/%s/blue.material.toml", dir);
+    if (de_file_write_all_atomic(vp, blue, sizeof blue - 1) != DE_OK)
         return -1;
     size_t scap = 64u * 1024u, len = 0;
     char *scene = (char *)malloc(scap);
@@ -251,6 +262,15 @@ static int cook_terrain_world(const char *dir, wc_cap *cap) {
     len += (size_t)snprintf(scene + len, scap - len, "]\nholes = [1");
     for (unsigned i = 1; i < 33u * 33u; ++i)
         len += (size_t)snprintf(scene + len, scap - len, ", 0");
+    len += (size_t)snprintf(scene + len, scap - len, "]\n");
+    /* Layer 0 red, layer 1 blue; the splat shifts from red to blue along +x: sample column c has
+     * weights (224 - 7c, 7c), so its colour is (1 - c / 32, 0, c / 32). */
+    len += (size_t)snprintf(scene + len, scap - len,
+                            "layers = [{ material = \"mats/red\" }, { material = \"mats/blue\" }]\n"
+                            "splat = [");
+    for (unsigned i = 0; i < 33u * 33u; ++i)
+        len += (size_t)snprintf(scene + len, scap - len, "%s%u, %u, 0, 0", i ? ", " : "",
+                                224u - 7u * (i % 33u), 7u * (i % 33u));
     len += (size_t)snprintf(scene + len, scap - len, "]\n");
     snprintf(vp, sizeof vp, "wctmp:/%s/t.scene.toml", dir);
     de_result wr = len < scap ? de_file_write_all_atomic(vp, scene, len) : DE_ERR_INVALID_ARGUMENT;
@@ -286,6 +306,70 @@ static unsigned position_count(const char *gl) {
     static const char k[] = "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":";
     const char *p = strstr(gl, k);
     return p != NULL ? (unsigned)strtoul(p + sizeof k - 1, NULL, 10) : 0u;
+}
+
+/* The binary buffer of a glTF with one base64 data URI buffer, decoded; NULL when malformed. */
+static unsigned char *buffer_of(const char *gl, size_t *len) {
+    static const char k[] = "base64,";
+    const char *p = strstr(gl, k);
+    if (p == NULL)
+        return NULL;
+    p += sizeof k - 1;
+    const char *e = strchr(p, '"');
+    if (e == NULL)
+        return NULL;
+    unsigned char *out = (unsigned char *)malloc((size_t)(e - p) / 4u * 3u + 3u);
+    if (out == NULL)
+        return NULL;
+    size_t n = 0;
+    unsigned acc = 0;
+    int bits = 0;
+    for (; p < e && *p != '='; ++p) {
+        const char *q = strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", *p);
+        if (q == NULL || *p == '\0') {
+            free(out);
+            return NULL;
+        }
+        acc = (acc << 6) | (unsigned)(q - "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/");
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out[n++] = (unsigned char)(acc >> bits);
+        }
+    }
+    *len = n;
+    return out;
+}
+
+/* Checks the terrain primitive's COLOR_0 of a cell proxy (DENG-882): one colour per vertex, the
+ * splat's (1 - c / 32, 0, c / 32) of the vertex's sample column c, so blue is (x - 200 m) / 128
+ * for the vertex at x metres (`ox`: the cell's origin) and red the rest. */
+static void expect_vertex_colors(const char *gl, double ox) {
+    const unsigned vc = position_count(gl);
+    ASSERT_TRUE(vc > 0u);
+    EXPECT_TRUE(strstr(gl, "\"attributes\":{\"POSITION\":0,\"NORMAL\":1,\"COLOR_0\":3}") != NULL);
+    EXPECT_TRUE(strstr(gl, "\"componentType\":5126,\"count\":") != NULL);
+    size_t len = 0;
+    unsigned char *bin = buffer_of(gl, &len);
+    ASSERT_TRUE(bin != NULL);
+    const size_t vbytes = (size_t)vc * 12u, ibytes = (size_t)vc * 4u;
+    ASSERT_EQ(len, vbytes * 3u + ibytes);
+    float lo = 2.0f, hi = -1.0f;
+    size_t bad = 0;
+    for (unsigned v = 0; v < vc; ++v) {
+        float p[3], c[3];
+        memcpy(p, bin + (size_t)v * 12u, sizeof p);
+        memcpy(c, bin + vbytes * 2u + ibytes + (size_t)v * 12u, sizeof c);
+        const double blue = (ox + (double)p[0] - 200.0) / 128.0;
+        if (fabs((double)c[2] - blue) > 1e-5 || fabs((double)c[0] - (1.0 - blue)) > 1e-5 ||
+            c[1] != 0.0f)
+            bad++;
+        lo = c[2] < lo ? c[2] : lo;
+        hi = c[2] > hi ? c[2] : hi;
+    }
+    EXPECT_EQ(bad, (size_t)0);
+    EXPECT_TRUE(hi - lo > 0.1f); /* it varies across the cell */
+    free(bin);
 }
 
 TEST(streaming, world_cook_terrain_proxy) {
@@ -328,7 +412,9 @@ TEST(streaming, world_cook_terrain_proxy) {
     ASSERT_TRUE(gl != NULL);
     EXPECT_EQ(position_count(gl), (unsigned)((7u * 16u - 1u) * 2u * 3u));
     EXPECT_EQ(count_of(gl, "\"name\":\"proxy"), (size_t)3); /* node, mesh, proxy0 */
+    /* The colour is per vertex; the material's factor is white. */
     EXPECT_TRUE(strstr(gl, "\"baseColorFactor\":[1.0,1.0,1.0,1.0]") != NULL);
+    expect_vertex_colors(gl, 0.0);
     /* Bounds in glTF axes (x, z up, -y), metres from the cell origin. Heights: 5 m plus sample
      * i's i * 60 / 65535 * 10 m; the lowest kept vertex is sample 2 (the hole drops sample 0's
      * quad), the highest sample 32 * 33 + 14. */
@@ -347,6 +433,7 @@ TEST(streaming, world_cook_terrain_proxy) {
     gl = slurp_text("tproxy_a/out", "cell_1_0.proxy.gltf");
     ASSERT_TRUE(gl != NULL);
     EXPECT_EQ(position_count(gl), (unsigned)(9u * 16u * 2u * 3u));
+    expect_vertex_colors(gl, 256.0);
     ASSERT_TRUE(vec3_after(gl, "\"accessors\"", "\"min\":[", lo));
     ASSERT_TRUE(vec3_after(gl, "\"accessors\"", "\"max\":[", hi));
     EXPECT_FLOAT_EQ(lo[0], 0.0, 1e-4);   /* 256 m */

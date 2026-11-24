@@ -22,6 +22,10 @@
  * the simplifier; it is one more primitive after the mesh groups, with the area-weighted mean of
  * the tiles' colours. A bake without tiles is byte-identical to one before DENG-871.
  *
+ * Terrain colour (DENG-882): the terrain primitive carries COLOR_0 (linear VEC3, per vertex), the
+ * colour of the vertex's sample (`vcolor`, else the tile's `color`), and its base colour factor is
+ * white. The mesh groups' primitives are unchanged.
+ *
  * The output depends only on the input bytes: the mesh code is built with the deterministic float
  * flags (DE_DETERMINISTIC_FLAGS) and floats are written in their shortest round-trip form.
  */
@@ -58,7 +62,8 @@ typedef struct de__wproxy_tile {
     const u16 *heights;  /**< res * res samples, row-major (row j along +y, column i along +x) */
     const u8 *holes;     /**< res * res; non-zero: no surface. NULL: none */
     f64 cell[2];         /**< the cell's extent on x and y, from 0 (its origin) */
-    f32 color[3];        /**< linear base colour */
+    f32 color[3];        /**< linear colour of a vertex without `vcolor` */
+    const f32 *vcolor;   /**< res * res * 3 linear colours per sample (DENG-882); NULL: `color` */
 } de__wproxy_tile;
 
 /** Reports a problem with one item (it is left out of the proxy). */
