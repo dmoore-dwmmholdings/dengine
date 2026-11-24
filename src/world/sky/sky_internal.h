@@ -193,9 +193,27 @@ bool de__sky_ibl_owner_claim(de__sky_ibl_owner *o, u32 view_id, u64 frame_index)
 void de__sky_ibl_project_sh(const u16 *texels, u32 n, u32 pitch_texels, f32 out[9][3]);
 /** True when the environment generated for (`last`, `last_r_km`) is stale for (`now`, `r_km`):
  * the sun or the moon turned more than DE__SKY_IBL_SUN_DEG, the moon's or the sun's weight, the
- * mie scale or the albedo changed, or the altitude moved more than DE__SKY_IBL_ALT_KM. Pure. */
+ * mie scale or the albedo changed, the altitude moved more than DE__SKY_IBL_ALT_KM, or the cloud
+ * layer's cover (de__sky_ibl_clouds_for) moved more than DE__SKY_IBL_CLOUD_STEP, or its transmission
+ * or height changed (DENG-853). Pure. */
 bool de__sky_ibl_stale(const de__sky_snapshot *last, f32 last_r_km, const de__sky_snapshot *now,
                        f32 r_km);
+
+/** DENG-853: the cloud layer as the sky IBL sees it (sky_ibl.slang SkyIblParams.cloud). */
+typedef struct de__sky_ibl_clouds {
+    f32 cover;        /**< the fraction of the sky the layer hides overhead, 0..1 (0: no clouds) */
+    f32 transmission; /**< the layer's diffuse transmission of the light above it, 0..1 */
+    f32 bottom_km, top_km; /**< the layer's radii from the planet's centre (km) */
+} de__sky_ibl_clouds;
+/** The layer of `c` (NULL or off: cover 0): cover = coverage^1.5 (the weather map's coverage leaves
+ * gaps until it is near 1), transmission by the two-stream approximation 1 / (1 + 3/4 (1 - g) tau)
+ * of the layer's optical depth tau = DE__SKY_IBL_CLOUD_TAU_PER_M x density x thickness. Pure. */
+de__sky_ibl_clouds de__sky_ibl_clouds_for(const de__clouds_settings *c);
+/** The cover change that regenerates the environment (DENG-853). */
+#define DE__SKY_IBL_CLOUD_STEP 0.02f
+/** The mean optical depth per metre of a cloud layer at density 1 (a quarter of the extinction
+ * at full cloud, clouds_common.slang CLOUDS_EXTINCTION: the noise leaves most of it thinner). */
+#define DE__SKY_IBL_CLOUD_TAU_PER_M 0.01f
 
 #if DE_HAS_RENDER
 struct de__ibl_sky;

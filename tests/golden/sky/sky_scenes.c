@@ -265,6 +265,32 @@ static void sky_block_mean(const sky_run *s, f32 fx, u32 y0, u32 w, u32 h, f32 o
         out[k] = n != 0u ? (f32)(sum[k] / n) : 0.0f;
 }
 
+/* DENG-853: the colour of the light on the ground (sky_ground.scene.toml's mat/ground, base colour
+ * 0.22 0.26 0.16) in a 64 x 32 block centred at `fx`, 40 rows above the bottom: the block's linear
+ * mean divided by the albedo, as blue / red. Neutral light is about 1; the clear sky's light in
+ * the shade is blue (> 2). Under overcast it must stay below SKY_OVERCAST_GROUND_BLUE. */
+#define SKY_OVERCAST_GROUND_BLUE 1.35
+static f64 sky_ground_light_blue(const sky_run *s, f32 fx) {
+    f32 m[3];
+    sky_block_mean(s, fx, s->ctx->height - 40u, 64u, 32u, m);
+    const f64 albedo[3] = {0.22, 0.26, 0.16};
+    f64 lin[3];
+    for (u32 k = 0; k < 3u; ++k) {
+        const f64 c = (f64)m[k] / 255.0;
+        lin[k] = (c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)) / albedo[k];
+    }
+    return lin[0] > 0.0 ? lin[2] / lin[0] : 0.0;
+}
+
+static void sky_check_overcast_ground(sky_run *s, f32 fx) {
+    const f64 blue = sky_ground_light_blue(s, fx);
+    printf("  clouds overcast ground light blue/red %.2f (limit %.2f)\n", blue,
+           SKY_OVERCAST_GROUND_BLUE);
+    if (!(blue <= SKY_OVERCAST_GROUND_BLUE))
+        de_golden_fail(s->ctx, "the ground under overcast is lit blue (blue/red %.2f > %.2f): the "
+                               "sky IBL ignores the clouds", blue, SKY_OVERCAST_GROUND_BLUE);
+}
+
 /* DENG-208: the clouds' extra frames, after the first capture (in s->pixels).
  *   coverage_pair: the capture (coverage 0) must show the clear blue sky; then coverage 1 for
  *     SKY_FRAMES must turn the top grey (overcast). The left half of the result is coverage 0, the
@@ -277,6 +303,7 @@ static bool sky_clouds_checks(sky_run *s, const sky_opts *o, DeSky *sky, DeTrans
     if (o->coverage_pair) {
         f32 clear[3];
         sky_block_mean(s, 0.5f, 4u, 64u, 16u, clear);
+        printf("  clouds coverage 0: ground light blue/red %.2f\n", sky_ground_light_blue(s, 0.25f));
         printf("  clouds coverage 0: top sRGB %.1f %.1f %.1f\n", (f64)clear[0], (f64)clear[1],
                (f64)clear[2]);
         if (!(clear[2] > clear[0] + 8.0f))
@@ -301,6 +328,7 @@ static bool sky_clouds_checks(sky_run *s, const sky_opts *o, DeSky *sky, DeTrans
             if (over[2] > over[0] + 25.0f)
                 de_golden_fail(ctx, "coverage 1 is not overcast: the top is still blue (%.0f %.0f "
                                     "%.0f)", (f64)over[0], (f64)over[1], (f64)over[2]);
+            sky_check_overcast_ground(s, 0.25f); /* DENG-853 */
             for (u32 y = 0; y < ctx->height; ++y)
                 memcpy(s->pixels + (size_t)y * s->pitch, first + (size_t)y * s->pitch,
                        (size_t)s->pitch / 2u);
@@ -597,6 +625,8 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
     f32 top[3];
     sky_block_mean(&s, 0.5f, 4u, 64u, 16u, top);
     printf("  sky top-centre sRGB mean %.1f %.1f %.1f\n", (f64)top[0], (f64)top[1], (f64)top[2]);
+    if (o->clouds && o->coverage >= 0.9f && o->pitch_deg > 0.0f)
+        sky_check_overcast_ground(&s, 0.25f); /* DENG-853: clouds_overcast */
     if (o->clouds && !sky_clouds_checks(&s, o, sky, cam_xf, bytes)) {
         sky_close(&s);
         return;

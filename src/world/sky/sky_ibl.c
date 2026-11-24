@@ -2,10 +2,12 @@
  * sky_ibl.c: the physical sky as the image-based lighting environment when there is no HDRI
  * (DENG-838; SPEC §12.13, §12.8). The sky view stage (sky_luts.c) asks for a generation when the
  * sun or the moon turned more than DE__SKY_IBL_SUN_DEG (or the atmosphere or the viewer's altitude
- * changed): one standalone command list on the graphics queue
+ * changed, or the cloud cover, DENG-853): one standalone command list on the graphics queue
  *
  *   1. cs_sky_cube (shaders/sky/sky_ibl.slang) writes the sky's radiance (nits, sky_integrate with
- *      the ground bounce, no sun or moon disk) into mip 0 of a 128 x 768 face strip;
+ *      the ground bounce, no sun or moon disk) into mip 0 of a 128 x 768 face strip; with clouds
+ *      (DENG-853) it blends in the cloud layer as a grey diffuse layer of de__sky_ibl_clouds_for's
+ *      cover and transmission, and the ground under it lit by the overcast;
  *   2. the probe kernels (shaders/probes/probe_prefilter.slang, S14) downsample it into a full mip
  *      chain and GGX-prefilter it into a second strip (mip k = roughness k / 7);
  *   3. the prefiltered strip goes through a transfer buffer into the back one of two sampled
@@ -124,11 +126,36 @@ static bool sky_weight_changed(f32 a, f32 b) {
     return fabsf(a - b) > 0.01f * m;
 }
 
+de__sky_ibl_clouds de__sky_ibl_clouds_for(const de__clouds_settings *c) {
+    de__sky_ibl_clouds out = {0.0f, 1.0f, 0.0f, 0.0f};
+    if (c == NULL || !c->on || !(c->coverage > 0.0f))
+        return out;
+    const f32 cov = c->coverage < 1.0f ? c->coverage : 1.0f;
+    out.cover = cov * sqrtf(cov);
+    const f32 thick_m = c->top_m > c->bottom_m ? c->top_m - c->bottom_m : 0.0f;
+    const f32 tau = DE__SKY_IBL_CLOUD_TAU_PER_M * (c->density > 0.0f ? c->density : 0.0f) * thick_m;
+    const f32 g = 0.85f; /* the mean cosine of cloud scattering (Mie, droplets) */
+    out.transmission = 1.0f / (1.0f + 0.75f * (1.0f - g) * tau);
+    out.bottom_km = (f32)DE__SKY_BOTTOM + c->bottom_m * 0.001f;
+    out.top_km = (f32)DE__SKY_BOTTOM + c->top_m * 0.001f;
+    return out;
+}
+
+static bool sky_clouds_changed(const de__clouds_settings *a, const de__clouds_settings *b) {
+    const de__sky_ibl_clouds x = de__sky_ibl_clouds_for(a), y = de__sky_ibl_clouds_for(b);
+    if ((x.cover > 0.0f) != (y.cover > 0.0f) || fabsf(x.cover - y.cover) > DE__SKY_IBL_CLOUD_STEP)
+        return true;
+    if (x.cover <= 0.0f)
+        return false;
+    return fabsf(x.transmission - y.transmission) > 0.01f * x.transmission ||
+           fabsf(x.bottom_km - y.bottom_km) > 0.01f || fabsf(x.top_km - y.top_km) > 0.01f;
+}
+
 bool de__sky_ibl_stale(const de__sky_snapshot *last, f32 last_r_km, const de__sky_snapshot *now,
                        f32 r_km) {
     if (last == NULL || now == NULL || !last->valid)
         return true;
-    return sky_turned(last->sun_dir, now->sun_dir) || sky_turned(last->moon_dir, now->moon_dir) ||
+    return sky_clouds_changed(&last->clouds, &now->clouds) || sky_turned(last->sun_dir, now->sun_dir) || sky_turned(last->moon_dir, now->moon_dir) ||
            sky_weight_changed(last->sun_weight, now->sun_weight) ||
            sky_weight_changed(last->moon_weight, now->moon_weight) ||
            last->mie_scale != now->mie_scale || last->albedo != now->albedo ||
@@ -156,8 +183,9 @@ typedef struct sky_cube_params {
     u32 idx[4]; /* target (storage, mip 0), transmittance, multiscatter, clamp sampler */
     f32 sun[4], moon[4], misc[4];
     u32 size[4];
+    f32 cloud[4]; /* DENG-853: cover, transmission, bottom and top radius (km) */
 } sky_cube_params;
-DE_STATIC_ASSERT(sizeof(sky_cube_params) == 80, "SkyIblParams is 80 bytes");
+DE_STATIC_ASSERT(sizeof(sky_cube_params) == 96, "SkyIblParams is 96 bytes");
 
 /* probe_prefilter.slang's ProbeFilterParams (probe_capture.c). */
 typedef struct sky_filter_params {
@@ -401,6 +429,9 @@ de_result de__sky_ibl_generate(de__sky_ibl *ibl, const de__sky_luts *luts,
     cp.misc[2] = sn->albedo;
     cp.misc[3] = SKY_IBL_STEPS;
     cp.size[0] = DE__SKY_IBL_SIZE;
+    const de__sky_ibl_clouds cl = de__sky_ibl_clouds_for(&sn->clouds);
+    cp.cloud[0] = cl.cover, cp.cloud[1] = cl.transmission;
+    cp.cloud[2] = cl.bottom_km, cp.cloud[3] = cl.top_km;
     de_gpu_cmd_set_pipeline(c, ibl->pipe_cube);
     de_gpu_cmd_push_constants(c, &cp, (u32)sizeof cp);
     de_gpu_cmd_dispatch(c, DE__SKY_IBL_SIZE / 8u, DE__SKY_IBL_SIZE * 6u / 8u, 1);

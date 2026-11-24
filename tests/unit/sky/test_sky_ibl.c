@@ -163,6 +163,65 @@ TEST(sky_ibl, test_sky_ibl_stale_threshold) {
     EXPECT_TRUE(de__sky_ibl_stale(&a, 6360.0f, &b, 6360.5f));
 }
 
+#define SKY_NEAR(a, b, eps) EXPECT_TRUE(fabsf((float)(a) - (float)(b)) <= (eps))
+
+/* DENG-853: the cloud layer the IBL sees, and the cover change that regenerates it. */
+TEST(sky_ibl, test_sky_ibl_clouds) {
+    EXPECT_TRUE(de__sky_ibl_clouds_for(NULL).cover == 0.0f);
+    DeSky sky;
+    memset(&sky, 0, sizeof sky);
+    sky.clouds = true;
+    sky.cloud_coverage = 0.0f;
+    de__clouds_settings c = de__clouds_resolve(&sky);
+    EXPECT_TRUE(de__sky_ibl_clouds_for(&c).cover == 0.0f);
+    sky.cloud_coverage = 1.0f;
+    c = de__clouds_resolve(&sky);
+    de__sky_ibl_clouds k = de__sky_ibl_clouds_for(&c);
+    SKY_NEAR(k.cover, 1.0f, 1e-6f);
+    /* The default layer (2500 m, density 1): tau 25, transmission about a quarter. */
+    SKY_NEAR(k.transmission, 1.0f / (1.0f + 0.75f * 0.15f * 25.0f), 1e-4f);
+    SKY_NEAR(k.bottom_km, 6361.5f, 1e-3f);
+    SKY_NEAR(k.top_km, 6364.0f, 1e-3f);
+    sky.cloud_density = 2.0f;
+    c = de__clouds_resolve(&sky);
+    EXPECT_TRUE(de__sky_ibl_clouds_for(&c).transmission < k.transmission);
+    sky.cloud_coverage = 0.45f;
+    c = de__clouds_resolve(&sky);
+    SKY_NEAR(de__sky_ibl_clouds_for(&c).cover, 0.45f * sqrtf(0.45f), 1e-5f);
+    c.on = false;
+    EXPECT_TRUE(de__sky_ibl_clouds_for(&c).cover == 0.0f);
+
+    de__sky_snapshot a;
+    memset(&a, 0, sizeof a);
+    a.valid = true;
+    a.sun_dir = (de_vec3){0.0f, -0.70710678f, 0.70710678f};
+    a.moon_dir = (de_vec3){0.0f, 0.0f, -1.0f};
+    a.sun_weight = 120000.0f;
+    a.mie_scale = 1.0f;
+    a.albedo = 0.3f;
+    de__sky_snapshot b = a;
+    sky.cloud_density = 0.0f;
+    sky.cloud_coverage = 0.9f;
+    b.clouds = de__clouds_resolve(&sky);
+    EXPECT_TRUE(de__sky_ibl_stale(&a, 6360.0f, &b, 6360.0f)); /* clouds appear */
+    a.clouds = b.clouds;
+    EXPECT_FALSE(de__sky_ibl_stale(&a, 6360.0f, &b, 6360.0f));
+    sky.cloud_coverage = 0.905f; /* cover moves about 0.007: kept */
+    b.clouds = de__clouds_resolve(&sky);
+    EXPECT_FALSE(de__sky_ibl_stale(&a, 6360.0f, &b, 6360.0f));
+    sky.cloud_coverage = 0.95f; /* about 0.07: regenerated */
+    b.clouds = de__clouds_resolve(&sky);
+    EXPECT_TRUE(de__sky_ibl_stale(&a, 6360.0f, &b, 6360.0f));
+    b.clouds = a.clouds;
+    b.clouds.on = false; /* the owner view stopped drawing them */
+    EXPECT_TRUE(de__sky_ibl_stale(&a, 6360.0f, &b, 6360.0f));
+    /* Wind and erosion do not change what the IBL sees. */
+    b.clouds = a.clouds;
+    b.clouds.wind_x = 10.0f;
+    b.clouds.erosion = 0.9f;
+    EXPECT_FALSE(de__sky_ibl_stale(&a, 6360.0f, &b, 6360.0f));
+}
+
 /* ---------- GPU ---------- */
 
 typedef struct ibl_fx {
