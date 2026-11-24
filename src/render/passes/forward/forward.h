@@ -65,7 +65,8 @@ typedef struct de__fwd_params {
     u32 rt_capture, rt_result, rt_path, time_bits;
     /* DENG-840: the sky's aerial-perspective atlas (DE_GPU_BINDLESS_INVALID: none), its sampler,
      * its range (km, f32 bits), padding. */
-    u32 aerial, aerial_sampler, aerial_range_bits, aerial_pad;
+    u32 aerial, aerial_sampler, aerial_range_bits;
+    u32 fog; /**< DENG-207: the froxel fog's FogHeader ring (0: none); entry `entry` */
 } de__fwd_params;
 DE_STATIC_ASSERT(sizeof(de__fwd_params) == 128, "ForwardParams is 128 bytes");
 

@@ -47,6 +47,7 @@ import scene_color_pyramid;
 import "../rt/rt_refraction_types";
 import "../rt/light_sampling";
 import "../sky/sky_common";
+import "../volumetrics/froxel_common";
 
 /// ForwardParams.side
 public static const uint DE_FWD_SIDE_FRONT = 0;
@@ -83,7 +84,7 @@ public struct ForwardParams
     public uint aerial; // DENG-840: the sky's aerial-perspective atlas (0: none)
     public uint aerial_sampler; // its linear clamp sampler
     public uint aerial_range_bits; // asfloat: the distance its slices cover (km)
-    public uint aerial_pad;
+    public uint fog; // DENG-207: the froxel fog's FogHeader ring (0: none); entry `entry`
 };
 
 public struct FwdVertex
@@ -251,18 +252,22 @@ float4 ps_capture_refraction(FwdVertex i,uniform ForwardParams pc):SV_Target {
 }
 
 /// The premultiplied `rgb`, `alpha` of the fragment `i` at pixel `px` seen through the sky's
-/// aerial perspective (DENG-840): (rgb T + S alpha, alpha). Unchanged without the atlas.
+/// aerial perspective (DENG-840) and the froxel fog (DENG-207): (rgb T + S alpha, alpha).
+/// Unchanged without either.
 float4 fwd_aerial(FwdVertex i, ForwardParams pc, DeSceneConstants sc, uint2 px, float3 rgb,
                   float alpha)
 {
-    if (pc.aerial == 0u)
-        return float4(rgb, alpha);
-    float dist = fwd_ortho(sc) ? -dot(sc.view[2], float4(i.world, 1.0))
-                               : length(sc.camera_position.xyz - i.world);
     float2 uv = (float2(px) + 0.5) / float2(pc.width, pc.height);
-    float4 ap = sky_aerial_perspective(pc.aerial, pc.aerial_sampler, uv, max(dist, 0.0) * 0.001,
-                                       asfloat(pc.aerial_range_bits));
-    return float4(rgb * ap.a + ap.rgb * alpha, alpha);
+    if (pc.aerial != 0u)
+    {
+        float dist = fwd_ortho(sc) ? -dot(sc.view[2], float4(i.world, 1.0))
+                                   : length(sc.camera_position.xyz - i.world);
+        float4 ap = sky_aerial_perspective(pc.aerial, pc.aerial_sampler, uv,
+                                           max(dist, 0.0) * 0.001, asfloat(pc.aerial_range_bits));
+        rgb = rgb * ap.a + ap.rgb * alpha;
+    }
+    // DENG-207: the froxel fog in front of the aerial perspective (as fog_apply).
+    return froxel_apply(pc.fog, pc.entry, uv, -dot(sc.view[2], float4(i.world, 1.0)), rgb, alpha);
 }
 
 [ForceInline]

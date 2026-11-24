@@ -14,6 +14,7 @@
  * after lighting and only reads what lighting used.
  */
 #include "world/sky/sky_internal.h"
+#include "world/sky/fog_internal.h"
 
 #if DE_HAS_RENDER
 
@@ -337,6 +338,7 @@ struct de__sky_render {
     u32 smp_wrap_bindless;
     de_cvar cv_aerial; /* r.sky_aerial_perspective */
     de__sky_ibl *ibl;  /* DENG-838 */
+    de__fog *fog;      /* DENG-207: the froxel fog */
     de__sky_ibl_owner ibl_owner; /* DENG-845: the view whose altitude the IBL follows */
     u64 ibl_swap_frame; /* DENG-844: frame_index + 1 of the frame a new environment was handed over */
     bool registered, ibl_registered, failed, ibl_failed;
@@ -429,7 +431,7 @@ static void put3(f32 out[4], de_vec3 v, f32 w) {
  * the view's arena: no heap allocation. */
 static void add_aerial(de__sky_render *sr, const de__view_frame *vf, de__vis_context *vc,
                        de__lighting_context *lc, const de__sky_snapshot *sn, f32 r_km, f32 sun_w,
-                       f32 moon_w, de_vec3 r00, de_vec3 r10, de_vec3 r01) {
+                       f32 moon_w, de_vec3 r00, de_vec3 r10, de_vec3 r01, bool apply) {
     de_rg *g = vf->graph;
     const de_rg_resource atlas = de_rg_create_texture(
         g, &(de_gpu_texture_desc){.width = DE__SKY_AERIAL_N * DE__SKY_AERIAL_N,
@@ -457,6 +459,11 @@ static void add_aerial(de__sky_render *sr, const de__view_frame *vf, de__vis_con
     if (pass == NULL)
         return;
     de_rg_write(pass, atlas, DE_ACCESS_SHADER_WRITE);
+    lc->aerial = atlas;
+    lc->aerial_sampler = sr->luts->smp_bindless;
+    lc->aerial_range_km = DE__SKY_AERIAL_RANGE_KM;
+    if (!apply)
+        return; /* DENG-207: fog.apply applies it behind the fog */
 
     /* The view-space ray at z = -1 per pixel and the linear depth, from the projection. */
     const de_mat4 *pr = &vf->proj;
@@ -497,10 +504,6 @@ static void add_aerial(de__sky_render *sr, const de__view_frame *vf, de__vis_con
     de_rg_read(pass, vc->depth, DE_ACCESS_SHADER_READ);
     de_rg_read(pass, lc->target, DE_ACCESS_SHADER_READ);
     de_rg_write(pass, lc->target, DE_ACCESS_SHADER_WRITE);
-
-    lc->aerial = atlas;
-    lc->aerial_sampler = sr->luts->smp_bindless;
-    lc->aerial_range_km = DE__SKY_AERIAL_RANGE_KM;
 }
 
 /* The sky's IBL environment (DENG-838, DENG-844): completes a finished generation and hands it to
@@ -562,6 +565,38 @@ static void ibl_stage(de__view_frame *vf, void *user) {
     if (de__sky_luts_update(sr->luts, sn.mie_scale, sn.albedo) != DE_OK)
         return; /* the draw stage reports it and switches the sky off */
     update_ibl(sr, lt, &sn, viewer_radius_km(vf), vf->frame_index);
+}
+
+/* DENG-207: the froxel fog after the sky, before transparency; it hands the integrated volume to
+ * the forward transparent pass through `lc`. */
+static void add_fog(de__sky_render *sr, const de__view_frame *vf, de__vis_context *vc,
+                    de__lighting_context *lc, f32 pre) {
+    const de__fog_inputs in = {
+        .settings = vf->settings,
+        .volumes = vf->world->fog,
+        .volume_count = vf->world->fog_count,
+        .slot = (vf->view.id & 0xFFu) - 1u,
+        .frame_index = vf->frame_index,
+        .width = vf->width,
+        .height = vf->height,
+        .view_matrix = vf->view_matrix,
+        .proj = vf->proj,
+        .prev_view_proj = vf->prev_view_proj,
+        .history_ok = !vf->world->origin_changed && !vf->probe_capture,
+        .pre_exposure = pre,
+        .depth = vc->depth,
+        .target = lc->target,
+        .lc = lc,
+        .ambient = 1u,
+        .aerial = lc->aerial,
+        .aerial_sampler = lc->aerial_sampler,
+        .aerial_range_km = lc->aerial_range_km,
+        .sampler = sr->luts->smp_bindless,
+    };
+    de__fog_output out;
+    de__fog_add_passes(sr->fog, vf->graph, vc->arena, &in, &out);
+    lc->fog = out.integrated;
+    lc->fog_header = out.header;
 }
 
 static void stage(de__view_frame *vf, void *user) {
@@ -634,9 +669,13 @@ static void stage(de__view_frame *vf, void *user) {
     const de_mat4 inv = de_m4_inverse(&vp_m);
     const de_vec3 r00 = ray_at(&inv, -1.0f, 1.0f), r10 = ray_at(&inv, 1.0f, 1.0f),
                   r01 = ray_at(&inv, -1.0f, -1.0f);
+    /* DENG-207: the froxel fog, when volumetrics are on and some fog volume has a density. */
+    const bool fog_on = de__fog_ready(sr->fog) && vf->world != NULL &&
+                        de__fog_enabled(vf->settings, vf->world->fog, vf->world->fog_count,
+                                        de__fog_max_distance(sr->fog));
     if (sr->cv_aerial.id && de_cvar_bool(sr->cv_aerial) && DE_HANDLE_VALID(sr->pipe_apply) &&
         de__sky_luts_aerial_ready(sr->luts))
-        add_aerial(sr, vf, vc, lc, &sn, r_km, sun_w, moon_w, r00, r10, r01);
+        add_aerial(sr, vf, vc, lc, &sn, r_km, sun_w, moon_w, r00, r10, r01, !fog_on);
 
     memset(sp, 0, sizeof *sp);
     sp->dev = sr->dev;
@@ -666,6 +705,8 @@ static void stage(de__view_frame *vf, void *user) {
     de_rg_read(pass, vc->depth, DE_ACCESS_SHADER_READ);
     de_rg_read(pass, lc->target, DE_ACCESS_SHADER_READ);
     de_rg_write(pass, lc->target, DE_ACCESS_SHADER_WRITE);
+    if (fog_on)
+        add_fog(sr, vf, vc, lc, pre);
 }
 
 void de__sky_render_destroy(de__sky_render *sr) {
@@ -683,6 +724,7 @@ void de__sky_render_destroy(de__sky_render *sr) {
         de__lighting_set_sky(de__views_lighting(sr->renderer), NULL);
         de__sky_ibl_destroy(sr->ibl);
     }
+    de__fog_destroy(sr->fog);
     if (DE_HANDLE_VALID(sr->pipe_view))
         de_gpu_pipeline_destroy(sr->dev, sr->pipe_view);
     if (DE_HANDLE_VALID(sr->pipe_sky))
@@ -715,6 +757,8 @@ de_result de__sky_render_create(struct de_renderer *r, struct de_sky *s, const d
     de_result res = de__sky_luts_create(r->dev, alloc, &sr->luts);
     if (res == DE_OK)
         res = de__sky_ibl_create(r->dev, alloc, &sr->ibl);
+    if (res == DE_OK)
+        res = de__fog_create(r->dev, alloc, &sr->fog);
     if (res == DE_OK)
         res = load_pipe(r->dev, alloc, "sky_skyview", "cs_skyview", (u32)sizeof(skyview_params), 8u,
                         8u, &sr->pipe_view);

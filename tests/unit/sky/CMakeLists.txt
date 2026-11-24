@@ -40,3 +40,12 @@ if(TARGET test_sky_gpu)
         endif()
     endif()
 endif()
+
+# test_sky_fog (render builds; CTest names sky_fog.fog.<test>): the froxel fog's CPU side and pass
+# list on a null-backend device (DENG-207).
+de_add_test(NAME sky_fog
+    SOURCES test_fog_volumes.c
+    LIBS ${_de_sky_libs})
+if(TARGET test_sky_fog)
+    target_include_directories(test_sky_fog PRIVATE "${DE_ROOT_DIR}/src")
+endif()

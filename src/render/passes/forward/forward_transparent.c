@@ -306,6 +306,8 @@ static de_result add_mesh_run(de_rg *g, de__vis_context *vc, de__lighting_contex
     de__forward_declare_lighting(p, lc);
     if (DE_HANDLE_VALID(pd->aerial))
         de_rg_read(p, pd->aerial, DE_ACCESS_SHADER_READ);
+    if (DE_HANDLE_VALID(lc->fog))
+        de_rg_read(p, lc->fog, DE_ACCESS_SHADER_READ);
     if (DE_HANDLE_VALID(pd->scene_color)) {
         de_rg_read(p, pd->scene_color, DE_ACCESS_SHADER_READ);
         if (pd->scene_depth.id)
@@ -408,7 +410,9 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
                            /* DENG-840: the sky stage (before this one) published it. */
                            .aerial = DE_GPU_BINDLESS_INVALID,
                            .aerial_sampler = lc->aerial_sampler,
-                           .aerial_range_bits = fwd_float_bits(lc->aerial_range_km)},
+                           .aerial_range_bits = fwd_float_bits(lc->aerial_range_km),
+                           /* DENG-207: the fog's header holds its volume's index. */
+                           .fog = DE_HANDLE_VALID(lc->fog) ? lc->fog_header : 0u},
                     .target = lc->target,
                     .depth = vc->depth,
                     .views = vc->scene_views,

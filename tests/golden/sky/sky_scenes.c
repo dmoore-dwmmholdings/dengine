@@ -51,7 +51,18 @@ typedef struct sky_opts {
     const char *mesh;  /**< a second model the scene uses (DENG-838); NULL: none */
     /* DENG-838: keep r.ambient_fallback at its default (the sky lights the IBL anyway). */
     bool keep_ambient;
+    /* DENG-207: froxel volumetric fog. volumetrics High and shadows Medium (the CSM and the local
+     * shadow atlas light the fog); the fog volumes are spawned at `fog_pos`. Each fog scene also
+     * checks temporal stability: one more frame's readback against the captured one. */
+    bool fog;
+    u32 fog_count;
+    de_vec3 fog_pos[2];
+    DeFogVolume fog_volume[2];
 } sky_opts;
+
+/* DENG-207: the largest mean sRGB change allowed between two consecutive frames of a static fog
+ * scene (the jittered slices with the 0.9 history blend). */
+#define SKY_FOG_STABLE_MEAN 1.0
 
 #if DE_GOLDEN_COOK
 
@@ -305,6 +316,10 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
     rs.dynamic_res_target_ms = 0;
     rs.upscaler = DE_UPSCALE_NONE;
     rs.shadows = rs.ao = rs.reflections = rs.gi = rs.volumetrics = rs.sss = DE_QUALITY_OFF;
+    if (o->fog) {
+        rs.volumetrics = DE_QUALITY_HIGH;
+        rs.shadows = DE_QUALITY_MEDIUM;
+    }
     rs.rt_shadows = rs.rt_ao = rs.rt_reflections = rs.rt_gi = rs.rt_refraction = false;
     de_renderer_set_settings(s.r, &rs);
 
@@ -400,6 +415,32 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
         sky_close(&s);
         return;
     }
+    /* DENG-207: the fog volumes, spawned with their transform and world transform in one row
+     * (these frames run no transform propagation). */
+    const de_component c_fog = de_component_find(s.world, "DeFogVolume");
+    const de_component c_global = de_component_find(s.world, "DeGlobalTransform");
+    for (u32 i = 0; i < o->fog_count && i < 2u; ++i) {
+        const de_component comps[3] = {c_transform, c_global, c_fog};
+        de_entity fe = DE_ENTITY_NULL;
+        DeTransform *fxf = NULL;
+        DeGlobalTransform *gxf = NULL;
+        DeFogVolume *fv = NULL;
+        if (de_entity_spawn_with(s.world, comps, 3u, &fe) == DE_OK) {
+            fxf = (DeTransform *)de_entity_get(s.world, fe, c_transform);
+            gxf = (DeGlobalTransform *)de_entity_get(s.world, fe, c_global);
+            fv = (DeFogVolume *)de_entity_get(s.world, fe, c_fog);
+        }
+        if (fxf == NULL || gxf == NULL || fv == NULL) {
+            de_golden_fail(ctx, "adding DeFogVolume: %s", sky_err());
+            sky_close(&s);
+            return;
+        }
+        fxf->position = (de_dvec3){o->fog_pos[i].x, o->fog_pos[i].y, o->fog_pos[i].z};
+        fxf->rotation = (de_quat){0.0f, 0.0f, 0.0f, 1.0f};
+        fxf->scale = (de_vec3){1.0f, 1.0f, 1.0f};
+        *gxf = *fxf;
+        *fv = o->fog_volume[i];
+    }
 
     /* DENG-844: the sky's IBL lights the frame that receives it. A frame that handed an
      * environment to lighting must have packed it in its own lighting build (the "sky.ibl" stage
@@ -450,11 +491,38 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
     f32 top[3];
     sky_block_mean(&s, 0.5f, 4u, 64u, 16u, top);
     printf("  sky top-centre sRGB mean %.1f %.1f %.1f\n", (f64)top[0], (f64)top[1], (f64)top[2]);
-    if (o->sun_elev_min > 0.0f && !(top[2] > top[0] + 8.0f))
+    if (!o->fog && o->sun_elev_min > 0.0f && !(top[2] > top[0] + 8.0f))
         de_golden_fail(ctx, "the daytime sky is not blue at the top (%.0f %.0f %.0f)",
                        (f64)top[0], (f64)top[1], (f64)top[2]);
-    if (o->sun_elev_min > 0.0f && top[2] < 40.0f)
+    if (!o->fog && o->sun_elev_min > 0.0f && top[2] < 40.0f)
         de_golden_fail(ctx, "the daytime sky is dark at the top (%.0f)", (f64)top[2]);
+    if (o->fog) {
+        /* DENG-207 temporal stability: a static scene's next frame stays within
+         * SKY_FOG_STABLE_MEAN of the captured one (the slice jitter is averaged by the history). */
+        u8 *first = (u8 *)malloc(bytes);
+        if (first == NULL) {
+            de_golden_fail(ctx, "no memory for the stability readback");
+            sky_close(&s);
+            return;
+        }
+        memcpy(first, s.pixels, bytes);
+        const bool ok = sky_frame(&s) && sky_read(&s);
+        f64 diff = 0.0;
+        for (size_t i = 0; ok && i < bytes; ++i)
+            if (i % 4u != 3u)
+                diff += fabs((f64)s.pixels[i] - (f64)first[i]);
+        diff /= (f64)ctx->width * (f64)ctx->height * 3.0;
+        memcpy(s.pixels, first, bytes);
+        free(first);
+        if (!ok) {
+            sky_close(&s);
+            return;
+        }
+        printf("  fog frame-to-frame sRGB mean change %.3f\n", diff);
+        if (diff > SKY_FOG_STABLE_MEAN)
+            de_golden_fail(ctx, "the fog flickers: a mean change of %.3f between two frames "
+                                "(limit %.1f)", diff, SKY_FOG_STABLE_MEAN);
+    }
     const de_gpu_buffer up =
         de_golden_upload_buffer(ctx, s.pixels, (u64)bytes, DE_USAGE_COPY_SRC, "sky pixels");
     if (DE_HANDLE_VALID(up)) {
@@ -532,4 +600,91 @@ DE_GOLDEN_SCENE(sky_ibl_sphere) {
                                    .scene = "scenes/sky_ibl",
                                    .mesh = "mesh/sphere",
                                    .keep_ambient = true});
+}
+
+/* ---- DENG-207: froxel volumetric fog ---- */
+
+/* A global height fog at the ground (a zero extent). */
+static DeFogVolume sky_fog_global(f32 density, f32 falloff, f32 g) {
+    return (DeFogVolume){.density = density,
+                         .albedo = {1.0f, 1.0f, 1.0f},
+                         .anisotropy = g,
+                         .height_falloff = falloff};
+}
+
+/* A spot light 6 m up over a short column, at night in a thin global fog: the cone is a lit
+ * shaft with the column's atlas shadow cut out of it. */
+DE_GOLDEN_SCENE(fog_spot_shaft) {
+    sky_run_scene(ctx, &(sky_opts){.hours = 21.0f,
+                                   .heading_deg = 0.0f,
+                                   .pitch_deg = 8.0f,
+                                   .ev100 = 1.0f,
+                                   .moon_phase = 0.5f,
+                                   .sun_elev_min = -60.0f,
+                                   .sun_elev_max = -18.0f,
+                                   .expect_moon_light = true,
+                                   .scene = "scenes/fog_spot",
+                                   .fog = true,
+                                   .fog_count = 1u,
+                                   .fog_volume = {sky_fog_global(0.04f, 0.05f, 0.3f)}});
+}
+/* The low sun through a gap in a wall west of the camera: forward-scattering (g 0.6) fog makes
+ * the CSM-shadowed shaft through the gap visible. */
+DE_GOLDEN_SCENE(fog_sun_window) {
+    sky_run_scene(ctx, &(sky_opts){.hours = 17.5f,
+                                   .heading_deg = 250.0f,
+                                   .pitch_deg = 6.0f,
+                                   .ev100 = 12.0f,
+                                   .sun_elev_min = 2.0f,
+                                   .sun_elev_max = 12.0f,
+                                   .scene = "scenes/fog_window",
+                                   .fog = true,
+                                   .fog_count = 1u,
+                                   .fog_volume = {sky_fog_global(0.03f, 0.04f, 0.6f)}});
+}
+/* A local box of noisy, soft-edged fog in front of the columns at noon; no global fog. */
+DE_GOLDEN_SCENE(fog_local_volume) {
+    sky_run_scene(ctx, &(sky_opts){.hours = 12.0f,
+                                   .heading_deg = 180.0f,
+                                   .pitch_deg = 4.0f,
+                                   .ev100 = 14.5f,
+                                   .sun_elev_min = 44.0f,
+                                   .sun_elev_max = 46.5f,
+                                   .fog = true,
+                                   .fog_count = 1u,
+                                   .fog_pos = {{2.0f, -14.0f, 2.0f}},
+                                   .fog_volume = {{.extent = {12.0f, 6.0f, 4.0f},
+                                                   .density = 0.35f,
+                                                   .albedo = {0.95f, 0.95f, 1.0f},
+                                                   .anisotropy = 0.2f,
+                                                   .noise = 0.6f,
+                                                   .edge_fade = 1.5f}}});
+}
+/* A blended glass panel in global fog: the forward transparent pass applies the same froxel
+ * volume (froxel_apply), so the panel fades with the columns behind it. */
+DE_GOLDEN_SCENE(fog_transparent) {
+    sky_run_scene(ctx, &(sky_opts){.hours = 12.0f,
+                                   .heading_deg = 180.0f,
+                                   .pitch_deg = 4.0f,
+                                   .ev100 = 14.5f,
+                                   .sun_elev_min = 44.0f,
+                                   .sun_elev_max = 46.5f,
+                                   .scene = "scenes/fog_glass",
+                                   .fog = true,
+                                   .fog_count = 1u,
+                                   .fog_volume = {sky_fog_global(0.025f, 0.0f, 0.2f)}});
+}
+/* The aerial perspective scene (columns 200 m to 24 km) in a thin global fog: the fog covers the
+ * first 128 m (r.fog.max_distance) and the aerial perspective continues beyond with no seam. */
+DE_GOLDEN_SCENE(fog_ap_seam) {
+    sky_run_scene(ctx, &(sky_opts){.hours = 15.5f,
+                                   .heading_deg = 0.0f,
+                                   .pitch_deg = 2.0f,
+                                   .ev100 = 14.0f,
+                                   .sun_elev_min = 15.0f,
+                                   .sun_elev_max = 35.0f,
+                                   .scene = "scenes/sky_aerial",
+                                   .fog = true,
+                                   .fog_count = 1u,
+                                   .fog_volume = {sky_fog_global(0.006f, 0.02f, 0.4f)}});
 }

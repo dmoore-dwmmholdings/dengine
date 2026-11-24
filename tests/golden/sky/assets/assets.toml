@@ -17,3 +17,7 @@ generate_lods = false
 "scenes/sky_ground" = {type="scene", source="scenes/sky_ground.scene.toml"}
 "scenes/sky_aerial" = {type="scene", source="scenes/sky_aerial.scene.toml"} # DENG-840
 "scenes/sky_ibl" = {type="scene", source="scenes/sky_ibl.scene.toml"} # DENG-838
+"mat/glass" = {type="material", source="materials/glass.mat.toml"} # DENG-207
+"scenes/fog_spot" = {type="scene", source="scenes/fog_spot.scene.toml"} # DENG-207
+"scenes/fog_window" = {type="scene", source="scenes/fog_window.scene.toml"} # DENG-207
+"scenes/fog_glass" = {type="scene", source="scenes/fog_glass.scene.toml"} # DENG-207
