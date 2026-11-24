@@ -190,7 +190,7 @@ typedef struct de_nav2d_mesh de_nav2d_mesh;
 /**
  * Triangulates the walkable area (ear clipping, holes bridged into their outline) and links
  * the triangles across shared edges (outlines that share vertices are joined), then builds the
- * visibility graph of the reflex corners (O(corners^2 * boundary edges)). The mesh is
+ * visibility graph of the reflex corners (line-of-sight tests use a uniform grid over the boundary edges and triangles). The mesh is
  * immutable and owned by the caller. DE_ERR_INVALID_ARGUMENT for an empty or degenerate input.
  */
 DE_API de_result de_nav2d_mesh_build(const de_nav2d_mesh_desc *desc, const de_allocator *a,

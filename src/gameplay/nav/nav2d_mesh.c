@@ -8,6 +8,8 @@
  * them. Query: a straight line when the goal is in sight; otherwise A* over the corners, from
  * the corners the start sees to the goal. The result is the exact Euclidean shortest path (a
  * midpoint A* over triangles plus the funnel can pick the wrong side of a hole).
+ * A uniform grid over the boundary edges and triangles (DENG-860) keeps locate and line of sight
+ * local; it returns exactly what the linear scans return.
  * All geometry is f64 add/mul/compare plus de_dsqrt64; there is no libm. Every loop runs in
  * index order and ties break on the lower index, so results are the same on every machine. */
 #include "gameplay/nav/nav2d_internal.h"
@@ -338,6 +340,11 @@ static de_result validate_polys(const de_nav2d_polygon *p, u32 n) {
 
 de_result de_nav2d_mesh_build(const de_nav2d_mesh_desc *desc, const de_allocator *a,
                               de_nav2d_mesh **out) {
+    return de__nav2d_mesh_build_opts(desc, a, false, out);
+}
+
+de_result de__nav2d_mesh_build_opts(const de_nav2d_mesh_desc *desc, const de_allocator *a,
+                                    bool brute, de_nav2d_mesh **out) {
     if (out != NULL)
         *out = NULL;
     if (desc == NULL || out == NULL || desc->outline_count == 0 || desc->outlines == NULL ||
@@ -474,6 +481,7 @@ de_result de_nav2d_mesh_build(const de_nav2d_mesh_desc *desc, const de_allocator
             goto oom;
         memset(m, 0, sizeof *m);
         m->alloc = a;
+        m->brute = brute;
         m->verts = (de_vec2 *)DE_ALLOC(a, sizeof(de_vec2) * (size_t)uniq, DE_ALIGNOF(de_vec2),
                                        DE_MEM_GENERAL);
         m->tris = (de__nav2d_tri *)DE_ALLOC(a, sizeof(de__nav2d_tri) * (size_t)tri_n,
@@ -538,6 +546,20 @@ done:
     return res;
 }
 
+static void free_grid(de_nav2d_mesh *m) {
+    const de_allocator *a = m->alloc;
+    const de__nav2d_grid_index *g = &m->gi;
+    const size_t cells = (size_t)g->gx * (size_t)g->gy + 1u;
+    if (g->tri_off != NULL)
+        DE_FREE(a, g->tri_off, sizeof(u32) * cells);
+    if (g->tri_idx != NULL)
+        DE_FREE(a, g->tri_idx, sizeof(u32) * (size_t)g->tri_idx_count);
+    if (g->edge_off != NULL)
+        DE_FREE(a, g->edge_off, sizeof(u32) * cells);
+    if (g->edge_idx != NULL)
+        DE_FREE(a, g->edge_idx, sizeof(u32) * (size_t)g->edge_idx_count);
+}
+
 void de_nav2d_mesh_destroy(de_nav2d_mesh *m) {
     if (m == NULL)
         return;
@@ -548,6 +570,7 @@ void de_nav2d_mesh_destroy(de_nav2d_mesh *m) {
         DE_FREE(a, m->tris, sizeof(de__nav2d_tri) * (size_t)m->tri_count);
     if (m->bedges != NULL)
         DE_FREE(a, m->bedges, sizeof(u32) * 2u * (size_t)m->bedge_count);
+    free_grid(m);
     if (m->corners != NULL)
         DE_FREE(a, m->corners, sizeof(u32) * (size_t)m->corner_count);
     if (m->vis_off != NULL)
@@ -569,7 +592,169 @@ static bool tri_contains(const de_nav2d_mesh *m, u32 t, dv2 p) {
     return area2(a, b, p) >= 0 && area2(b, c, p) >= 0 && area2(c, a, p) >= 0;
 }
 
+/* ---------- uniform grid index (DENG-860) ----------
+ * Cells list the triangles and boundary edges that touch them, in ascending id order, so a
+ * query that scans a cell sees candidates in the same order as the linear scan would. The
+ * results are identical to the scans: a triangle or an edge is listed in every cell its extent
+ * (padded by `pad`, far above f64 rounding) can touch, and the border cells take everything
+ * beyond the bounds. Only f64 add/mul/div/compare and a truncating cast: no libm. */
+
+static u32 cell_of(f64 v, f64 org, f64 size, u32 n) {
+    const f64 t = (v - org) / size;
+    if (!(t > 0))
+        return 0;
+    if (t >= (f64)n)
+        return n - 1u;
+    return (u32)t;
+}
+
+static bool grid_on(const de_nav2d_mesh *m) {
+    return !m->brute && m->gi.gx != 0;
+}
+
+/* The cell rows that segment p-q touches in column ix (a conservative band). */
+static void col_range(const de__nav2d_grid_index *g, dv2 p, dv2 q, u32 ix, u32 *lo, u32 *hi) {
+    f64 ylo = p.y < q.y ? p.y : q.y, yhi = p.y < q.y ? q.y : p.y;
+    const f64 dx = q.x - p.x;
+    if (dx != 0) {
+        const f64 minx = p.x < q.x ? p.x : q.x, maxx = p.x < q.x ? q.x : p.x;
+        f64 xa = ix == 0 ? minx : g->x0 + (f64)ix * g->sx - g->pad;
+        f64 xb = ix + 1u == g->gx ? maxx : g->x0 + (f64)(ix + 1u) * g->sx + g->pad;
+        if (xa < minx)
+            xa = minx;
+        if (xb > maxx)
+            xb = maxx;
+        const f64 dy = q.y - p.y;
+        const f64 ya = p.y + (xa - p.x) * dy / dx, yb = p.y + (xb - p.x) * dy / dx;
+        ylo = ya < yb ? ya : yb;
+        yhi = ya < yb ? yb : ya;
+    }
+    *lo = cell_of(ylo - g->pad, g->y0, g->sy, g->gy);
+    *hi = cell_of(yhi + g->pad, g->y0, g->sy, g->gy);
+}
+
+static void col_span(const de__nav2d_grid_index *g, dv2 p, dv2 q, u32 *c0, u32 *c1) {
+    const f64 minx = p.x < q.x ? p.x : q.x, maxx = p.x < q.x ? q.x : p.x;
+    *c0 = cell_of(minx - g->pad, g->x0, g->sx, g->gx);
+    *c1 = cell_of(maxx + g->pad, g->x0, g->sx, g->gx);
+}
+
+/* Counts (fill false: off[c + 1]++) or stores (fill true: idx[off[c]++] = id) the cells of one
+ * item: the bounding box p-q when `rect`, else the segment p-q. */
+static void index_item(const de__nav2d_grid_index *g, u32 *off, u32 *idx, dv2 p, dv2 q, bool rect,
+                       u32 id, bool fill) {
+    u32 c0, c1;
+    col_span(g, p, q, &c0, &c1);
+    for (u32 ix = c0; ix <= c1; ++ix) {
+        u32 lo, hi;
+        if (rect) {
+            lo = cell_of(p.y - g->pad, g->y0, g->sy, g->gy);
+            hi = cell_of(q.y + g->pad, g->y0, g->sy, g->gy);
+        } else {
+            col_range(g, p, q, ix, &lo, &hi);
+        }
+        for (u32 iy = lo; iy <= hi; ++iy) {
+            const u32 c = iy * g->gx + ix;
+            if (fill)
+                idx[off[c]++] = id;
+            else
+                off[c + 1u]++;
+        }
+    }
+}
+
+static u32 isqrt_u32(u32 n) {
+    u32 r = 0;
+    while ((u64)(r + 1u) * (r + 1u) <= n)
+        r++;
+    return r;
+}
+
+static de_result build_grid(de_nav2d_mesh *m) {
+    de__nav2d_grid_index *g = &m->gi;
+    if (m->brute || m->tri_count == 0 || m->vert_count == 0)
+        return DE_OK;
+    const de_allocator *a = m->alloc;
+    dv2 lo = V(m, 0), hi = lo;
+    for (u32 v = 1; v < m->vert_count; ++v) {
+        const dv2 p = V(m, v);
+        lo.x = p.x < lo.x ? p.x : lo.x;
+        lo.y = p.y < lo.y ? p.y : lo.y;
+        hi.x = p.x > hi.x ? p.x : hi.x;
+        hi.y = p.y > hi.y ? p.y : hi.y;
+    }
+    f64 ext = hi.x - lo.x > hi.y - lo.y ? hi.x - lo.x : hi.y - lo.y;
+    if (!(ext > 0))
+        ext = 1;
+    u32 dim = isqrt_u32(m->tri_count + m->bedge_count) + 1u;
+    if (dim > 256u)
+        dim = 256u;
+    const f64 ex = hi.x - lo.x > 0 ? hi.x - lo.x : 1.0, ey = hi.y - lo.y > 0 ? hi.y - lo.y : 1.0;
+    g->x0 = lo.x;
+    g->y0 = lo.y;
+    g->sx = ex / (f64)dim;
+    g->sy = ey / (f64)dim;
+    g->pad = ext * 1e-9;
+    const size_t cells = (size_t)dim * dim;
+    g->tri_off = (u32 *)DE_ALLOC(a, sizeof(u32) * (cells + 1u), DE_ALIGNOF(u32), DE_MEM_GENERAL);
+    g->edge_off = (u32 *)DE_ALLOC(a, sizeof(u32) * (cells + 1u), DE_ALIGNOF(u32), DE_MEM_GENERAL);
+    /* gx and gy are set only now, so the destroy path frees what exists with the right size. */
+    g->gx = g->gy = dim;
+    if (g->tri_off == NULL || g->edge_off == NULL)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de_nav2d_mesh_build: grid index");
+    memset(g->tri_off, 0, sizeof(u32) * (cells + 1u));
+    memset(g->edge_off, 0, sizeof(u32) * (cells + 1u));
+    for (u32 pass = 0; pass < 2u; ++pass) {
+        const bool fill = pass == 1u;
+        for (u32 t = 0; t < m->tri_count; ++t) {
+            const dv2 a0 = V(m, m->tris[t].v[0]), b0 = V(m, m->tris[t].v[1]),
+                      c0 = V(m, m->tris[t].v[2]);
+            dv2 mn = a0, mx = a0;
+            const dv2 pts[2] = {b0, c0};
+            for (u32 k = 0; k < 2u; ++k) {
+                mn.x = pts[k].x < mn.x ? pts[k].x : mn.x;
+                mn.y = pts[k].y < mn.y ? pts[k].y : mn.y;
+                mx.x = pts[k].x > mx.x ? pts[k].x : mx.x;
+                mx.y = pts[k].y > mx.y ? pts[k].y : mx.y;
+            }
+            index_item(g, g->tri_off, g->tri_idx, mn, mx, true, t, fill);
+        }
+        for (u32 e = 0; e < m->bedge_count; ++e)
+            index_item(g, g->edge_off, g->edge_idx, V(m, m->bedges[2u * e]),
+                       V(m, m->bedges[2u * e + 1u]), false, e, fill);
+        if (!fill) {
+            for (size_t c = 0; c < cells; ++c) {
+                g->tri_off[c + 1u] += g->tri_off[c];
+                g->edge_off[c + 1u] += g->edge_off[c];
+            }
+            g->tri_idx_count = g->tri_off[cells];
+            g->edge_idx_count = g->edge_off[cells];
+            g->tri_idx = (u32 *)DE_ALLOC(a, sizeof(u32) * (size_t)g->tri_idx_count,
+                                         DE_ALIGNOF(u32), DE_MEM_GENERAL);
+            g->edge_idx = (u32 *)DE_ALLOC(a, sizeof(u32) * (size_t)g->edge_idx_count,
+                                          DE_ALIGNOF(u32), DE_MEM_GENERAL);
+            if (g->tri_idx == NULL || g->edge_idx == NULL)
+                return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de_nav2d_mesh_build: grid index");
+        }
+    }
+    /* The fill pass advanced every offset to the end of its cell: shift back by one cell. */
+    for (size_t c = cells; c > 0; --c) {
+        g->tri_off[c] = g->tri_off[c - 1u];
+        g->edge_off[c] = g->edge_off[c - 1u];
+    }
+    g->tri_off[0] = g->edge_off[0] = 0;
+    return DE_OK;
+}
+
 static u32 locate_d(const de_nav2d_mesh *m, dv2 q) {
+    if (grid_on(m)) {
+        const de__nav2d_grid_index *g = &m->gi;
+        const u32 c = cell_of(q.y, g->y0, g->sy, g->gy) * g->gx + cell_of(q.x, g->x0, g->sx, g->gx);
+        for (u32 k = g->tri_off[c]; k < g->tri_off[c + 1u]; ++k)
+            if (tri_contains(m, g->tri_idx[k], q))
+                return g->tri_idx[k];
+        return NONE;
+    }
     for (u32 t = 0; t < m->tri_count; ++t)
         if (tri_contains(m, t, q))
             return t;
@@ -580,24 +765,43 @@ u32 de__nav2d_mesh_locate(const de_nav2d_mesh *m, de_vec2 p) {
     return locate_d(m, dv(p));
 }
 
-/* Line of sight: the segment p-q lies in the walkable area (the boundary counts as walkable).
- * It may not cross a boundary edge at an interior point of both. Between consecutive boundary
- * vertices that lie on it (in order along it), each piece is wholly inside or wholly outside,
- * so its midpoint decides. No scratch: the next touching vertex is found by a scan. */
-static bool seg_visible(const de_nav2d_mesh *m, dv2 p, dv2 q) {
-    for (u32 e = 0; e < m->bedge_count; ++e) {
-        const dv2 a = V(m, m->bedges[2u * e]), b = V(m, m->bedges[2u * e + 1u]);
-        const f64 d1 = area2(p, q, a), d2 = area2(p, q, b);
-        const f64 d3 = area2(a, b, p), d4 = area2(a, b, q);
-        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)))
-            return false;
+static bool edge_crosses(const de_nav2d_mesh *m, u32 e, dv2 p, dv2 q) {
+    const dv2 a = V(m, m->bedges[2u * e]), b = V(m, m->bedges[2u * e + 1u]);
+    const f64 d1 = area2(p, q, a), d2 = area2(p, q, b);
+    const f64 d3 = area2(a, b, p), d4 = area2(a, b, q);
+    return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+}
+
+static bool any_crossing(const de_nav2d_mesh *m, dv2 p, dv2 q) {
+    if (!grid_on(m)) {
+        for (u32 e = 0; e < m->bedge_count; ++e)
+            if (edge_crosses(m, e, p, q))
+                return true;
+        return false;
     }
-    const f64 dx = q.x - p.x, dy = q.y - p.y, len2 = dx * dx + dy * dy;
-    if (len2 == 0)
-        return locate_d(m, p) != NONE;
-    f64 cur = 0;
-    for (;;) {
-        f64 next = 1;
+    const de__nav2d_grid_index *g = &m->gi;
+    u32 c0, c1;
+    col_span(g, p, q, &c0, &c1);
+    for (u32 ix = c0; ix <= c1; ++ix) {
+        u32 lo, hi;
+        col_range(g, p, q, ix, &lo, &hi);
+        for (u32 iy = lo; iy <= hi; ++iy) {
+            const u32 c = iy * g->gx + ix;
+            for (u32 k = g->edge_off[c]; k < g->edge_off[c + 1u]; ++k)
+                if (edge_crosses(m, g->edge_idx[k], p, q))
+                    return true;
+        }
+    }
+    return false;
+}
+
+/* The smallest parameter t in (cur, 1) of a boundary vertex on the line p-q, or 1. A vertex is
+ * the start of its boundary edge, so the edges of the cells the segment touches find them all.
+ * A minimum does not depend on the order or on repeats. */
+static f64 next_touch(const de_nav2d_mesh *m, dv2 p, dv2 q, f64 cur, f64 len2) {
+    const f64 dx = q.x - p.x, dy = q.y - p.y;
+    f64 next = 1;
+    if (!grid_on(m)) {
         for (u32 e = 0; e < m->bedge_count; ++e) {
             const dv2 v = V(m, m->bedges[2u * e]);
             if (area2(p, q, v) != 0)
@@ -606,6 +810,43 @@ static bool seg_visible(const de_nav2d_mesh *m, dv2 p, dv2 q) {
             if (t > cur && t < next)
                 next = t;
         }
+        return next;
+    }
+    const de__nav2d_grid_index *g = &m->gi;
+    u32 c0, c1;
+    col_span(g, p, q, &c0, &c1);
+    for (u32 ix = c0; ix <= c1; ++ix) {
+        u32 lo, hi;
+        col_range(g, p, q, ix, &lo, &hi);
+        for (u32 iy = lo; iy <= hi; ++iy) {
+            const u32 c = iy * g->gx + ix;
+            for (u32 k = g->edge_off[c]; k < g->edge_off[c + 1u]; ++k) {
+                const dv2 v = V(m, m->bedges[2u * g->edge_idx[k]]);
+                if (area2(p, q, v) != 0)
+                    continue;
+                const f64 t = ((v.x - p.x) * dx + (v.y - p.y) * dy) / len2;
+                if (t > cur && t < next)
+                    next = t;
+            }
+        }
+    }
+    return next;
+}
+
+/* Line of sight: the segment p-q lies in the walkable area (the boundary counts as walkable).
+ * It may not cross a boundary edge at an interior point of both. Between consecutive boundary
+ * vertices that lie on it (in order along it), each piece is wholly inside or wholly outside,
+ * so its midpoint decides. No scratch: the next touching vertex is found by a scan, over the
+ * grid cells the segment passes through (every edge with brute set). */
+static bool seg_visible(const de_nav2d_mesh *m, dv2 p, dv2 q) {
+    if (any_crossing(m, p, q))
+        return false;
+    const f64 dx = q.x - p.x, dy = q.y - p.y, len2 = dx * dx + dy * dy;
+    if (len2 == 0)
+        return locate_d(m, p) != NONE;
+    f64 cur = 0;
+    for (;;) {
+        const f64 next = next_touch(m, p, q, cur, len2);
         const f64 mid = (cur + next) * 0.5;
         dv2 c;
         c.x = p.x + dx * mid;
@@ -658,6 +899,8 @@ static de_result build_visibility(de_nav2d_mesh *m) {
             in_n[w]++;
             prev[w] = u;
         }
+    if (build_grid(m) != DE_OK)
+        goto oom;
     u32 nc = 0;
     for (u32 v = 0; v < nv; ++v) {
         if (out_n[v] == 0 && in_n[v] == 0)

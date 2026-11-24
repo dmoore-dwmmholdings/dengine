@@ -31,8 +31,21 @@ typedef struct de__nav2d_tri {
     u32 adj[3];
 } de__nav2d_tri;
 
+/** Uniform grid over the mesh bounds. Each cell lists the triangle ids (`tri_*`) and the
+ *  boundary-edge ids (`edge_*`) whose padded extent touches it, ascending (CSR: the cell c holds
+ *  idx[off[c] .. off[c + 1])). Built with the mesh (DENG-860). */
+typedef struct de__nav2d_grid_index {
+    f64 x0, y0, sx, sy, pad; /* origin, cell size, conservative padding */
+    u32 gx, gy;              /* cells per axis; 0 when the mesh is empty */
+    u32 *tri_off, *tri_idx;
+    u32 *edge_off, *edge_idx;
+    u32 tri_idx_count, edge_idx_count;
+} de__nav2d_grid_index;
+
 struct de_nav2d_mesh {
     const de_allocator *alloc;
+    bool brute; /* tests: linear scans instead of the grid (same results) */
+    de__nav2d_grid_index gi;
     de_vec2 *verts; /* unique vertices, sorted by (x, y) */
     u32 vert_count;
     de__nav2d_tri *tris;
@@ -45,6 +58,11 @@ struct de_nav2d_mesh {
     u32 *vis_nbr; /* corners visible from each corner, ascending */
     u32 vis_count;
 };
+
+/** de_nav2d_mesh_build with the spatial index switched off (`brute`: every locate and
+ *  line-of-sight query is a linear scan). The reference for the equality tests and benchmark. */
+de_result de__nav2d_mesh_build_opts(const de_nav2d_mesh_desc *desc, const de_allocator *a,
+                                    bool brute, de_nav2d_mesh **out);
 
 /** Index of the first triangle that contains `p` (boundary included), or UINT32_MAX. */
 u32 de__nav2d_mesh_locate(const de_nav2d_mesh *m, de_vec2 p);
