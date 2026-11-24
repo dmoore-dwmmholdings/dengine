@@ -1,10 +1,10 @@
 /*
  * fog.c: froxel volumetric fog on the GPU (DENG-207, S34): the per-view volumes (two history
  * atlases that alternate, the integrated atlas), the constant rings, and the four render-graph
- * passes. The sky's view stage (sky_luts.c) calls de__fog_add_passes after sky.render. See
+ * passes. The renderer's "fog" stage (fog_stage.c) and the sky's view stage (sky_luts.c) call it. See
  * fog_internal.h.
  */
-#include "world/sky/fog_internal.h"
+#include "render/passes/fog/fog_internal.h"
 
 #if DE_HAS_RENDER
 

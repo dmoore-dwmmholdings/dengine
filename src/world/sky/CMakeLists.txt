@@ -11,6 +11,6 @@ de_add_module(
 )
 
 if(DE_HAS_RENDER)
-  target_sources(de_sky PRIVATE sky_luts.c fog.c fog_volumes.c fog_internal.h clouds.c)
+  target_sources(de_sky PRIVATE sky_luts.c clouds.c)
   target_link_libraries(de_sky PRIVATE de_render de_gpu de_ecs)
 endif()

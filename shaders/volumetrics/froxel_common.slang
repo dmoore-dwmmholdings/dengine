@@ -1,5 +1,5 @@
 // shaders/volumetrics/froxel_common.slang: the froxel volumetric fog's shared code (DENG-207,
-// S34; SPEC §12.13). The constants mirror src/world/sky/fog_internal.h (de__fog_header,
+// S34; SPEC §12.13). The constants mirror src/render/passes/fog/fog_internal.h (de__fog_header,
 // de__fog_volume_gpu). Volumes are 2D atlases: slice k is the tile at column k % cols, row
 // k / cols, each tile grid.x x grid.y texels.
 // - The media and light passes (froxel_inject_media, froxel_inject_light) write one texel per

@@ -3,7 +3,7 @@
  * quality, the exponential slice distribution and the camera-relative packing of the render
  * world's DeFogVolume snapshots. See fog_internal.h.
  */
-#include "world/sky/fog_internal.h"
+#include "render/passes/fog/fog_internal.h"
 
 #if DE_HAS_RENDER
 

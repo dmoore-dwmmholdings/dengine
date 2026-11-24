@@ -71,6 +71,9 @@ typedef struct sky_opts {
     /* DENG-849: no DeSky entity (de_sky_attach still runs): no sky, no sky IBL and no state; the
      * fog must still draw, without the aerial perspective. */
     bool no_sky;
+    /* DENG-861: de_sky_attach is never called (implies no_sky): the renderer's own fog stage must
+     * draw the fog, the same image as fog_no_sky. */
+    bool no_attach;
 } sky_opts;
 
 /* DENG-207: the largest mean sRGB change allowed between two consecutive frames of a static fog
@@ -648,7 +651,7 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
                        .clouds = o->clouds,
                        .cloud_coverage = o->coverage_pair ? 0.0f : o->coverage};
     }
-    if (de_sky_attach(s.world, s.r, &s.sky) != DE_OK) {
+    if (!o->no_attach && de_sky_attach(s.world, s.r, &s.sky) != DE_OK) {
         de_golden_fail(ctx, "de_sky_attach: %s", sky_err());
         sky_close(&s);
         return;
@@ -697,7 +700,7 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
             return;
         }
     }
-    if (!o->no_sky) {
+    if (!o->no_sky && !o->no_attach) {
         if (lt == NULL || lt->sky_serial == 0u) {
             de_golden_fail(ctx, "the sky's IBL environment never reached lighting in %u frames",
                            SKY_FRAMES);
@@ -942,6 +945,19 @@ DE_GOLDEN_SCENE(fog_no_sky) {
                                    .ev100 = 4.0f,
                                    .scene = "scenes/fog_spot",
                                    .no_sky = true,
+                                   .keep_ambient = true,
+                                   .fog = true,
+                                   .fog_count = 1u,
+                                   .fog_volume = {sky_fog_global(0.04f, 0.05f, 0.3f)}});
+}
+/* DENG-861: fog_no_sky with no de_sky_attach at all: the renderer's fog stage draws it. */
+DE_GOLDEN_SCENE(fog_no_attach) {
+    sky_run_scene(ctx, &(sky_opts){.heading_deg = 0.0f,
+                                   .pitch_deg = 8.0f,
+                                   .ev100 = 4.0f,
+                                   .scene = "scenes/fog_spot",
+                                   .no_sky = true,
+                                   .no_attach = true,
                                    .keep_ambient = true,
                                    .fog = true,
                                    .fog_count = 1u,

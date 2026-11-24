@@ -12,7 +12,7 @@
 
 #include "render/graph/rg_internal.h"
 #include "render/world/render_world.h"
-#include "world/sky/fog_internal.h"
+#include "render/passes/fog/fog_internal.h"
 
 #include <math.h>
 #include <string.h>

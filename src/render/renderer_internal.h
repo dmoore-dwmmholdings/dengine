@@ -160,6 +160,7 @@ struct de_renderer {
     struct de__views *views;
     struct de__denoise *denoise; /* S17 shared per-view signal histories */
     struct de__pt *pt;           /* S17 progressive path tracing */
+    struct de__fog_stage *fog;   /* DENG-861: the froxel fog and its "fog" view stage */
     struct de__probes *probes;
     struct de__ssr *ssr;
     struct de__irradiance *irradiance;

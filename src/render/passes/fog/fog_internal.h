@@ -1,5 +1,5 @@
 /*
- * fog_internal.h: froxel volumetric fog (DENG-207, S34; SPEC §12.13). Module sky, render builds.
+ * fog_internal.h: froxel volumetric fog (DENG-207, S34; SPEC §12.13). Module render (moved from sky by DENG-861).
  *
  * A per-view froxel grid (de__fog_grid_for: 160 x 90 x 64 at High) whose depth slices are
  * exponential from DE__FOG_NEAR to r.fog.max_distance (default 128 m). Four passes, after the
@@ -23,8 +23,8 @@
  *
  * Global fog is a DeFogVolume with a zero extent: density exp(-height_falloff (z - entity z)).
  */
-#ifndef DE_WORLD_SKY_FOG_INTERNAL_H
-#define DE_WORLD_SKY_FOG_INTERNAL_H
+#ifndef DE_RENDER_PASSES_FOG_INTERNAL_H
+#define DE_RENDER_PASSES_FOG_INTERNAL_H
 
 #include <dengine/de_base.h>
 #include <dengine/de_gpu.h>
@@ -156,4 +156,4 @@ u32 de__fog_add_passes(de__fog *f, de_rg *g, de_arena *arena, const de__fog_inpu
 DE_EXTERN_C_END
 
 #endif /* DE_HAS_RENDER */
-#endif /* DE_WORLD_SKY_FOG_INTERNAL_H */
+#endif /* DE_RENDER_PASSES_FOG_INTERNAL_H */

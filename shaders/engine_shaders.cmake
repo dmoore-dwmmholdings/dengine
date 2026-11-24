@@ -134,7 +134,7 @@ de_engine_shader(sky_render         sky/sky_render.slang)
 de_engine_shader(sky_aerial         sky/aerial_perspective.slang)
 # DENG-838: the sky as the IBL environment (src/world/sky/sky_ibl.c).
 de_engine_shader(sky_ibl            sky/sky_ibl.slang)
-# DENG-207: froxel volumetric fog (src/world/sky/fog.c).
+# DENG-207: froxel volumetric fog (src/render/passes/fog/fog.c).
 de_engine_shader(fog_inject_media   volumetrics/froxel_inject_media.slang)
 de_engine_shader(fog_inject_light   volumetrics/froxel_inject_light.slang)
 de_engine_shader(fog_integrate      volumetrics/froxel_integrate.slang)

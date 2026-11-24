@@ -557,3 +557,15 @@ if(TARGET de_render)
     target_link_libraries(de_render PRIVATE de_tp_tomlc17)
     set_property(TARGET de_render APPEND PROPERTY DE_MODULE_LIBS de_tp_tomlc17)
 endif()
+
+# DENG-861: the froxel volumetric fog (DENG-207, moved here from the sky module): the passes (fog.c),
+# the packing of the DeFogVolume snapshots (fog_volumes.c) and the renderer's "fog" view stage
+# (fog_stage.c), so a world with a DeFogVolume gets fog without de_sky_attach.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE
+        passes/fog/fog_internal.h
+        passes/fog/fog.c
+        passes/fog/fog_volumes.c
+        passes/fog/fog_stage.h
+        passes/fog/fog_stage.c)
+endif()

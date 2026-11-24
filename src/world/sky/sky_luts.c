@@ -15,7 +15,7 @@
  * after lighting and only reads what lighting used.
  */
 #include "world/sky/sky_internal.h"
-#include "world/sky/fog_internal.h"
+#include "render/passes/fog/fog_stage.h"
 
 #if DE_HAS_RENDER
 
@@ -339,7 +339,6 @@ struct de__sky_render {
     u32 smp_wrap_bindless;
     de_cvar cv_aerial; /* r.sky_aerial_perspective */
     de__sky_ibl *ibl;  /* DENG-838 */
-    de__fog *fog;      /* DENG-207: the froxel fog */
     de__sky_ibl_owner ibl_owner; /* DENG-845: the view whose altitude the IBL follows */
     u64 ibl_swap_frame; /* DENG-844: frame_index + 1 of the frame a new environment was handed over */
     bool registered, ibl_registered, failed, ibl_failed;
@@ -632,52 +631,15 @@ static void clouds_shadow_stage(de__view_frame *vf, void *user) {
 }
 
 /* DENG-207: the froxel fog after the sky, before transparency; it hands the integrated volume to
- * the forward transparent pass through `lc`. */
+ * the forward transparent pass through `lc`. DENG-861: the fog and its history are the renderer's
+ * (de__fog_stage); the renderer's own "fog" stage runs after this one and skips the view when this
+ * added the fog, or adds it alone when the sky is not drawn. */
 static void add_fog(de__sky_render *sr, const de__view_frame *vf, de__vis_context *vc,
-                    de__lighting_context *lc, f32 pre, bool with_aerial) {
-    const de__fog_inputs in = {
-        .settings = vf->settings,
-        .volumes = vf->world->fog,
-        .volume_count = vf->world->fog_count,
-        .slot = (vf->view.id & 0xFFu) - 1u,
-        .frame_index = vf->frame_index,
-        .width = vf->width,
-        .height = vf->height,
-        .view_matrix = vf->view_matrix,
-        .proj = vf->proj,
-        .prev_view_proj = vf->prev_view_proj,
-        .history_ok = !vf->world->origin_changed && !vf->probe_capture,
-        .pre_exposure = pre,
-        .depth = vc->depth,
-        .target = lc->target,
-        .lc = lc,
-        .ambient = 1u,
-        /* DENG-849: with no sky drawn there is no aerial perspective behind the fog. */
-        .aerial = with_aerial ? lc->aerial : (de_rg_resource){0},
-        .aerial_sampler = with_aerial ? lc->aerial_sampler : 0u,
-        .aerial_range_km = with_aerial ? lc->aerial_range_km : 0.0f,
-        .sampler = sr->luts->smp_bindless,
-    };
-    de__fog_output out;
-    de__fog_add_passes(sr->fog, vf->graph, vc->arena, &in, &out);
-    lc->fog = out.integrated;
-    lc->fog_header = out.header;
-}
-
-/* DENG-849: the froxel fog of a view whose sky is not drawn (no sky attached, an HDRI environment,
- * the LUTs or pipelines missing): no aerial perspective, the fog alone over the lit target. */
-static void fog_only(de__sky_render *sr, const de__view_frame *vf, de__vis_context *vc,
-                     de__lighting_context *lc) {
-    if (!de__fog_ready(sr->fog) || vf->world == NULL || sr->luts == NULL ||
-        !de__fog_enabled(vf->settings, vf->world->fog, vf->world->fog_count,
-                         de__fog_max_distance(sr->fog)))
-        return;
-    de__lighting *lt = de__views_lighting(vf->renderer);
-    const u32 slot = (vf->view.id & 0xFFu) - 1u;
-    const f32 pre = de__lighting_view_exposure(
-        lt, slot, vf->view, vf->frame_index,
-        vf->camera != NULL ? vf->camera->camera.exposure_ev100 : (f32)NAN, NULL);
-    add_fog(sr, vf, vc, lc, pre, false);
+                    de__lighting_context *lc, f32 pre) {
+    const de__fog_aerial aerial = {.texture = lc->aerial,
+                                   .sampler = lc->aerial_sampler,
+                                   .range_km = lc->aerial_range_km};
+    de__fog_stage_add(sr->renderer->fog, vf, vc, lc, pre, &aerial);
 }
 
 static void stage(de__view_frame *vf, void *user) {
@@ -697,9 +659,8 @@ static void stage(de__view_frame *vf, void *user) {
     if (sr->failed || !DE_HANDLE_VALID(sr->pipe_view) || !DE_HANDLE_VALID(sr->pipe_sky) ||
         !de__sky_luts_ready(sr->luts) || (DE_HANDLE_VALID(lc->strip) && !lc->strip_sky) ||
         !de__sky_snapshot_get(sr->sky, &sn)) {
-        /* No sky for this view (none attached, or an HDRI environment lights it): the fog runs
-         * on its own, DENG-849. */
-        fog_only(sr, vf, vc, lc);
+        /* No sky for this view (none attached, or an HDRI environment lights it): the renderer's
+         * "fog" stage runs the fog on its own (DENG-849, DENG-861). */
         return;
     }
     const de_result lr = de__sky_luts_update(sr->luts, sn.mie_scale, sn.albedo);
@@ -756,9 +717,10 @@ static void stage(de__view_frame *vf, void *user) {
     const de_vec3 r00 = ray_at(&inv, -1.0f, 1.0f), r10 = ray_at(&inv, 1.0f, 1.0f),
                   r01 = ray_at(&inv, -1.0f, -1.0f);
     /* DENG-207: the froxel fog, when volumetrics are on and some fog volume has a density. */
-    const bool fog_on = de__fog_ready(sr->fog) && vf->world != NULL &&
+    const de__fog *fog = de__fog_stage_fog(sr->renderer->fog);
+    const bool fog_on = de__fog_ready(fog) && vf->world != NULL &&
                         de__fog_enabled(vf->settings, vf->world->fog, vf->world->fog_count,
-                                        de__fog_max_distance(sr->fog));
+                                        de__fog_max_distance(fog));
     if (sr->cv_aerial.id && de_cvar_bool(sr->cv_aerial) && DE_HANDLE_VALID(sr->pipe_apply) &&
         de__sky_luts_aerial_ready(sr->luts))
         add_aerial(sr, vf, vc, lc, &sn, r_km, sun_w, moon_w, r00, r10, r01, !fog_on);
@@ -815,7 +777,7 @@ static void stage(de__view_frame *vf, void *user) {
         (void)de__clouds_add_passes(sr->clouds, g, vc->arena, &ci);
     }
     if (fog_on)
-        add_fog(sr, vf, vc, lc, pre, true);
+        add_fog(sr, vf, vc, lc, pre);
 }
 
 void de__sky_render_destroy(de__sky_render *sr) {
@@ -837,7 +799,6 @@ void de__sky_render_destroy(de__sky_render *sr) {
         de__lighting_set_sky(de__views_lighting(sr->renderer), NULL);
         de__sky_ibl_destroy(sr->ibl);
     }
-    de__fog_destroy(sr->fog);
     de__clouds_destroy(sr->clouds);
     if (DE_HANDLE_VALID(sr->pipe_view))
         de_gpu_pipeline_destroy(sr->dev, sr->pipe_view);
@@ -871,8 +832,6 @@ de_result de__sky_render_create(struct de_renderer *r, struct de_sky *s, const d
     de_result res = de__sky_luts_create(r->dev, alloc, &sr->luts);
     if (res == DE_OK)
         res = de__sky_ibl_create(r->dev, alloc, &sr->ibl);
-    if (res == DE_OK)
-        res = de__fog_create(r->dev, alloc, &sr->fog);
     if (res == DE_OK)
         res = de__clouds_create(r->dev, alloc, &sr->clouds);
     if (res == DE_OK)
