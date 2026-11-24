@@ -49,7 +49,7 @@ static const struct {
     {"DeLight", 10, offsetof(DeRenderComponents, light)},
     {"DeEnvironment", 3, offsetof(DeRenderComponents, environment)},
     {"DeSprite", 17, offsetof(DeRenderComponents, sprite)},
-    {"DeSky", 9, offsetof(DeRenderComponents, sky)},
+    {"DeSky", 15, offsetof(DeRenderComponents, sky)},
     {"DeFogVolume", 7, offsetof(DeRenderComponents, fog_volume)},
     {"DeDecal", 4, offsetof(DeRenderComponents, decal)},
     {"DeParticleSystem", 4, offsetof(DeRenderComponents, particle_system)},
@@ -537,6 +537,12 @@ TEST_F(render_components, defaults, cfx) {
         EXPECT_FLOAT_EQ(sky.moon_phase, -1.0, 0);
         EXPECT_FLOAT_EQ(sky.ground_albedo, 0.3, 1e-7);
         EXPECT_TRUE(sky.drive_sun);
+        EXPECT_FLOAT_EQ(sky.cloud_bottom_m, 1500.0, 0);
+        EXPECT_FLOAT_EQ(sky.cloud_top_m, 4000.0, 0);
+        EXPECT_FLOAT_EQ(sky.cloud_density, 1.0, 0);
+        EXPECT_FLOAT_EQ(sky.cloud_wind_dir_deg, 0.0, 0);
+        EXPECT_FLOAT_EQ(sky.cloud_wind_speed_mps, 0.0, 0);
+        EXPECT_FLOAT_EQ(sky.cloud_erosion, 0.5, 0);
 
         DeFogVolume fog;
         construct_from(f, "DeFogVolume", &fog, sizeof fog, fill);

@@ -43,8 +43,8 @@ public struct LightingInputs
     public uint rt_shadow_keys;
     public uint rt_shadow_extent;
     public uint rt_shadow_config;
-    public uint rt_reserved0;
-    public uint rt_reserved1;
+    public uint cloud_shadow;       // DENG-208: CloudShadow header ring (de_bytes), 0 = no clouds
+    public uint cloud_shadow_entry; // DENG-208: this frame's entry in it
     public uint rt_reserved2;
     public uint restir_diffuse;
     public uint restir_specular;
@@ -148,4 +148,34 @@ public float de_input_rt_shadow(LightingInputs i,uint2 pixel,uint key,float fall
         if(de_bytes(i.rt_shadow_keys).load((slot*size.x*size.y+at)*4)==key)
             return de_tex2d(i.rt_shadow_visibility).Load(int3(p.x,p.y+slot*size.y,0)).r;
     return fallback;
+}
+
+/// DENG-208: the clouds' shadow on the sun at `p` (render-origin space) for light direction `wi`
+/// (toward the light). The CloudShadow header (64 bytes per ring entry; src/world/sky/
+/// clouds_internal.h de__cloud_shadow_gpu): uint4 (texture, sampler, flags, 0); float4 (origin
+/// x, y, 1 / extent, layer bottom z); float4 (sun direction, strength); float4 reserved. The map
+/// stores the layer's transmittance along the sun at the point where the sun ray crosses the
+/// layer bottom. 1 without clouds, for other lights and outside the map.
+public float de_input_cloud_shadow(LightingInputs i, float3 p, float3 wi)
+{
+    if (i.cloud_shadow == 0u)
+        return 1.0;
+    DeBytes b = de_bytes(i.cloud_shadow);
+    uint base = i.cloud_shadow_entry * 64u;
+    uint4 h = b.load4(base);
+    if (h.x == 0u || (h.z & 1u) == 0u)
+        return 1.0;
+    float4 area = asfloat(b.load4(base + 16u));
+    float4 sun = asfloat(b.load4(base + 32u));
+    if (dot(wi, sun.xyz) < 0.999 || wi.z < 0.01)
+        return 1.0;
+    float t = max(area.w - p.z, 0.0) / wi.z;
+    float2 q = p.xy + wi.xy * t;
+    float2 uv = (q - area.xy) * area.z + 0.5;
+    if (any(uv < 0.0) || any(uv > 1.0))
+        return 1.0;
+    float s = de_tex2d(h.x).SampleLevel(de_sampler(h.y), uv, 0.0).r;
+    // Fade to no shadow at the map's border, so the edge of the covered area is not a line.
+    float2 e = saturate(min(uv, 1.0 - uv) * 10.0);
+    return lerp(1.0, s, sun.w * e.x * e.y);
 }

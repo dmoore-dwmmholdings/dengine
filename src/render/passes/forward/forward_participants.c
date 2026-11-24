@@ -66,7 +66,8 @@ void de__forward_declare_lighting(de_rg_pass *p, const de__lighting_context *lc)
     const de_rg_resource reads[] = {
         lc->lights,        lc->dir_lights,    lc->grid_buf,   lc->list,           lc->counters,
         lc->ltc1,          lc->ltc2,          lc->strip,      lc->shadow_records, lc->atlas_records,
-        lc->atlas_texture, lc->probe_records, lc->probe_list, lc->gi_records};
+        lc->atlas_texture, lc->probe_records, lc->probe_list, lc->gi_records,
+        lc->cloud_shadow};
     for (u32 i = 0; i < sizeof reads / sizeof reads[0]; ++i)
         if (reads[i].id)
             de_rg_read(p, reads[i], DE_ACCESS_SHADER_READ);

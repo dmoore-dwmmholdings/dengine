@@ -900,6 +900,14 @@ typedef struct DeSky {
     f32 moon_phase;  /**< < 0: the real moon of that date; 0..1: forced phase (0.5 full) */
     f32 ground_albedo;
     bool drive_sun; /**< drive the first directional DeLight */
+    /* DENG-208: the volumetric cloud layer, drawn when `clouds` is set, cloud_coverage > 0 and
+     * de_render_settings.volumetrics is not DE_QUALITY_OFF. Zero picks the default. */
+    f32 cloud_bottom_m;       /**< layer bottom above sea level, m (0: 1500) */
+    f32 cloud_top_m;          /**< layer top, m (0: 4000; at least bottom + 100) */
+    f32 cloud_density;        /**< extinction scale (0: 1) */
+    f32 cloud_wind_dir_deg;   /**< heading the wind blows toward, clockwise from north (+y) */
+    f32 cloud_wind_speed_mps; /**< the weather map's drift, m/s (0: still) */
+    f32 cloud_erosion;        /**< how much the detail noise erodes the edges, 0..1 (0: 0.5) */
 } DeSky;
 
 /** The sun's illuminance at the top of the atmosphere used by the sky, in lux. The solar

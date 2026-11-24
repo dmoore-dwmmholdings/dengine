@@ -5,12 +5,12 @@
 de_add_module(
     NAME sky
     LAYER gameplay
-    SOURCES sky.c celestial.c atmosphere.c sky_ibl.c sky_internal.h
+    SOURCES sky.c celestial.c atmosphere.c sky_ibl.c sky_internal.h clouds_math.c clouds_internal.h
     DEPS ecs asset
     OPTIONAL_DEPS render
 )
 
 if(DE_HAS_RENDER)
-  target_sources(de_sky PRIVATE sky_luts.c fog.c fog_volumes.c fog_internal.h)
+  target_sources(de_sky PRIVATE sky_luts.c fog.c fog_volumes.c fog_internal.h clouds.c)
   target_link_libraries(de_sky PRIVATE de_render de_gpu de_ecs)
 endif()

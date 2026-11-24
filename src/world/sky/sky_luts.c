@@ -342,6 +342,8 @@ struct de__sky_render {
     de__sky_ibl_owner ibl_owner; /* DENG-845: the view whose altitude the IBL follows */
     u64 ibl_swap_frame; /* DENG-844: frame_index + 1 of the frame a new environment was handed over */
     bool registered, ibl_registered, failed, ibl_failed;
+    de__clouds *clouds;      /* DENG-208: the volumetric clouds */
+    bool clouds_registered;  /* its "clouds.shadow" lighting stage */
 };
 
 typedef struct view_pass {
@@ -567,6 +569,64 @@ static void ibl_stage(de__view_frame *vf, void *user) {
     update_ibl(sr, lt, &sn, viewer_radius_km(vf), vf->frame_index);
 }
 
+/* DENG-208: what both cloud stages read of one view. False: no clouds this frame. */
+static bool clouds_frame(const de__sky_render *sr, const de__view_frame *vf,
+                         const de__sky_snapshot *sn, de__clouds_frame *f) {
+    memset(f, 0, sizeof *f);
+    if (vf->camera == NULL || vf->settings == NULL || !de__clouds_ready(sr->clouds) ||
+        !de__clouds_enabled(&sn->clouds, vf->settings))
+        return false;
+    const struct de__rw_view *cam = vf->camera;
+    f->settings = vf->settings;
+    f->clouds = sn->clouds;
+    if (cam->has_position) {
+        f->camera_world[0] = cam->position.x;
+        f->camera_world[1] = cam->position.y;
+        f->camera_world[2] = cam->position.z;
+    } else {
+        f->camera_world[0] = cam->offset.x;
+        f->camera_world[1] = cam->offset.y;
+        f->camera_world[2] = cam->offset.z;
+    }
+    f->drift[0] = sn->cloud_drift[0];
+    f->drift[1] = sn->cloud_drift[1];
+    f->camera = cam->offset;
+    f->sun_dir = sn->sun_dir;
+    f->sun_illuminance = sn->sun_weight;
+    f->slot = (vf->view.id & 0xFFu) - 1u;
+    f->frame_index = vf->frame_index;
+    f->transmittance = de__sky_luts_transmittance_bindless(sr->luts);
+    f->sampler = sr->luts->smp_bindless;
+    return f->slot < DE__VIEW_MAX;
+}
+
+/* DENG-208: "clouds.shadow", before the lighting build: the clouds' shadow map, which the build
+ * (sun term) and the froxel fog's in-scatter sample through de__lighting_inputs. */
+static void clouds_shadow_stage(de__view_frame *vf, void *user) {
+    de__sky_render *sr = (de__sky_render *)user;
+    if (sr->failed || !de__sky_luts_ready(sr->luts) || vf->graph == NULL)
+        return;
+    de_renderer *r = vf->renderer;
+    de__vis_context *vc =
+        de__vis_frame_context(de__views_vis(r), vf->view, vf->graph, vf->frame_index);
+    de__lighting *lt = de__views_lighting(r);
+    de__sky_snapshot sn;
+    if (vc == NULL || lt == NULL || !de__sky_snapshot_get(sr->sky, &sn))
+        return;
+    de__clouds_frame f;
+    if (!clouds_frame(sr, vf, &sn, &f))
+        return;
+    de__clouds_shadow_output out;
+    if (de__clouds_add_shadow_pass(sr->clouds, vf->graph, vc->arena, &f, &out) == 0u)
+        return;
+    de__lighting_inputs *in = de__lighting_view_inputs(lt, f.slot);
+    if (in == NULL)
+        return;
+    in->cloud_shadow = out.texture;
+    in->cloud_shadow_header = out.header;
+    in->cloud_shadow_entry = out.entry;
+}
+
 /* DENG-207: the froxel fog after the sky, before transparency; it hands the integrated volume to
  * the forward transparent pass through `lc`. */
 static void add_fog(de__sky_render *sr, const de__view_frame *vf, de__vis_context *vc,
@@ -705,6 +765,29 @@ static void stage(de__view_frame *vf, void *user) {
     de_rg_read(pass, vc->depth, DE_ACCESS_SHADER_READ);
     de_rg_read(pass, lc->target, DE_ACCESS_SHADER_READ);
     de_rg_write(pass, lc->target, DE_ACCESS_SHADER_WRITE);
+    /* DENG-208: the clouds over the sky and the opaque surfaces, before the fog. */
+    de__clouds_inputs ci;
+    memset(&ci, 0, sizeof ci);
+    if (clouds_frame(sr, vf, &sn, &ci.frame)) {
+        ci.width = vf->width;
+        ci.height = vf->height;
+        ci.view_matrix = vf->view_matrix;
+        ci.proj = vf->proj;
+        ci.prev_view_proj = vf->prev_view_proj;
+        ci.ray00 = r00;
+        ci.ray_du = (de_vec3){r10.x - r00.x, r10.y - r00.y, r10.z - r00.z};
+        ci.ray_dv = (de_vec3){r01.x - r00.x, r01.y - r00.y, r01.z - r00.z};
+        ci.history_ok = !vf->probe_capture && (vf->world == NULL || !vf->world->origin_changed);
+        ci.pre_exposure = pre;
+        ci.depth = vc->depth;
+        ci.target = lc->target;
+        ci.lc = lc;
+        ci.aerial = lc->aerial;
+        ci.aerial_sampler = lc->aerial_sampler;
+        ci.aerial_range_km = lc->aerial_range_km;
+        ci.aerial_on_opaque = !fog_on;
+        (void)de__clouds_add_passes(sr->clouds, g, vc->arena, &ci);
+    }
     if (fog_on)
         add_fog(sr, vf, vc, lc, pre);
 }
@@ -720,11 +803,16 @@ void de__sky_render_destroy(de__sky_render *sr) {
         de__render_world_wait_idle(sr->renderer);
         de__view_unregister_stage(sr->renderer, ibl_stage, sr);
     }
+    if (sr->clouds_registered) {
+        de__render_world_wait_idle(sr->renderer);
+        de__view_unregister_stage(sr->renderer, clouds_shadow_stage, sr);
+    }
     if (sr->ibl != NULL) {
         de__lighting_set_sky(de__views_lighting(sr->renderer), NULL);
         de__sky_ibl_destroy(sr->ibl);
     }
     de__fog_destroy(sr->fog);
+    de__clouds_destroy(sr->clouds);
     if (DE_HANDLE_VALID(sr->pipe_view))
         de_gpu_pipeline_destroy(sr->dev, sr->pipe_view);
     if (DE_HANDLE_VALID(sr->pipe_sky))
@@ -759,6 +847,8 @@ de_result de__sky_render_create(struct de_renderer *r, struct de_sky *s, const d
         res = de__sky_ibl_create(r->dev, alloc, &sr->ibl);
     if (res == DE_OK)
         res = de__fog_create(r->dev, alloc, &sr->fog);
+    if (res == DE_OK)
+        res = de__clouds_create(r->dev, alloc, &sr->clouds);
     if (res == DE_OK)
         res = load_pipe(r->dev, alloc, "sky_skyview", "cs_skyview", (u32)sizeof(skyview_params), 8u,
                         8u, &sr->pipe_view);
@@ -795,6 +885,11 @@ de_result de__sky_render_create(struct de_renderer *r, struct de_sky *s, const d
         res = de__view_register_stage(r, DE__VIEW_SLOT_LIGHTING, DE__SKY_IBL_STAGE_ORDER, "sky.ibl",
                                       ibl_stage, sr);
         sr->ibl_registered = res == DE_OK;
+    }
+    if (res == DE_OK) {
+        res = de__view_register_stage(r, DE__VIEW_SLOT_LIGHTING, DE__CLOUDS_SHADOW_STAGE_ORDER,
+                                      "clouds.shadow", clouds_shadow_stage, sr);
+        sr->clouds_registered = res == DE_OK;
     }
     if (res != DE_OK) {
         de__sky_render_destroy(sr);

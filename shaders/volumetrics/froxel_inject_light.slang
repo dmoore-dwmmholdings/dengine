@@ -57,9 +57,8 @@ void cs_fog_light(uint3 id : SV_DispatchThreadID, uniform LightParams pc)
             float vis = (lv.inputs.reserved0 & DE_INPUT_SHADOW_METADATA) != 0u ?
                 csm_shadow(lv.inputs.shadow_directional, p, hit.wi, asuint(l.bound.xy)) : 1.0;
             // DENG-208 marker: the clouds' shadow on the fog multiplies the sun here.
-            float sun_visibility = 1.0;
-            if (i == 0u)
-                vis *= sun_visibility;
+            float sun_visibility = de_input_cloud_shadow(lv.inputs, p, hit.wi);
+            vis *= sun_visibility;
             light += hit.illuminance * vis * fog_phase_hg(g, dot(hit.wi, v));
         }
         uint2 px = min(uint2(uv * float2(pc.width, pc.height)), uint2(pc.width - 1u, pc.height - 1u));

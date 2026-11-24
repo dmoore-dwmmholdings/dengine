@@ -323,6 +323,10 @@ static void construct_sky(void *obj) {
     s->moon_phase = -1.0f;
     s->ground_albedo = 0.3f;
     s->drive_sun = true;
+    s->cloud_bottom_m = 1500.0f;
+    s->cloud_top_m = 4000.0f;
+    s->cloud_density = 1.0f;
+    s->cloud_erosion = 0.5f;
 }
 
 static de_result reg_sky(de_world *w, de_component *out) {
@@ -340,6 +344,18 @@ static de_result reg_sky(de_world *w, de_component *out) {
         DE_FIELD_EX(DeSky, ground_albedo, DE_FK_F32, AUTHORED, {0, 1, 0, 0, 0, 0}),
         DE_FIELD_EX(DeSky, drive_sun, DE_FK_BOOL, AUTHORED,
                     {0, 0, 0, "Drive the first directional light", 0, 0}),
+        DE_FIELD_EX(DeSky, cloud_bottom_m, DE_FK_F32, AUTHORED,
+                    {0, 20000, "m", "Cloud layer bottom (0: 1500 m)", 0, 0}),
+        DE_FIELD_EX(DeSky, cloud_top_m, DE_FK_F32, AUTHORED,
+                    {0, 20000, "m", "Cloud layer top (0: 4000 m)", 0, 0}),
+        DE_FIELD_EX(DeSky, cloud_density, DE_FK_F32, AUTHORED,
+                    {0, 10, 0, "Cloud extinction scale (0: 1)", 0, 0}),
+        DE_FIELD_EX(DeSky, cloud_wind_dir_deg, DE_FK_F32, AUTHORED,
+                    {0, 360, "deg", "Heading the wind blows toward, from north", 0, 0}),
+        DE_FIELD_EX(DeSky, cloud_wind_speed_mps, DE_FK_F32, AUTHORED,
+                    {0, 100, "m/s", "Cloud drift speed", 0, 0}),
+        DE_FIELD_EX(DeSky, cloud_erosion, DE_FK_F32, AUTHORED,
+                    {0, 1, 0, "Detail erosion of the cloud edges (0: 0.5)", 0, 0}),
     };
     return register_component(w, DE_TYPE_DESC(DeSky, 1, k_fields), construct_sky, out);
 }
