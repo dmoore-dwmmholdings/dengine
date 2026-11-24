@@ -16,9 +16,16 @@
  * and lists the cells each tile overlaps; those cells join the cell list and their bundles depend
  * on the tile bundles. The terrain entity itself stays in its cell unchanged.
  *
- * Known gap: an entity reference (a component field that holds another entity's scene ID) that
- * crosses a cell boundary is written unchanged; the cell's scene import then reports it as a
- * reference outside the file. Keep cross-referencing entities under one root.
+ * Cross-cell references (DENG-858): a component field whose value is a "0x.." string naming a
+ * placed entity of another cell is a cross-cell reference. wc_xrefs_collect reports each one (a
+ * note), the cell scene gets "0x0" (null) in its place, and the reference goes, with its world
+ * scene IDs, into the reference table of the source's cell ("xref_<cx>_<cy>", format in
+ * streaming_internal.h); the target's cell gets a table too, listing the target as an anchor.
+ * The world partition resolves the references at runtime. The match is by value: the cook has
+ * no type registry, so a string field that happens to hold another cell's scene ID is taken for
+ * a reference (with 64-bit IDs that does not happen by chance). A reference nested in an array
+ * or an inline table cannot be recorded: it is written unchanged with a warning (the cell's
+ * scene import then makes it null).
  */
 #include "world_cells.h"
 #include "world_proxy.h"
@@ -77,6 +84,9 @@ typedef struct wc_run {
     /* terrain tiles (DENG-857), sorted by terrain, ty, tx */
     struct wc_tile *tiles;
     u32 tile_count, tile_cap;
+    /* cross-cell references (DENG-858), sorted by source cell, source, component, field */
+    struct wc_xref *xrefs;
+    u32 xref_count, xref_cap;
 } wc_run;
 
 /* ---- Output helpers ------------------------------------------------------------------------ */
@@ -105,7 +115,7 @@ static void wc_msg(wc_run *run, const char *kind, const char *file, int line, co
     wc_put(run, DE_COOK_STDOUT, "\n");
     if (kind[0] == 'e')
         run->errors++;
-    else
+    else if (kind[0] == 'w')
         run->warnings++;
 }
 
@@ -606,8 +616,11 @@ static bool wc_value(wc_run *run, de_strbuf *b, const toml_datum_t *v, const cha
 }
 
 /* One component table. For a root's DeTransform, `origin` (non-NULL) is subtracted from x/y. */
-static bool wc_component(wc_run *run, de_strbuf *b, const char *hex, const char *name,
-                         const toml_datum_t *t, const f64 *origin, const char *src) {
+static u32 wc_xref_target(const wc_run *run, const wc_ent *e, const toml_datum_t *v);
+
+static bool wc_component(wc_run *run, de_strbuf *b, const wc_ent *e, const char *hex,
+                         const char *name, const toml_datum_t *t, const f64 *origin,
+                         const char *src) {
     bool ok = de_strbuf_appendf(b, "[entity.%s.", hex) == DE_OK && wc_key(b, name) &&
               de_strbuf_append_cstr(b, "]\n") == DE_OK;
     u32 *o = wc_key_order(run, t);
@@ -632,6 +645,8 @@ static bool wc_component(wc_run *run, de_strbuf *b, const char *hex, const char 
                      de_strbuf_append_cstr(b, ", ") == DE_OK && wc_f64(b, p[1]) &&
                      de_strbuf_append_cstr(b, ", ") == DE_OK && wc_f64(b, p[2]) &&
                      de_strbuf_append_char(b, ']') == DE_OK;
+        } else if (wc_xref_target(run, e, v) != UINT32_MAX) {
+            ok = ok && de_strbuf_append_cstr(b, "\"0x0\"") == DE_OK; /* DENG-858: in the table */
         } else {
             ok = ok && wc_value(run, b, v, src);
         }
@@ -668,7 +683,7 @@ static bool wc_entity_out(wc_run *run, de_strbuf *b, const wc_ent *e) {
         if (v->type != TOML_TABLE)
             continue;
         bool rel = e->parent_id == 0 && strcmp(k, "DeTransform") == 0;
-        ok = wc_component(run, b, hex, k, v, rel ? origin : NULL, e->source);
+        ok = wc_component(run, b, e, hex, k, v, rel ? origin : NULL, e->source);
     }
     wc_free_order(run, o, e->tab);
     return ok;
@@ -1197,6 +1212,202 @@ static bool wc_tiles_list(const wc_run *run, const char *world, const char *cell
     return true;
 }
 
+/* ---- Cross-cell references (DENG-858) ------------------------------------------------------ */
+
+typedef struct wc_xref {
+    u64 src, dst;
+    i32 scx, scy, tcx, tcy;
+    const char *comp, *field; /* in the parsed scene */
+} wc_xref;
+
+/* The index of the entity that `v` references when it is a "0x.." string naming a placed entity
+ * of a cell other than e's; UINT32_MAX otherwise. */
+static u32 wc_xref_target(const wc_run *run, const wc_ent *e, const toml_datum_t *v) {
+    if (e == NULL || v->type != TOML_STRING || v->u.str.len < 3 || v->u.str.ptr[0] != '0' ||
+        (v->u.str.ptr[1] != 'x' && v->u.str.ptr[1] != 'X'))
+        return UINT32_MAX;
+    const u64 id = wc_scene_id_str(v->u.str.ptr);
+    if (id == 0 || id == e->id)
+        return UINT32_MAX;
+    const u32 j = wc_find(run, id);
+    if (j == UINT32_MAX || !run->ents[j].placed ||
+        (run->ents[j].cx == e->cx && run->ents[j].cy == e->cy))
+        return UINT32_MAX;
+    return j;
+}
+
+/* A cross-cell reference inside an array or inline table: warned, written unchanged. */
+static void wc_xref_nested(wc_run *run, const wc_ent *e, const char *comp, const char *field,
+                           const toml_datum_t *v) {
+    if (v->type == TOML_ARRAY) {
+        for (int32_t i = 0; i < v->u.arr.size; ++i)
+            wc_xref_nested(run, e, comp, field, &v->u.arr.elem[i]);
+    } else if (v->type == TOML_TABLE) {
+        for (int32_t i = 0; i < v->u.tab.size; ++i)
+            wc_xref_nested(run, e, comp, field, &v->u.tab.value[i]);
+    } else if (wc_xref_target(run, e, v) != UINT32_MAX) {
+        wc_msg(run, "warning", e->source, v->lineno,
+               "%s.%s of entity 0x%016llx names %s in another cell inside an array or table; "
+               "only a top-level field can reference another cell, so it will be null",
+               comp, field, (unsigned long long)e->id, v->u.str.ptr);
+    }
+}
+
+static int wc_xref_cmp(const void *pa, const void *pb) {
+    const wc_xref *a = (const wc_xref *)pa, *b = (const wc_xref *)pb;
+    if (a->scx != b->scx)
+        return a->scx < b->scx ? -1 : 1;
+    if (a->scy != b->scy)
+        return a->scy < b->scy ? -1 : 1;
+    if (a->src != b->src)
+        return a->src < b->src ? -1 : 1;
+    int c = strcmp(a->comp, b->comp);
+    return c != 0 ? c : strcmp(a->field, b->field);
+}
+
+static bool wc_push_xref(wc_run *run, const wc_xref *x) {
+    if (run->xref_count == run->xref_cap) {
+        u32 cap = run->xref_cap ? run->xref_cap * 2u : 16u;
+        wc_xref *n = (wc_xref *)wc_alloc(run, sizeof *n * cap);
+        if (n == NULL)
+            return false;
+        if (run->xrefs != NULL) {
+            memcpy(n, run->xrefs, sizeof *n * run->xref_count);
+            DE_FREE(run->a, run->xrefs, sizeof *n * run->xref_cap);
+        }
+        run->xrefs = n;
+        run->xref_cap = cap;
+    }
+    run->xrefs[run->xref_count++] = *x;
+    return true;
+}
+
+/* Every placed entity's cross-cell references, reported and listed in run->xrefs. A name too
+ * long for the table is an error. Returns false when out of memory. */
+static bool wc_xrefs_collect(wc_run *run) {
+    for (u32 i = 0; i < run->ent_count; ++i) {
+        const wc_ent *e = &run->ents[i];
+        if (!e->placed)
+            continue;
+        for (int32_t c = 0; c < e->tab->u.tab.size; ++c) {
+            const toml_datum_t *t = &e->tab->u.tab.value[c];
+            const char *comp = e->tab->u.tab.key[c];
+            if (t->type != TOML_TABLE)
+                continue;
+            for (int32_t f = 0; f < t->u.tab.size; ++f) {
+                const toml_datum_t *v = &t->u.tab.value[f];
+                const char *field = t->u.tab.key[f];
+                if (v->type == TOML_ARRAY || v->type == TOML_TABLE) {
+                    wc_xref_nested(run, e, comp, field, v);
+                    continue;
+                }
+                const u32 j = wc_xref_target(run, e, v);
+                if (j == UINT32_MAX)
+                    continue;
+                const wc_ent *d = &run->ents[j];
+                if (strlen(comp) >= DE__XREF_NAME || strlen(field) >= DE__XREF_NAME) {
+                    wc_msg(run, "error", e->source, v->lineno,
+                           "%s.%s references another cell, but its name is longer than %u bytes",
+                           comp, field, (unsigned)DE__XREF_NAME - 1u);
+                    continue;
+                }
+                wc_msg(run, "note", e->source, v->lineno,
+                       "%s.%s of entity 0x%016llx in cell (%d, %d) references entity 0x%016llx "
+                       "in cell (%d, %d); written as a world reference",
+                       comp, field, (unsigned long long)e->id, (int)e->cx, (int)e->cy,
+                       (unsigned long long)d->id, (int)d->cx, (int)d->cy);
+                const wc_xref x = {e->id, d->id, e->cx, e->cy, d->cx, d->cy, comp, field};
+                if (!wc_push_xref(run, &x))
+                    return false;
+            }
+        }
+    }
+    if (run->xref_count > 1)
+        qsort(run->xrefs, run->xref_count, sizeof *run->xrefs, wc_xref_cmp);
+    return true;
+}
+
+static int wc_u64_cmp(const void *pa, const void *pb) {
+    const u64 a = *(const u64 *)pa, b = *(const u64 *)pb;
+    return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+/* The reference table of cell (cx, cy), when it has any anchor: written as
+ * `<sub>xref_<cx>_<cy>.xref`, its blob asset added to `idx` and its ID to the cell bundle's
+ * assets (`*has` true). `entities` is the number of entities in the cell scene. */
+static bool wc_xref_cell(wc_run *run, const char *world, const char *cells_dir, const char *sub,
+                         i32 cx, i32 cy, u32 entities, de_strbuf *idx, bool *has) {
+    *has = false;
+    u32 na = 0, nr = 0;
+    for (u32 i = 0; i < run->xref_count; ++i) {
+        const wc_xref *x = &run->xrefs[i];
+        const bool out = x->scx == cx && x->scy == cy, in = x->tcx == cx && x->tcy == cy;
+        nr += out ? 1u : 0u;
+        na += (out ? 1u : 0u) + (in ? 1u : 0u);
+    }
+    if (na == 0)
+        return true;
+    const u64 bytes = de__xref_bytes(na, nr);
+    u8 *b = (u8 *)wc_alloc(run, (size_t)bytes);
+    if (b == NULL)
+        return false;
+    memset(b, 0, (size_t)bytes);
+    u64 *anchors = (u64 *)wc_alloc(run, sizeof *anchors * na);
+    if (anchors == NULL) {
+        DE_FREE(run->a, b, (size_t)bytes);
+        return false;
+    }
+    u32 k = 0;
+    u8 *r = b + DE__XREF_HEADER + 8u * (u64)na; /* records first; the anchors are shrunk below */
+    for (u32 i = 0; i < run->xref_count; ++i) {
+        const wc_xref *x = &run->xrefs[i];
+        if (x->tcx == cx && x->tcy == cy)
+            anchors[k++] = x->dst;
+        if (x->scx != cx || x->scy != cy)
+            continue;
+        anchors[k++] = x->src;
+        wc_le64(r, x->src);
+        wc_le64(r + 8, x->dst);
+        wc_le32(r + 16, (u32)x->tcx);
+        wc_le32(r + 20, (u32)x->tcy);
+        memcpy(r + 24, x->comp, strlen(x->comp));
+        memcpy(r + 24 + DE__XREF_NAME, x->field, strlen(x->field));
+        r += DE__XREF_REC;
+    }
+    qsort(anchors, na, sizeof *anchors, wc_u64_cmp);
+    u32 nu = 0;
+    for (u32 i = 0; i < na; ++i)
+        if (nu == 0 || anchors[nu - 1] != anchors[i])
+            anchors[nu++] = anchors[i];
+    /* Unique anchors: move the records down over the unused anchor slots. */
+    const u64 final_bytes = de__xref_bytes(nu, nr);
+    memmove(b + DE__XREF_HEADER + 8u * (u64)nu, b + DE__XREF_HEADER + 8u * (u64)na,
+            (size_t)DE__XREF_REC * nr);
+    memcpy(b, DE__XREF_MAGIC, 4);
+    wc_le32(b + 4, DE__XREF_VERSION);
+    wc_le32(b + 8, entities);
+    wc_le32(b + 12, nu);
+    wc_le32(b + 16, nr);
+    for (u32 i = 0; i < nu; ++i)
+        wc_le64(b + DE__XREF_HEADER + 8u * i, anchors[i]);
+    DE_FREE(run->a, anchors, sizeof *anchors * na);
+    char leaf[64], id[192], file[DE_FS_PATH_MAX], vpath[DE_FS_PATH_MAX];
+    bool ok = de__xref_leaf(leaf, sizeof leaf, cx, cy) &&
+              de__xref_name(id, sizeof id, world, cx, cy) &&
+              snprintf(file, sizeof file, "%s%s.xref", sub, leaf) < (int)sizeof file &&
+              snprintf(vpath, sizeof vpath, "%s%s", WC_OUT_PREFIX, file) < (int)sizeof vpath &&
+              de_file_write_all_atomic(vpath, b, final_bytes) == DE_OK;
+    DE_FREE(run->a, b, (size_t)bytes);
+    if (!ok) {
+        wc_msg(run, "error", NULL, 0, "cannot write the reference table %s", leaf);
+        return false;
+    }
+    *has = true;
+    return wc_str(idx, id, strlen(id)) &&
+           de_strbuf_appendf(idx, " = { type = \"blob\", source = \"%s/%s.xref\" }\n", cells_dir,
+                             leaf) == DE_OK;
+}
+
 /* ---- The command --------------------------------------------------------------------------- */
 
 static int wc_cook(wc_run *run, const de__manifest *m, const de__manifest_world *w) {
@@ -1220,6 +1431,8 @@ static int wc_cook(wc_run *run, const de__manifest *m, const de__manifest_world 
             return wc_fatal(run, "out of memory", NULL);
     }
     wc_place(run);
+    if (run->errors == 0 && !wc_xrefs_collect(run))
+        return wc_fatal(run, "out of memory", NULL);
     if (run->errors > 0)
         return DE_COOK_EXIT_ERRORS;
 
@@ -1307,10 +1520,13 @@ static int wc_cook(wc_run *run, const de__manifest *m, const de__manifest_world 
         de_strbuf_clear(&cell);
         ok = de_strbuf_appendf(&cell, "# %s: cell (%d, %d) of world \"%s\" (de-cook world)\n", id,
                                (int)cx, (int)cy, w->name) == DE_OK;
+        u32 cell_ents = 0;
         for (u32 i = 0; ok && i < run->ent_count; ++i) {
             const wc_ent *e = &run->ents[i];
-            if (e->placed && e->cx == cx && e->cy == cy)
+            if (e->placed && e->cx == cx && e->cy == cy) {
                 ok = wc_entity_out(run, &cell, e);
+                cell_ents++;
+            }
         }
         (void)snprintf(file, sizeof file, "%s%s.scene.toml", sub, leaf);
         if (ok && !wc_write(file, &cell)) {
@@ -1321,10 +1537,17 @@ static int wc_cook(wc_run *run, const de__manifest *m, const de__manifest_world 
              wc_str(&idx, id, strlen(id)) &&
              de_strbuf_appendf(&idx, " = { type = \"scene\", source = \"%s/%s.scene.toml\" }\n",
                                cells_dir, leaf) == DE_OK;
+        bool has_xref = false;
+        char xid[192];
+        ok = ok && wc_xref_cell(run, w->name, cells_dir, sub, cx, cy, cell_ents, &idx, &has_xref) &&
+             de__xref_name(xid, sizeof xid, w->name, cx, cy);
         ok = ok && de_strbuf_append_cstr(&bundles, "\n[bundles.") == DE_OK &&
              wc_str(&bundles, id, strlen(id)) &&
              de_strbuf_append_cstr(&bundles, "]\nassets = [") == DE_OK &&
-             wc_str(&bundles, id, strlen(id)) && de_strbuf_append_cstr(&bundles, "]\n") == DE_OK &&
+             wc_str(&bundles, id, strlen(id)) &&
+             (!has_xref || (de_strbuf_append_cstr(&bundles, ", ") == DE_OK &&
+                            wc_str(&bundles, xid, strlen(xid)))) &&
+             de_strbuf_append_cstr(&bundles, "]\n") == DE_OK &&
              wc_cell_depends(run, w->name, cx, cy, &bundles);
         if (ok && bk != NULL)
             ok = wc_proxy_cell(run, m, w, bk, pitems, cx, cy, sub, cells_dir, leaf, &idx,
@@ -1348,6 +1571,11 @@ static int wc_cook(wc_run *run, const de__manifest *m, const de__manifest_world 
     run->tiles = NULL;
     const u32 tiles = run->tile_count;
     run->tile_count = run->tile_cap = 0;
+    if (run->xrefs != NULL)
+        DE_FREE(run->a, run->xrefs, sizeof *run->xrefs * run->xref_cap);
+    run->xrefs = NULL;
+    const u32 xrefs = run->xref_count;
+    run->xref_count = run->xref_cap = 0;
     if (pitems != NULL)
         DE_FREE(run->a, pitems, sizeof *pitems * (run->ent_count + 1u));
     de__wproxy_destroy(bk);
@@ -1363,17 +1591,14 @@ static int wc_cook(wc_run *run, const de__manifest *m, const de__manifest_world 
         return wc_fatal(run, "out of memory", NULL);
     if (run->errors > 0)
         return DE_COOK_EXIT_ERRORS;
-    char line[256];
+    char line[320], tl[48] = "", xl[48] = "";
     if (tiles > 0)
-        (void)snprintf(line, sizeof line,
-                       "de-cook world: \"%s\": %u entities in %u cells, %u terrain tiles, %u "
-                       "warnings\n",
-                       w->name, (unsigned)run->ent_count, (unsigned)written, (unsigned)tiles,
-                       (unsigned)run->warnings);
-    else
-        (void)snprintf(line, sizeof line,
-                       "de-cook world: \"%s\": %u entities in %u cells, %u warnings\n", w->name,
-                       (unsigned)run->ent_count, (unsigned)written, (unsigned)run->warnings);
+        (void)snprintf(tl, sizeof tl, ", %u terrain tiles", (unsigned)tiles);
+    if (xrefs > 0)
+        (void)snprintf(xl, sizeof xl, ", %u cross-cell references", (unsigned)xrefs);
+    (void)snprintf(line, sizeof line, "de-cook world: \"%s\": %u entities in %u cells%s%s, %u "
+                   "warnings\n", w->name, (unsigned)run->ent_count, (unsigned)written, tl, xl,
+                   (unsigned)run->warnings);
     wc_put(run, DE_COOK_STDOUT, line);
     return DE_COOK_EXIT_OK;
 }
@@ -1440,6 +1665,8 @@ done:
         DE_FREE(run.a, run.docs, sizeof *run.docs * (run.doc_cap + 1u));
     if (run.ents != NULL)
         DE_FREE(run.a, run.ents, sizeof *run.ents * run.ent_cap);
+    if (run.xrefs != NULL) /* an early return from wc_cook */
+        DE_FREE(run.a, run.xrefs, sizeof *run.xrefs * run.xref_cap);
     de__resolved_destroy(res);
     de__manifest_destroy(m);
     if (run.out_mounted)

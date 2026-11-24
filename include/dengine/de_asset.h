@@ -841,6 +841,18 @@ DE_API void de_asset_flush_unused(de_asset_system *s); /* evict every zero-ref a
  * u32 version 1, u64 terrain ID, u32 tx, ty, x0, y0, w, h (first sample, sample count), f64
  * origin x, y, z, spacing, height (80 bytes), then w*h u16 heights (z = origin z + h / 65535 *
  * height), w*h hole bytes and w*h*4 splat bytes, all in row order.
+ *
+ * Cross-cell references (DENG-858): a component field (DE_FK_ENTITY) that names an entity of
+ * another cell, for example a target or a joint body, is cut out of the cell scene by the cook
+ * (the field is null there) and kept, with the world scene IDs of both entities, in the source
+ * cell's reference table, a blob asset "world/<name>/xref_<cx>_<cy>" in the cell's bundle (the
+ * target's cell has one too). The cook reports each one. Only a top-level field of a component
+ * can cross cells; one nested in an array or struct is warned and stays null. At runtime the
+ * partition writes the target entity into the field once both cells are loaded (whichever loads
+ * second), before on_cell reports the cell, and writes null back before the target's cell
+ * unloads; the component is marked changed each time. Code that holds such a field thus sees
+ * the entity or null, never a stale one. The `parent` of an entity never crosses cells (children
+ * go with their root). Worlds cooked before DENG-858 have no tables: cook them again.
  */
 /** Most streaming sources the asset system keeps; extra ones are ignored. */
 #define DE_ASSET_MAX_STREAMING_SOURCES 16u
@@ -953,6 +965,8 @@ typedef struct de_world_partition_stats {
     u64 total_loads, total_unloads;
     u32 terrain_tiles;          /**< DENG-857: terrain tile bundles the world has */
     u32 terrain_tiles_resident; /**< tiles at least one loaded cell holds */
+    u32 xrefs;          /**< DENG-858: cross-cell references of the loaded cells */
+    u32 xrefs_resolved; /**< of those, the ones whose target's cell is loaded too */
 } de_world_partition_stats;
 
 /**
