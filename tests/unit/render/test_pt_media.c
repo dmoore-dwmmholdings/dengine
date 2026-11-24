@@ -306,6 +306,116 @@ TEST_F(pt_media, fog_point_single_scatter, pt_fixture) {
     printf("Fog ignored-emission prefix %.9g vs %.9g\n", ignored, prefix);
     EXPECT_FLOAT_EQ(ignored, prefix, 1e-6);
 }
+/* DENG-865: heterogeneous fog (DENG-848) on the GPU against CPU quadrature of the CPU mirror
+ * de__pt_fog_density (itself unit-tested against the raster formula in sky_pt_fog). The camera ray
+ * runs straight down x3 y0 from z4 to the ground at z0; the point light sits at (4,0,2).
+ * Transmittance: an unlit ground (radiance 2 in red) seen through an absorbing fog (albedo 0),
+ * no light, one bounce (the delta-tracking camera path). Single scatter: black ground plus the light, one bounce, which
+ * also exercises the 64-point midpoint shadow transmittance. Fixed before measurement: transmittance
+ * within 1% (relative), single scatter within 2% (relative) at 2048 samples
+ * (measured: transmittance <=0.07%, single scatter <=0.06%). No image golden. */
+static double hfog_tau(const de__pt_fog *fog, de_vec3 a, de_vec3 b, u32 n) {
+    double len = sqrt((double)((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y) +
+                               (b.z - a.z) * (b.z - a.z))),
+           sum = 0;
+    for (u32 i = 0; i < n; ++i) {
+        double t = ((double)i + .5) / n;
+        sum += de__pt_fog_density(fog, (de_vec3){(f32)(a.x + (b.x - a.x) * t),
+                                                 (f32)(a.y + (b.y - a.y) * t),
+                                                 (f32)(a.z + (b.z - a.z) * t)});
+    }
+    return sum * len / n;
+}
+static void hfog_reference(const de__fog_snapshot *s, double *transmittance, double *scatter) {
+    de__pt_fog fog;
+    de__pt_fog_pack(s, &fog);
+    const de_vec3 cam = {3, 0, 4}, light = {4, 0, 2};
+    *transmittance = exp(-hfog_tau(&fog, cam, (de_vec3){3, 0, 0}, 8192));
+    const u32 steps = 2048;
+    double sum = 0;
+    for (u32 i = 0; i < steps; ++i) {
+        double z = 4 - 4 * ((double)i + .5) / steps, dz = 2 - z, d = sqrt(1 + dz * dz);
+        de_vec3 p = {3, 0, (f32)z};
+        double dens = de__pt_fog_density(&fog, p);
+        if (dens <= 0)
+            continue;
+        sum += exp(-hfog_tau(&fog, cam, p, 128)) * dens * s->volume.albedo.x *
+               de__pt_hg((float)(-dz / d), s->volume.anisotropy) * (20 / (4 * DE_PI)) / (d * d) *
+               exp(-hfog_tau(&fog, p, light, 128));
+    }
+    *scatter = sum * 4.0 / steps;
+}
+static void hfog_case(pt_fixture *f, const de__fog_snapshot *s, const char *name) {
+    rt_fixture *r = &f->rt;
+    double want_t, want_s;
+    hfog_reference(s, &want_t, &want_s);
+    /* The transmittance pass absorbs (albedo 0), so scattered paths cannot reach the ground. */
+    de__fog_snapshot absorbing = *s;
+    absorbing.volume.albedo = (de_vec3){0, 0, 0};
+    r->w.f.fog_count = 1;
+    r->w.f.fog[0] = absorbing;
+    world_light(&r->w, 0,
+                &(DeLight){.kind = DE_LIGHT_POINT, .color = {1, 1, 1}, .intensity = 0, .range = 100},
+                at(4, 0, 2));
+    de_render_settings settings = de_renderer_get_settings(r->r);
+    settings.path_max_bounces = 1;
+    de_renderer_set_settings(r->r, &settings);
+    f->camera.camera.fov_y = .001f;
+    media_samples(f, 2048);
+    double got_t = media_mean(f, 0) / 2, err_t = fabs(got_t - want_t) / want_t;
+    printf("Fog %s transmittance actual %.9g reference %.9g relative %.6g%%\n", name, got_t, want_t,
+           err_t * 100);
+    EXPECT_TRUE(err_t <= .01);
+    r->w.f.fog[0] = *s;
+    g_mat[0].standard.base_color = (de_vec4){0, 0, 0, 1};
+    r->w.f.lights.light[0].intensity = 20;
+    r->w.touch_lights = true;
+    r->w.touch_all = true;
+    de_renderer_path_reset(r->r, r->view);
+    media_samples(f, 2048);
+    double got_s = media_mean(f, 0), err_s = fabs(got_s - want_s) / want_s;
+    printf("Fog %s single scatter actual %.9g reference %.9g relative %.6g%%\n", name, got_s, want_s,
+           err_s * 100);
+    EXPECT_TRUE(err_s <= .02);
+}
+TEST_F(pt_media, fog_height_falloff, pt_fixture) {
+    de__fog_snapshot s = {.entity = 777,
+                          .transform = at(3, 0, 2),
+                          .volume = {.density = .2f,
+                                     .albedo = {.7f, .7f, .7f},
+                                     .anisotropy = .3f,
+                                     .height_falloff = .4f}};
+    /* Closed form of the transmittance: tau = d/k (e^{k(2-0)} - e^{-k(4-2)}). */
+    double tau = .2 / .4 * (exp(.4 * 2) - exp(-.4 * 2)), want_t, want_s;
+    hfog_reference(&s, &want_t, &want_s);
+    printf("Fog height closed-form transmittance %.9g quadrature %.9g\n", exp(-tau), want_t);
+    EXPECT_FLOAT_EQ(want_t, exp(-tau), 1e-3);
+    /* The test must discriminate: a uniform fog of the mean density gives another answer. */
+    EXPECT_TRUE(fabs(exp(-.2 * 4) - exp(-tau)) > .03);
+    hfog_case(f, &s, "height-falloff");
+}
+TEST_F(pt_media, fog_noisy_edge_faded_box, pt_fixture) {
+    de__fog_snapshot s = {.entity = 778,
+                          .transform = at(3, 0, 2),
+                          .volume = {.extent = {20, 20, 2},
+                                     .density = .6f,
+                                     .albedo = {.7f, .7f, .7f},
+                                     .anisotropy = .3f,
+                                     .noise = .7f,
+                                     .edge_fade = .6f}};
+    /* Turn the box so the camera ray crosses the noise lattice off its axes. */
+    s.transform.m[0] = cosf(.5f);
+    s.transform.m[1] = sinf(.5f);
+    s.transform.m[3] = -sinf(.5f);
+    s.transform.m[4] = cosf(.5f);
+    s.transform.m[9] = 2.6f;
+    s.transform.m[10] = .4f;
+    double want_t, want_s;
+    hfog_reference(&s, &want_t, &want_s);
+    /* Not the uniform answer: density .6 over the 2 m of box would give exp(-1.2). */
+    EXPECT_TRUE(fabs(want_t - exp(-1.2)) > .03);
+    hfog_case(f, &s, "noisy edge-faded box");
+}
 TEST_F(pt_media, sss_radius_and_energy, pt_fixture) {
     media_slab(f, .2f);
     g_mat[1].standard.transmission = 0;
