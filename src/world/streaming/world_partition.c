@@ -35,6 +35,13 @@
  * its proxy, each entity under the cell root that has a DeMeshRenderer gets DeRenderFade
  * { alpha, invert }, the complement of the proxy's mask, and loses it when the fade ends. A cell
  * with no proxy (or whose proxy has not loaded) is drawn whole at once.
+ *
+ * DENG-857 (terrain tiles): open lists the world's tile bundles ("world/<name>/terrain_<id>_
+ * <tx>_<ty>"), sorted by asset ID. A cell bundle depends on the tiles that overlap it, so its
+ * request loads them with the cell (and the asset system shares a tile between cells); a cell
+ * that is instantiated counts one reference on each tile in its request, and one that unloads
+ * gives them back before its request is released. The tiles thus follow the cells' hysteresis and
+ * per-frame cap, and the count needs no allocation.
  */
 #include "partition_editor.h"
 #include "streaming_internal.h"
@@ -77,6 +84,13 @@ typedef struct wp_cell {
     char error[WP_ERROR_MAX]; /* "" unless FAILED */
 } wp_cell;
 
+typedef struct wp_tile {
+    de_asset_id id;
+    u64 terrain;
+    u32 tx, ty;
+    u32 refs; /* loaded cells that hold it */
+} wp_tile;
+
 struct de_world_partition {
     const de_allocator *a;
     de_asset_system *assets;
@@ -87,6 +101,8 @@ struct de_world_partition {
     char *names;
     size_t names_bytes;
     de__cell_key *cand;
+    wp_tile *tiles; /* DENG-857: sorted by id */
+    u32 tile_count;
     de_streaming_source src[WP_MAX_SOURCES];
     de__wp_source src_info[WP_MAX_SOURCES];
     u32 src_count;
@@ -372,6 +388,75 @@ static void wp_proxy_close(de_world_partition *p, bool despawn) {
 
 /* ---- Open and close ------------------------------------------------------------------------ */
 
+static int wp_tile_cmp(const void *a, const void *b) {
+    const u64 x = ((const wp_tile *)a)->id.hash, y = ((const wp_tile *)b)->id.hash;
+    return x < y ? -1 : (x > y ? 1 : 0);
+}
+
+static wp_tile *wp_tile_find(const de_world_partition *p, de_asset_id id) {
+    u32 lo = 0, hi = p->tile_count;
+    while (lo < hi) {
+        u32 mid = lo + (hi - lo) / 2u;
+        if (p->tiles[mid].id.hash < id.hash)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo < p->tile_count && p->tiles[lo].id.hash == id.hash ? &p->tiles[lo] : NULL;
+}
+
+/* The world's terrain tile bundles (DENG-857). */
+static de_result wp_tiles_open(de_world_partition *p) {
+    u32 nb = de_asset_bundle_count(p->assets), n = 0;
+    u64 terrain;
+    u32 tx, ty;
+    for (u32 i = 0; i < nb; ++i) {
+        const char *bn = de_asset_bundle_name(p->assets, i);
+        if (bn != NULL && de__ttile_name_parse(bn, p->name, &terrain, &tx, &ty))
+            ++n;
+    }
+    if (n == 0)
+        return DE_OK;
+    p->tiles = (wp_tile *)DE_ALLOC(p->a, sizeof *p->tiles * n, DE_ALIGNOF(wp_tile), DE_MEM_ASSET);
+    if (p->tiles == NULL)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de_world_partition_open: out of memory");
+    p->tile_count = n;
+    u32 k = 0;
+    for (u32 i = 0; i < nb && k < n; ++i) {
+        const char *bn = de_asset_bundle_name(p->assets, i);
+        if (bn == NULL || !de__ttile_name_parse(bn, p->name, &terrain, &tx, &ty))
+            continue;
+        p->tiles[k].id = de_asset_id_from(bn);
+        p->tiles[k].terrain = terrain;
+        p->tiles[k].tx = tx;
+        p->tiles[k].ty = ty;
+        p->tiles[k].refs = 0;
+        ++k;
+    }
+    qsort(p->tiles, n, sizeof *p->tiles, wp_tile_cmp);
+    p->stats.terrain_tiles = n;
+    return DE_OK;
+}
+
+/* One reference more (+1) or less (-1) on each tile of loaded cell c's request. */
+static void wp_tiles_hold(de_world_partition *p, wp_cell *c, int delta) {
+    if (p->tile_count == 0 || !DE_HANDLE_VALID(c->h))
+        return;
+    u32 n = de_asset_status_list(p->assets, c->h, p->status, WP_STATUS_MAX);
+    n = n < WP_STATUS_MAX ? n : WP_STATUS_MAX;
+    for (u32 i = 0; i < n; ++i) {
+        wp_tile *t = wp_tile_find(p, p->status[i].id);
+        if (t == NULL)
+            continue;
+        if (delta > 0) {
+            if (t->refs++ == 0)
+                p->stats.terrain_tiles_resident++;
+        } else if (t->refs > 0 && --t->refs == 0) {
+            p->stats.terrain_tiles_resident--;
+        }
+    }
+}
+
 static void wp_free(de_world_partition *p) {
     const de_allocator *a = p->a;
     if (p->status != NULL)
@@ -380,6 +465,8 @@ static void wp_free(de_world_partition *p) {
         DE_FREE(a, p->cand, sizeof *p->cand * p->cell_count);
     if (p->cells != NULL)
         DE_FREE(a, p->cells, sizeof *p->cells * p->cell_count);
+    if (p->tiles != NULL)
+        DE_FREE(a, p->tiles, sizeof *p->tiles * p->tile_count);
     if (p->names != NULL)
         DE_FREE(a, p->names, p->names_bytes);
     DE_FREE(a, p, sizeof *p);
@@ -478,6 +565,11 @@ de_result de_world_partition_open(de_asset_system *assets, de_world *world, cons
         qsort(p->cells, n, sizeof *p->cells, wp_cell_cmp);
     }
     p->stats.cell_count = n;
+    r = wp_tiles_open(p);
+    if (r != DE_OK) {
+        wp_free(p);
+        return r;
+    }
     r = wp_proxy_open(p);
     if (r != DE_OK) {
         de_world_partition_close(p);
@@ -489,6 +581,7 @@ de_result de_world_partition_open(de_asset_system *assets, de_world *world, cons
 
 static void wp_unload(de_world_partition *p, wp_cell *c) {
     if (c->state == DE_WORLD_CELL_LOADED) {
+        wp_tiles_hold(p, c, -1);
         if (p->on_cell != NULL)
             p->on_cell(p->user, c->cx, c->cy, c->root, false);
         if (de_entity_alive(p->world, c->root))
@@ -613,6 +706,7 @@ static void wp_instantiate(de_world_partition *p, wp_cell *c) {
     c->root = root;
     c->state = DE_WORLD_CELL_LOADED;
     wp_measure(p, c);
+    wp_tiles_hold(p, c, 1);
     p->stats.total_loads++;
     if (p->on_cell != NULL)
         p->on_cell(p->user, c->cx, c->cy, root, true);
@@ -730,6 +824,21 @@ de_result de_world_partition_update(de_world_partition *p, f32 dt) {
 de_world_partition_stats de_world_partition_get_stats(const de_world_partition *p) {
     de_world_partition_stats z = {0};
     return p != NULL ? p->stats : z;
+}
+
+bool de_world_partition_terrain_tile(const de_world_partition *p, u64 terrain, u32 tx, u32 ty,
+                                     u32 *refs, de_asset_id *asset) {
+    for (u32 i = 0; p != NULL && i < p->tile_count; ++i) {
+        const wp_tile *t = &p->tiles[i];
+        if (t->terrain == terrain && t->tx == tx && t->ty == ty) {
+            if (refs != NULL)
+                *refs = t->refs;
+            if (asset != NULL)
+                *asset = t->id;
+            return true;
+        }
+    }
+    return false;
 }
 
 de_world_cell_state de_world_partition_cell_state(const de_world_partition *p, i32 cx, i32 cy) {

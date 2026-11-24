@@ -15,6 +15,9 @@
  *                 sources, forces, the dry-run preview, per-cell bytes and entities.
  *   packed        world_small plus far proxies, packed by `de-cook cook` (DENG-856): PACKED mode
  *                 finds the same cells and proxies as SOURCE mode, with or without the manifest.
+ *   terrain       a DeTerrain across a cell boundary (DENG-857): cells.toml lists its tiles per
+ *                 cell, a cell load makes its tiles resident (a shared tile once), the last
+ *                 unload releases them, and memory returns to the baseline after a flight.
  */
 #include "de_test.h"
 #include <dengine/de_asset.h>
@@ -373,8 +376,7 @@ static bool path_world_make(void) {
     static bool made;
     if (made)
         return true;
-    if (de_fs_mount("wptmp", TMP, DE_MOUNT_WRITABLE, 0) != DE_OK)
-        return false;
+    mount_once("wptmp", TMP, DE_MOUNT_WRITABLE);
     bool ok = de_dir_create("wptmp:/path10k/assets/scenes") == DE_OK;
     static const char manifest[] =
         "# DENG-271 test world: 3 rows of 40 cells along x (test_world_partition.c).\n"
@@ -516,6 +518,212 @@ TEST_F(streaming, world_partition_stream_path, wp_fx) {
     for (u32 i = 0; i < f->ev_count; ++i)
         f->ev[i].loaded ? ++loads : ++unloads;
     EXPECT_EQ(loads, unloads);
+}
+
+/* ---- test_world_partition_terrain (DENG-857) ------------------------------------------------- */
+
+/* A 128 m terrain at (200, 100, 5): its x = 0 tiles (200..264 m) overlap cells (0, 0) and (1, 0),
+ * the others (264..328 m) only (1, 0), which holds no entity. One more entity in cell (7, 0). */
+#define TERRA_ID 0x100u
+
+static bool terra_world_make(void) {
+#if defined(DE_STREAMING_HAS_WORLD_COOK)
+    static bool made;
+    if (made)
+        return true;
+    mount_once("wptmp", TMP, DE_MOUNT_WRITABLE);
+    bool ok = de_dir_create("wptmp:/terra/assets/scenes") == DE_OK;
+    static const char manifest[] =
+        "# DENG-857 test world: a terrain across a cell boundary (test_world_partition.c).\n"
+        "[project]\nasset_root = \"assets\"\ninclude = [\"assets/worlds/terra/cells.toml\"]\n"
+        "[assets]\n\"levels/terra\" = { type = \"scene\", source = \"scenes/terra.scene.toml\" }\n"
+        "[worlds.terra]\nscenes = [\"levels/terra\"]\nload_radius = 100.0\n"
+        "unload_radius = 150.0\nmax_loads_per_frame = 2\n[worlds.terra.proxy]\nenabled = false\n";
+    ok = ok && de_file_write_all_atomic("wptmp:/terra/assets.toml", manifest,
+                                        sizeof manifest - 1) == DE_OK;
+    size_t cap = 64u * 1024u, len = 0;
+    char *scene = (char *)malloc(cap);
+    ok = ok && scene != NULL;
+    int n = ok ? snprintf(scene, cap,
+                          "[entity.0x%016x.DeTransform]\nposition = [200.0, 100.0, 5.0]\n"
+                          "[entity.0x%016x.DeTerrain]\nsize = 128.0\nheight = 10.0\nheights = [",
+                          TERRA_ID, TERRA_ID)
+               : 0;
+    len = n > 0 ? (size_t)n : 0;
+    for (u32 i = 0; ok && i < 33u * 33u; ++i) {
+        n = snprintf(scene + len, cap - len, "%s%u", i ? ", " : "", (unsigned)(i * 60u));
+        ok = n > 0 && (size_t)n < cap - len;
+        len += ok ? (size_t)n : 0;
+    }
+    n = ok ? snprintf(scene + len, cap - len, "]\nholes = [1") : 0;
+    ok = ok && n > 0;
+    len += ok ? (size_t)n : 0;
+    for (u32 i = 1; ok && i < 33u * 33u; ++i) {
+        n = snprintf(scene + len, cap - len, ", 0");
+        ok = n > 0 && (size_t)n < cap - len;
+        len += ok ? (size_t)n : 0;
+    }
+    n = ok ? snprintf(scene + len, cap - len,
+                      "]\n[entity.0x0000000000000101.DeTransform]\n"
+                      "position = [2000.5, 100.25, 0.0]\n")
+           : 0;
+    ok = ok && n > 0 && (size_t)n < cap - len;
+    len += ok ? (size_t)n : 0;
+    ok = ok && de_file_write_all_atomic("wptmp:/terra/assets/scenes/terra.scene.toml", scene,
+                                        len) == DE_OK;
+    free(scene);
+    if (ok) {
+        const char *argv[] = {TMP "/terra/assets.toml", "--world", "terra"};
+        de_cook_io io = {path_cook_sink, NULL};
+        ok = de_cook_world_main(3, argv, &io) == DE_COOK_EXIT_OK;
+    }
+    made = ok;
+    return ok;
+#else
+    return false;
+#endif
+}
+
+static u32 terra_refs(wp_fx *f, u32 tx, u32 ty) {
+    u32 refs = UINT32_MAX;
+    EXPECT_TRUE(de_world_partition_terrain_tile(f->p, TERRA_ID, tx, ty, &refs, NULL));
+    return refs;
+}
+
+static de_asset_id terra_tile(u32 tx, u32 ty) {
+    char name[128];
+    (void)de__ttile_name(name, sizeof name, "terra", TERRA_ID, tx, ty);
+    return de_asset_id_from(name);
+}
+
+TEST_F(streaming, world_partition_terrain, wp_fx) {
+#if !DE_HAS_COOKER || !defined(DE_STREAMING_HAS_WORLD_COOK)
+    SKIP(NO_COOKER_MSG);
+#endif
+    if (!terra_world_make())
+        SKIP("cannot write the terrain test world in the build tree");
+
+    /* AC1: cells.toml lists each cell's tiles; the terrain-only cell (1, 0) is a cell. */
+    void *data = NULL;
+    u64 size = 0;
+    ASSERT_EQ(de_file_read_all("wptmp:/terra/assets/worlds/terra/cells.toml", de_heap_allocator(),
+                               &data, &size),
+              DE_OK);
+    const char *toml = (const char *)data;
+#define TT(x, y) "\"world/terra/terrain_0000000000000100_" #x "_" #y "\""
+    EXPECT_TRUE(strstr(toml, "[bundles.\"world/terra/cell_0_0\"]\nassets = "
+                             "[\"world/terra/cell_0_0\"]\ndepends = [" TT(0, 0) ", " TT(0, 1)
+                             ", " TT(0, 2) "]\n") != NULL);
+    EXPECT_TRUE(strstr(toml, "[bundles.\"world/terra/cell_1_0\"]\nassets = "
+                             "[\"world/terra/cell_1_0\"]\ndepends = [" TT(0, 0) ", " TT(1, 0)
+                             ", " TT(2, 0) ", " TT(0, 1) ", " TT(1, 1) ", " TT(2, 1) ", " TT(0, 2)
+                             ", " TT(1, 2) ", " TT(2, 2) "]\n") != NULL);
+    EXPECT_TRUE(strstr(toml, "[bundles.\"world/terra/cell_7_0\"]\nassets = "
+                             "[\"world/terra/cell_7_0\"]\n\n") != NULL);
+    EXPECT_TRUE(strstr(toml, TT(2, 2) " = { type = \"blob\", source = "
+                                      "\"worlds/terra/terrain_0000000000000100_2_2.tile\" }") !=
+                NULL);
+#undef TT
+    DE_FREE(de_heap_allocator(), data, size + 1);
+
+    mount_once("wterra", TMP "/terra", DE_MOUNT_READ_ONLY);
+    wp_open(f, "wterra:/assets.toml", "terra", 0);
+    de_world_partition_stats st = de_world_partition_get_stats(f->p);
+    ASSERT_EQ(st.cell_count, 3u);
+    EXPECT_EQ(st.terrain_tiles, 9u);
+    EXPECT_FALSE(de_world_partition_terrain_tile(f->p, TERRA_ID, 3, 0, NULL, NULL));
+    EXPECT_FALSE(de_world_partition_terrain_tile(f->p, 0x101u, 0, 0, NULL, NULL));
+
+    /* Memory: a warm-up flight sizes the asset system's tables; the baseline comes after it. */
+    for (f64 x = -400.0; x <= 2400.0; x += 50.0) {
+        set_camera(f, x, 128.0);
+        settle(f, 0.016f);
+    }
+    set_camera(f, -1000.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(st.cells_loaded, 0u);
+    EXPECT_EQ(st.terrain_tiles_resident, 0u);
+    asset_pump(f);
+    de_asset_flush_unused(f->s);
+    asset_pump(f);
+    EXPECT_EQ(de_asset_get_stats(f->s).assets_resident, 0u);
+    de_tracking_stats base_asset = de_tracking_allocator_stats(&f->t_asset);
+
+    /* AC2: cell (0, 0) alone holds the x = 0 tiles. */
+    set_camera(f, 64.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_LOADED);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 1, 0), DE_WORLD_CELL_UNLOADED);
+    EXPECT_EQ(st.terrain_tiles_resident, 3u);
+    for (u32 ty = 0; ty < 3; ++ty) {
+        EXPECT_EQ(terra_refs(f, 0, ty), 1u);
+        EXPECT_EQ(terra_refs(f, 1, ty), 0u);
+        EXPECT_EQ(de_asset_status_of(f->s, terra_tile(0, ty)), DE_LOAD_READY);
+    }
+    /* The tile blob as a renderer reads it. */
+    u64 bytes = 0;
+    const void *blob = de_blob_data(f->s, de_asset_blob(f->s, terra_tile(0, 0)), &bytes);
+    de__ttile_view v;
+    ASSERT_TRUE(de__ttile_parse(blob, bytes, &v));
+    EXPECT_EQ(v.terrain, (u64)TERRA_ID);
+    EXPECT_EQ(v.tx, 0u);
+    EXPECT_EQ(v.ty, 0u);
+    EXPECT_EQ(v.w, 17u);
+    EXPECT_EQ(v.h, 17u);
+    EXPECT_FLOAT_EQ(v.origin[0], 200.0, 0.0);
+    EXPECT_FLOAT_EQ(v.origin[1], 100.0, 0.0);
+    EXPECT_FLOAT_EQ(v.origin[2], 5.0, 0.0);
+    EXPECT_FLOAT_EQ(v.spacing, 4.0, 0.0);
+    EXPECT_FLOAT_EQ(v.height, 10.0, 0.0);
+    EXPECT_EQ(de__ttile_height(&v, 2u * 17u + 1u), (u16)((2u * 33u + 1u) * 60u));
+    EXPECT_EQ(v.holes[0], 1u);
+    EXPECT_EQ(v.holes[1], 0u);
+    EXPECT_EQ(v.splat[0], 255u);
+
+    /* Both cells: the shared tiles load once and count two cells. */
+    set_camera(f, 300.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(st.cells_loaded, 2u);
+    EXPECT_EQ(st.terrain_tiles_resident, 9u);
+    EXPECT_EQ(terra_refs(f, 0, 1), 2u);
+    EXPECT_EQ(terra_refs(f, 2, 2), 1u);
+    blob = de_blob_data(f->s, de_asset_blob(f->s, terra_tile(2, 2)), &bytes);
+    ASSERT_TRUE(de__ttile_parse(blob, bytes, &v));
+    EXPECT_EQ(v.x0, 32u);
+    EXPECT_EQ(v.w, 1u);
+
+    /* Cell (0, 0) leaves the unload radius: (1, 0) still holds every tile. */
+    set_camera(f, 450.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_UNLOADED);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 1, 0), DE_WORLD_CELL_LOADED);
+    EXPECT_EQ(st.terrain_tiles_resident, 9u);
+    EXPECT_EQ(terra_refs(f, 0, 1), 1u);
+    asset_pump(f);
+    de_asset_flush_unused(f->s);
+    EXPECT_EQ(de_asset_status_of(f->s, terra_tile(0, 1)), DE_LOAD_READY);
+
+    /* Hysteresis: 120 m from (0, 0) is inside unload_radius but outside load_radius. */
+    set_camera(f, 376.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_UNLOADED);
+
+    /* Away: the last cell releases the tiles, and memory is back at the baseline. */
+    set_camera(f, -1000.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(st.cells_loaded, 0u);
+    EXPECT_EQ(st.terrain_tiles_resident, 0u);
+    for (u32 ty = 0; ty < 3; ++ty)
+        for (u32 tx = 0; tx < 3; ++tx)
+            EXPECT_EQ(terra_refs(f, tx, ty), 0u);
+    asset_pump(f);
+    de_asset_flush_unused(f->s);
+    asset_pump(f);
+    EXPECT_EQ(de_asset_get_stats(f->s).assets_resident, 0u);
+    EXPECT_NE(de_asset_status_of(f->s, terra_tile(0, 0)), DE_LOAD_READY);
+    de_tracking_stats end_asset = de_tracking_allocator_stats(&f->t_asset);
+    EXPECT_EQ(end_asset.blocks_live, base_asset.blocks_live);
+    EXPECT_TRUE(end_asset.bytes_live <= base_asset.bytes_live + 4096u);
 }
 
 /* ---- no per-frame allocation ----------------------------------------------------------------- */
