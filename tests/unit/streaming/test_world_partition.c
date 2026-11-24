@@ -18,7 +18,7 @@
  *   terrain       a DeTerrain across a cell boundary (DENG-857): cells.toml lists its tiles per
  *                 cell, a cell load makes its tiles resident (a shared tile once), the last
  *                 unload releases them, and memory returns to the baseline after a flight.
- *   xref          two cells that reference each other's entities (DENG-858): the cook reports
+ *   xref          two cells that reference each other's entities (DENG-858, nested: DENG-874): the cook reports
  *                 the references and writes one table per cell, the partition resolves them while
  *                 both cells are loaded, clears them when the target unloads, and resolves them
  *                 again on reload; memory returns to the baseline.
@@ -734,13 +734,25 @@ TEST_F(streaming, world_partition_terrain, wp_fx) {
 
 /* A two-cell scratch world: A (0x200, cell (0, 0)) targets B (0x201, cell (1, 0)), B targets A,
  * and C (0x202, cell (0, 0)) targets A in its own cell. TXLink.tag tells the entities apart. */
+typedef struct TXSlot {
+    de_entity who;
+} TXSlot;
+
+/* DENG-874: peers[] (array of entities) and slots[].who (array of structs) can cross cells too. */
 typedef struct TXLink {
     de_entity target;
+    de_entity peers[2];
+    TXSlot slots[2];
     u32 tag;
 } TXLink;
 
+static const de_field_info k_xslot_fields[] = {
+    DE_FIELD(TXSlot, who, DE_FK_ENTITY, DE_FIELD_DEFAULT),
+};
 static const de_field_info k_xlink_fields[] = {
     DE_FIELD(TXLink, target, DE_FK_ENTITY, DE_FIELD_DEFAULT),
+    DE_FIELD_EX(TXLink, peers, DE_FK_FIXED_ARRAY, DE_FIELD_DEFAULT, {0, 0, 0, 0, "entity", 2}),
+    DE_FIELD_EX(TXLink, slots, DE_FK_FIXED_ARRAY, DE_FIELD_DEFAULT, {0, 0, 0, 0, "TXSlot", 2}),
     DE_FIELD(TXLink, tag, DE_FK_U32, DE_FIELD_DEFAULT),
 };
 
@@ -774,8 +786,10 @@ static bool xref_world_make(void) {
     static const char scene[] =
         "[entity.0x0000000000000200.DeTransform]\nposition = [100.0, 100.0, 0.0]\n"
         "[entity.0x0000000000000200.TXLink]\ntarget = \"0x0000000000000201\"\ntag = 1\n"
+        "peers = [\"0x0\", \"0x201\"]\nslots = [{ who = \"0x0\" }, { who = \"0x201\" }]\n"
         "[entity.0x0000000000000201.DeTransform]\nposition = [400.0, 100.0, 0.0]\n"
         "[entity.0x0000000000000201.TXLink]\ntarget = \"0x200\"\ntag = 2\n"
+        "peers = [\"0x200\", \"0x0\"]\n"
         "[entity.0x0000000000000202.DeTransform]\nposition = [120.0, 100.0, 0.0]\n"
         "[entity.0x0000000000000202.TXLink]\ntarget = \"0x0000000000000200\"\ntag = 3\n";
     ok = ok &&
@@ -802,6 +816,8 @@ static bool xref_world_make(void) {
 typedef struct xref_find {
     de_entity by_tag[4];
     de_entity target[4];
+    de_entity peer[4][2]; /* DENG-874 */
+    de_entity slot[4][2];
 } xref_find;
 
 static void xref_chunk(const de_query_chunk *ch, void *user) {
@@ -811,6 +827,10 @@ static void xref_chunk(const de_query_chunk *ch, void *user) {
         if (l[i].tag < 4u) {
             x->by_tag[l[i].tag] = ch->entities[i];
             x->target[l[i].tag] = l[i].target;
+            for (u32 k = 0; k < 2; ++k) {
+                x->peer[l[i].tag][k] = l[i].peers[k];
+                x->slot[l[i].tag][k] = l[i].slots[k].who;
+            }
         }
 }
 
@@ -831,6 +851,7 @@ TEST_F(streaming, world_partition_xref, wp_fx) {
 #if !DE_HAS_COOKER || !defined(DE_STREAMING_HAS_WORLD_COOK)
     SKIP(NO_COOKER_MSG);
 #endif
+    ASSERT_TRUE(DE_HANDLE_VALID(de_type_register(f->reg, &DE_TYPE_DESC(TXSlot, 1, k_xslot_fields))));
     ASSERT_TRUE(DE_HANDLE_VALID(de_type_register(f->reg, &DE_TYPE_DESC(TXLink, 1, k_xlink_fields))));
     if (!xref_world_make())
         SKIP("cannot write the reference test world in the build tree");
@@ -842,7 +863,10 @@ TEST_F(streaming, world_partition_xref, wp_fx) {
     EXPECT_TRUE(strstr(g_xref_out, "TXLink.target of entity 0x0000000000000201 in cell (1, 0) "
                                    "references entity 0x0000000000000200 in cell (0, 0)") != NULL);
     EXPECT_TRUE(strstr(g_xref_out, "0x0000000000000202 in cell") == NULL);
-    EXPECT_TRUE(strstr(g_xref_out, "2 cross-cell references") != NULL);
+    EXPECT_TRUE(strstr(g_xref_out, "TXLink.peers[1] of entity 0x0000000000000200") != NULL);
+    EXPECT_TRUE(strstr(g_xref_out, "TXLink.slots[1].who of entity 0x0000000000000200") != NULL);
+    EXPECT_TRUE(strstr(g_xref_out, "TXLink.peers[0] of entity 0x0000000000000201") != NULL);
+    EXPECT_TRUE(strstr(g_xref_out, "5 cross-cell references") != NULL);
 #endif
     void *data = NULL;
     u64 size = 0;
@@ -872,15 +896,18 @@ TEST_F(streaming, world_partition_xref, wp_fx) {
     ASSERT_TRUE(de__xref_parse(data, size, &xv));
     EXPECT_EQ(xv.entity_count, 2u);
     EXPECT_EQ(xv.anchor_count, 1u);
-    EXPECT_EQ(xv.ref_count, 1u);
+    EXPECT_EQ(xv.ref_count, 3u);
     EXPECT_EQ(de__xref_anchor(&xv, 0), 0x200ull);
-    de__xref_rec rec = de__xref_at(&xv, 0);
-    EXPECT_EQ(rec.source, 0x200ull);
-    EXPECT_EQ(rec.target, 0x201ull);
-    EXPECT_EQ(rec.tcx, 1);
-    EXPECT_EQ(rec.tcy, 0);
-    EXPECT_STREQ(rec.component, "TXLink");
-    EXPECT_STREQ(rec.field, "target");
+    static const char *const k_paths[3] = {"peers[1]", "slots[1].who", "target"};
+    for (u32 i = 0; i < 3u; ++i) {
+        const de__xref_rec rec = de__xref_at(&xv, i);
+        EXPECT_EQ(rec.source, 0x200ull);
+        EXPECT_EQ(rec.target, 0x201ull);
+        EXPECT_EQ(rec.tcx, 1);
+        EXPECT_EQ(rec.tcy, 0);
+        EXPECT_STREQ(rec.component, "TXLink");
+        EXPECT_STREQ(rec.path, k_paths[i]);
+    }
     EXPECT_FALSE(de__xref_parse(data, size - 1, &xv));
     DE_FREE(de_heap_allocator(), data, size + 1);
 
@@ -914,23 +941,30 @@ TEST_F(streaming, world_partition_xref, wp_fx) {
     st = settle(f, 0.016f);
     EXPECT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_LOADED);
     EXPECT_EQ(de_world_partition_cell_state(f->p, 1, 0), DE_WORLD_CELL_UNLOADED);
-    EXPECT_EQ(st.xrefs, 1u);
+    EXPECT_EQ(st.xrefs, 3u);
     EXPECT_EQ(st.xrefs_resolved, 0u);
     xref_find x = xref_scan(f, link);
     ASSERT_TRUE(de_entity_alive(f->w, x.by_tag[1]));
     EXPECT_FALSE(de_entity_alive(f->w, x.by_tag[2]));
     EXPECT_EQ(x.target[1].bits, 0u);
+    EXPECT_EQ(x.peer[1][1].bits, 0u);
+    EXPECT_EQ(x.slot[1][1].bits, 0u);
     EXPECT_EQ(x.target[3].bits, x.by_tag[1].bits);
 
     /* AC2: both cells loaded, both references resolve. */
     set_camera(f, 300.0, 128.0);
     st = settle(f, 0.016f);
     EXPECT_EQ(st.cells_loaded, 2u);
-    EXPECT_EQ(st.xrefs, 2u);
-    EXPECT_EQ(st.xrefs_resolved, 2u);
+    EXPECT_EQ(st.xrefs, 5u);
+    EXPECT_EQ(st.xrefs_resolved, 5u);
     x = xref_scan(f, link);
     ASSERT_TRUE(de_entity_alive(f->w, x.by_tag[2]));
     EXPECT_EQ(x.target[1].bits, x.by_tag[2].bits);
+    EXPECT_EQ(x.peer[1][1].bits, x.by_tag[2].bits);
+    EXPECT_EQ(x.slot[1][1].bits, x.by_tag[2].bits);
+    EXPECT_EQ(x.peer[1][0].bits, 0u); /* the "0x0" elements stay null */
+    EXPECT_EQ(x.slot[1][0].bits, 0u);
+    EXPECT_EQ(x.peer[2][0].bits, x.by_tag[1].bits);
     EXPECT_EQ(x.target[2].bits, x.by_tag[1].bits);
     EXPECT_EQ(x.target[3].bits, x.by_tag[1].bits);
 
@@ -939,29 +973,34 @@ TEST_F(streaming, world_partition_xref, wp_fx) {
     st = settle(f, 0.016f);
     EXPECT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_UNLOADED);
     EXPECT_EQ(de_world_partition_cell_state(f->p, 1, 0), DE_WORLD_CELL_LOADED);
-    EXPECT_EQ(st.xrefs, 1u);
+    EXPECT_EQ(st.xrefs, 2u);
     EXPECT_EQ(st.xrefs_resolved, 0u);
     x = xref_scan(f, link);
     EXPECT_FALSE(de_entity_alive(f->w, x.by_tag[1]));
     EXPECT_EQ(x.target[2].bits, 0u);
+    EXPECT_EQ(x.peer[2][0].bits, 0u);
 
     /* (0, 0) loads again: the references resolve to the new entities. */
     set_camera(f, 240.0, 128.0);
     st = settle(f, 0.016f);
     EXPECT_EQ(st.cells_loaded, 2u);
-    EXPECT_EQ(st.xrefs_resolved, 2u);
+    EXPECT_EQ(st.xrefs_resolved, 5u);
     x = xref_scan(f, link);
     EXPECT_EQ(x.target[1].bits, x.by_tag[2].bits);
+    EXPECT_EQ(x.slot[1][1].bits, x.by_tag[2].bits);
     EXPECT_EQ(x.target[2].bits, x.by_tag[1].bits);
+    EXPECT_EQ(x.peer[2][0].bits, x.by_tag[1].bits);
 
     /* (1, 0) unloads: A's reference is cleared. */
     set_camera(f, 64.0, 128.0);
     st = settle(f, 0.016f);
     EXPECT_EQ(de_world_partition_cell_state(f->p, 1, 0), DE_WORLD_CELL_UNLOADED);
-    EXPECT_EQ(st.xrefs, 1u);
+    EXPECT_EQ(st.xrefs, 3u);
     EXPECT_EQ(st.xrefs_resolved, 0u);
     x = xref_scan(f, link);
     EXPECT_EQ(x.target[1].bits, 0u);
+    EXPECT_EQ(x.peer[1][1].bits, 0u);
+    EXPECT_EQ(x.slot[1][1].bits, 0u);
 
     /* Away: memory is back at the baseline. */
     set_camera(f, -1000.0, 128.0);
