@@ -187,6 +187,119 @@ TEST(clouds, test_clouds_disabled_culls_passes) {
     EXPECT_EQ(de_tracking_allocator_stats(&track).blocks_live, 0u);
 }
 
+/* DENG-854: the fine cascade is on from Medium, its detail noise from High. */
+TEST(clouds, test_clouds_shadow_quality_gating) {
+    EXPECT_FALSE(de__clouds_quality_for(DE_QUALITY_OFF).shadow_fine);
+    EXPECT_FALSE(de__clouds_quality_for(DE_QUALITY_OFF).shadow_detail);
+    EXPECT_FALSE(de__clouds_quality_for(DE_QUALITY_LOW).shadow_fine);
+    EXPECT_FALSE(de__clouds_quality_for(DE_QUALITY_LOW).shadow_detail);
+    EXPECT_TRUE(de__clouds_quality_for(DE_QUALITY_MEDIUM).shadow_fine);
+    EXPECT_FALSE(de__clouds_quality_for(DE_QUALITY_MEDIUM).shadow_detail);
+    EXPECT_TRUE(de__clouds_quality_for(DE_QUALITY_HIGH).shadow_fine);
+    EXPECT_TRUE(de__clouds_quality_for(DE_QUALITY_HIGH).shadow_detail);
+    EXPECT_TRUE(de__clouds_quality_for(DE_QUALITY_ULTRA).shadow_fine);
+    EXPECT_TRUE(de__clouds_quality_for(DE_QUALITY_ULTRA).shadow_detail);
+    /* The fine cascade is finer than the coarse one and lies inside it. */
+    EXPECT_TRUE(DE__CLOUDS_SHADOW_FINE_EXTENT_M < DE__CLOUDS_SHADOW_EXTENT_M);
+    EXPECT_FLOAT_EQ(DE__CLOUDS_SHADOW_FINE_EXTENT_M / (f32)DE__CLOUDS_SHADOW_N, 8.0f, 1e-4f);
+}
+
+/* DENG-854: which cascade covers a point, and the blend at the fine cascade's boundary. */
+TEST(clouds, test_clouds_shadow_cascade_blend) {
+    /* Outside the area: none. Inside, further than the fade from every edge: all. */
+    EXPECT_FLOAT_EQ(de__clouds_shadow_weight(-0.01f, 0.5f), 0.0f, 1e-6f);
+    EXPECT_FLOAT_EQ(de__clouds_shadow_weight(0.5f, 1.01f), 0.0f, 1e-6f);
+    EXPECT_FLOAT_EQ(de__clouds_shadow_weight(0.5f, 0.5f), 1.0f, 1e-6f);
+    EXPECT_FLOAT_EQ(de__clouds_shadow_weight(0.1f, 0.9f), 1.0f, 1e-5f);
+    /* The edge itself is 0 and the fade is linear, continuous across the whole width. */
+    EXPECT_FLOAT_EQ(de__clouds_shadow_weight(0.0f, 0.5f), 0.0f, 1e-6f);
+    EXPECT_FLOAT_EQ(de__clouds_shadow_weight(0.05f, 0.5f), 0.5f, 1e-5f);
+    EXPECT_FLOAT_EQ(de__clouds_shadow_weight(0.95f, 0.5f), 0.5f, 1e-5f);
+    EXPECT_FLOAT_EQ(de__clouds_shadow_weight(0.05f, 0.05f), 0.25f, 1e-5f);
+    f32 prev = 0.0f;
+    for (u32 i = 0; i <= 100u; ++i) {
+        const f32 w = de__clouds_shadow_weight((f32)i / 100.0f, 0.5f);
+        EXPECT_TRUE(w >= prev - 0.11f && w <= prev + 0.11f); /* 0.1 per percent of width */
+        prev = w;
+    }
+
+    /* The blend: the coarse value at weight 0, the fine one at 1, the mix between. */
+    EXPECT_FLOAT_EQ(de__clouds_shadow_blend(0.8f, 0.2f, 0.0f), 0.8f, 1e-6f);
+    EXPECT_FLOAT_EQ(de__clouds_shadow_blend(0.8f, 0.2f, 1.0f), 0.2f, 1e-6f);
+    EXPECT_FLOAT_EQ(de__clouds_shadow_blend(0.8f, 0.2f, 0.5f), 0.5f, 1e-6f);
+    EXPECT_FLOAT_EQ(de__clouds_shadow_blend(0.8f, 0.2f, 2.0f), 0.2f, 1e-6f);
+    EXPECT_FLOAT_EQ(de__clouds_shadow_blend(0.8f, 0.2f, -1.0f), 0.8f, 1e-6f);
+
+    /* Selection along a line through the camera: 1 km each side of the fine centre is its edge.
+     * At the camera the fine cascade owns the point; at the fine edge the coarse one does; 1.2 km
+     * from the camera (inside the coarse cascade, outside the fine one) only the coarse one. */
+    const f32 fine_half = DE__CLOUDS_SHADOW_FINE_EXTENT_M * 0.5f;
+    const f32 coarse_half = DE__CLOUDS_SHADOW_EXTENT_M * 0.5f;
+    f32 d = 0.0f;
+    EXPECT_FLOAT_EQ(de__clouds_shadow_weight(0.5f + d / DE__CLOUDS_SHADOW_FINE_EXTENT_M, 0.5f), 1.0f,
+                1e-6f);
+    d = fine_half;
+    EXPECT_FLOAT_EQ(de__clouds_shadow_weight(0.5f + d / DE__CLOUDS_SHADOW_FINE_EXTENT_M, 0.5f), 0.0f,
+                1e-5f);
+    d = 1.2f * fine_half;
+    EXPECT_FLOAT_EQ(de__clouds_shadow_weight(0.5f + d / DE__CLOUDS_SHADOW_FINE_EXTENT_M, 0.5f), 0.0f,
+                1e-6f);
+    EXPECT_TRUE(de__clouds_shadow_weight(0.5f + d / DE__CLOUDS_SHADOW_EXTENT_M, 0.5f) > 0.99f);
+    d = coarse_half * 1.01f;
+    EXPECT_FLOAT_EQ(de__clouds_shadow_weight(0.5f + d / DE__CLOUDS_SHADOW_EXTENT_M, 0.5f), 0.0f, 1e-6f);
+}
+
+/* DENG-854: both cascades snap to their own texel in world space. */
+TEST(clouds, test_clouds_shadow_snap) {
+    const f64 e[2] = {DE__CLOUDS_SHADOW_EXTENT_M, DE__CLOUDS_SHADOW_FINE_EXTENT_M};
+    for (u32 k = 0; k < 2u; ++k) {
+        const f64 texel = e[k] / (f64)DE__CLOUDS_SHADOW_N;
+        const f64 cams[4] = {0.0, 1234.567, -987.65, 3.0e6 + 0.3};
+        for (u32 i = 0; i < 4u; ++i) {
+            const f32 off = de__clouds_shadow_snap(cams[i], 0.0, e[k], DE__CLOUDS_SHADOW_N);
+            /* The centre lies on a texel edge of the world grid, at or below the camera, less
+             * than one texel from it. */
+            EXPECT_TRUE(off <= 0.0f && off > -(f32)texel - 1e-3f);
+            const f64 centre = cams[i] + (f64)off;
+            const f64 r = fmod(fabs(centre), texel);
+            EXPECT_TRUE(fmin(r, texel - r) < 0.5);
+        }
+        /* Moving less than a texel keeps the centre (no shimmer). */
+        const f64 c0 = 100.0 * texel + 0.25 * texel;
+        const f64 s0 = c0 + (f64)de__clouds_shadow_snap(c0, 0.0, e[k], DE__CLOUDS_SHADOW_N);
+        const f64 c1 = c0 + 0.5 * texel;
+        const f64 s1 = c1 + (f64)de__clouds_shadow_snap(c1, 0.0, e[k], DE__CLOUDS_SHADOW_N);
+        EXPECT_FLOAT_EQ((f32)(s1 - s0), 0.0f, 1e-3f);
+    }
+}
+
+/* DENG-854: the fine cascade follows the sun's crossing of the layer bottom. */
+TEST(clouds, test_clouds_shadow_sun_shift) {
+    /* Sun 45 degrees up toward +x: a camera 500 m below a 1500 m layer shifts 1000 m. */
+    const f64 s = 0.70710678118654752;
+    EXPECT_FLOAT_EQ((f32)de__clouds_shadow_shift(s, s, 500.0, 1500.0), 1000.0f, 0.01f);
+    EXPECT_FLOAT_EQ((f32)de__clouds_shadow_shift(0.0, s, 500.0, 1500.0), 0.0f, 1e-6f);
+    EXPECT_FLOAT_EQ((f32)de__clouds_shadow_shift(-s, s, 500.0, 1500.0), -1000.0f, 0.01f);
+    /* A low sun would shift it past the coarse cascade: clamped to stay inside. */
+    EXPECT_FLOAT_EQ((f32)de__clouds_shadow_shift(0.99, 0.1, 0.0, 1500.0),
+                    DE__CLOUDS_SHADOW_SHIFT_MAX_M, 0.01f);
+    EXPECT_FLOAT_EQ((f32)de__clouds_shadow_shift(-0.99, 0.1, 0.0, 1500.0),
+                    -DE__CLOUDS_SHADOW_SHIFT_MAX_M, 0.01f);
+    EXPECT_FLOAT_EQ(DE__CLOUDS_SHADOW_SHIFT_MAX_M + DE__CLOUDS_SHADOW_FINE_EXTENT_M * 0.5f,
+                    DE__CLOUDS_SHADOW_EXTENT_M * 0.5f, 1e-3f);
+    /* A camera above the layer, and a sun at the horizon: no shift. */
+    EXPECT_FLOAT_EQ((f32)de__clouds_shadow_shift(s, s, 2000.0, 1500.0), 0.0f, 1e-6f);
+    EXPECT_FLOAT_EQ((f32)de__clouds_shadow_shift(1.0, 0.01, 0.0, 1500.0), 0.0f, 1e-6f);
+    /* The shifted centre is snapped to the texel grid and the receiver is inside the area. */
+    const f64 ext = DE__CLOUDS_SHADOW_FINE_EXTENT_M, texel = ext / (f64)DE__CLOUDS_SHADOW_N;
+    const f64 cam = 12345.678;
+    const f64 shift = 1000.0;
+    const f32 off = de__clouds_shadow_snap(cam, shift, ext, DE__CLOUDS_SHADOW_N);
+    EXPECT_TRUE(fabs((double)off - shift) <= texel);
+    const f64 u = (cam + shift - (cam + (f64)off)) / ext + 0.5; /* the receiver's crossing */
+    EXPECT_TRUE(de__clouds_shadow_weight((f32)u, 0.5f) > 0.99f);
+}
+
 TEST(clouds, test_clouds_weather_offset_large_coords) {
     const f64 tile = DE__CLOUDS_WEATHER_TILE_M;
     /* In [0, tile) for any input, negative included. */

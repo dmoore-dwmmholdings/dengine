@@ -40,16 +40,41 @@ bool de__clouds_enabled(const de__clouds_settings *c, const de_render_settings *
 de__clouds_quality de__clouds_quality_for(de_quality q) {
     switch (q) {
     case DE_QUALITY_LOW:
-        return (de__clouds_quality){48u, 4u, 2u, 8u};
+        return (de__clouds_quality){48u, 4u, 2u, 8u, false, false};
     case DE_QUALITY_MEDIUM:
-        return (de__clouds_quality){64u, 5u, 2u, 12u};
+        return (de__clouds_quality){64u, 5u, 2u, 12u, true, false};
     case DE_QUALITY_HIGH:
-        return (de__clouds_quality){96u, 6u, 3u, 16u};
+        return (de__clouds_quality){96u, 6u, 3u, 16u, true, true};
     case DE_QUALITY_ULTRA:
-        return (de__clouds_quality){128u, 6u, 3u, 24u};
+        return (de__clouds_quality){128u, 6u, 3u, 24u, true, true};
     default:
-        return (de__clouds_quality){0u, 0u, 0u, 0u};
+        return (de__clouds_quality){0u, 0u, 0u, 0u, false, false};
     }
+}
+
+f32 de__clouds_shadow_weight(f32 u, f32 v) {
+    if (!(u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f))
+        return 0.0f;
+    const f32 k = 1.0f / DE__CLOUDS_SHADOW_FADE;
+    return clamp01(fminf(u, 1.0f - u) * k) * clamp01(fminf(v, 1.0f - v) * k);
+}
+
+f32 de__clouds_shadow_blend(f32 coarse, f32 fine, f32 w) {
+    w = clamp01(w);
+    return coarse + (fine - coarse) * w;
+}
+
+f32 de__clouds_shadow_snap(f64 camera_world, f64 shift, f64 extent, u32 n) {
+    const f64 texel = extent / (f64)n;
+    return (f32)(floor((camera_world + shift) / texel) * texel - camera_world);
+}
+
+f64 de__clouds_shadow_shift(f64 sun_axis, f64 sun_z, f64 from_z, f64 bottom_z) {
+    if (!(sun_z > 0.02))
+        return 0.0;
+    const f64 v = sun_axis * fmax(bottom_z - from_z, 0.0) / sun_z;
+    const f64 m = (f64)DE__CLOUDS_SHADOW_SHIFT_MAX_M;
+    return v < -m ? -m : (v > m ? m : v);
 }
 
 f32 de__clouds_tile_offset(f64 world, f64 drift, f64 tile) {

@@ -20,7 +20,9 @@
  * The passes (only when de__clouds_enabled):
  *   clouds.shadow       DE__VIEW_SLOT_LIGHTING, order DE__CLOUDS_SHADOW_STAGE_ORDER: the
  *                       transmittance toward the sun from the layer bottom plane, top-down,
- *                       DE__CLOUDS_SHADOW_N^2 over DE__CLOUDS_SHADOW_EXTENT_M around the camera.
+ *                       DE__CLOUDS_SHADOW_N^2 over DE__CLOUDS_SHADOW_EXTENT_M around the camera,
+ *                       plus (Medium and above, DENG-854) a fine cascade below it over
+ *                       DE__CLOUDS_SHADOW_FINE_EXTENT_M, marched with the detail noise at High.
  *                       The sun lighting (lighting_common.slang) and the fog's light injection
  *                       sample it through LightingInputs.cloud_shadow (de_input_cloud_shadow).
  *   clouds.march        after sky.render: half width x half height (a quarter of the pixels),
@@ -74,6 +76,15 @@ DE_EXTERN_C_BEGIN
 #define DE__CLOUDS_BLUE_N        64u
 #define DE__CLOUDS_SHADOW_N      256u
 #define DE__CLOUDS_SHADOW_EXTENT_M 16384.0f
+/** DENG-854: the fine cascade, N x N texels over this extent (8 m texels) around the camera. The
+ * map is DE__CLOUDS_SHADOW_N wide and 2 N high: the coarse cascade in the top half (rows 0..N-1),
+ * the fine one below it. One texture and one binding, so de_input_cloud_shadow keeps its inputs. */
+#define DE__CLOUDS_SHADOW_FINE_EXTENT_M 2048.0f
+/** The fraction of a cascade's width, at each edge, over which it fades out (to the coarser one,
+ * or to no shadow for the coarse cascade). Mirrored in lighting_inputs.slang. */
+#define DE__CLOUDS_SHADOW_FADE 0.1f
+/** The most the fine cascade's centre moves from the camera: it stays inside the coarse cascade. */
+#define DE__CLOUDS_SHADOW_SHIFT_MAX_M ((DE__CLOUDS_SHADOW_EXTENT_M - DE__CLOUDS_SHADOW_FINE_EXTENT_M) * 0.5f)
 /** The clouds.shadow stage's order in DE__VIEW_SLOT_LIGHTING: after "sky.ibl", before "lighting". */
 #define DE__CLOUDS_SHADOW_STAGE_ORDER (-45)
 /** The history's weight in the reconstruction (the fresh quarter keeps 1 - weight). */
@@ -101,9 +112,30 @@ typedef struct de__clouds_quality {
     u32 light_steps;   /**< at most 6 */
     u32 octaves;       /**< multi-scattering octaves */
     u32 shadow_steps;  /**< the shadow map's steps toward the sun */
+    bool shadow_fine;  /**< DENG-854: the fine shadow cascade (Medium and above) */
+    bool shadow_detail; /**< DENG-854: the fine cascade's march adds the detail noise (High and above) */
 } de__clouds_quality;
 /** Low 48/4/2, Medium 64/5/2, High 96/6/3, Ultra 128/6/3; OFF (or anything else): zero. Pure. */
 de__clouds_quality de__clouds_quality_for(de_quality q);
+
+/** DENG-854: how much of the finer cascade replaces the coarser one at (`u`, `v`), the point's
+ * position in the cascade's area (0..1 across it): 0 outside the area, 1 further than
+ * DE__CLOUDS_SHADOW_FADE from every edge, linear in between. The coarse cascade's own fade to
+ * "no shadow" at its border uses the same function. Pure; lighting_inputs.slang does the same. */
+f32 de__clouds_shadow_weight(f32 u, f32 v);
+/** The cascades' blend at a point: `coarse` and `fine` are the two cascades' shadow values and `w`
+ * is de__clouds_shadow_weight of the point in the fine cascade (0 without the fine cascade). */
+f32 de__clouds_shadow_blend(f32 coarse, f32 fine, f32 w);
+/** A cascade's centre offset from the camera along one axis: the point `camera_world` + `shift`,
+ * snapped down to a texel of `extent / n` in world space, so the map does not shimmer when the
+ * camera moves. `shift` is where the sun's rays through the camera cross the layer bottom (the map
+ * is indexed by that crossing, not by the receiver), 0 for none. Pure. */
+f32 de__clouds_shadow_snap(f64 camera_world, f64 shift, f64 extent, u32 n);
+/** `shift` for one axis: the sun's horizontal travel from height `from_z` up to the layer bottom
+ * `bottom_z` along `sun` (toward the sun), clamped to +-DE__CLOUDS_SHADOW_SHIFT_MAX_M so the fine
+ * cascade stays inside the coarse one (low sun: beyond it the map has no shadow, as before);
+ * 0 when the sun is within 0.02 of the horizon. Pure. */
+f64 de__clouds_shadow_shift(f64 sun_axis, f64 sun_z, f64 from_z, f64 bottom_z);
 
 /** (`world` + `drift`) modulo `tile` in double precision, in [0, tile), as f32. Pure. */
 f32 de__clouds_tile_offset(f64 world, f64 drift, f64 tile);
@@ -140,10 +172,10 @@ DE_STATIC_ASSERT(sizeof(de__clouds_header) == 304, "CloudsHeader is 304 bytes");
 
 /** The cloud shadow's header (lighting_inputs.slang de_input_cloud_shadow; 64 bytes). */
 typedef struct de__cloud_shadow_gpu {
-    u32 tex[4];   /**< shadow map (sampled), linear clamp sampler, flags (1: on), 0 */
+    u32 tex[4];   /**< shadow map (sampled), linear clamp sampler, flags (1: on, 2: fine cascade), 0 */
     f32 area[4];  /**< centre x, y (render-origin space), 1 / extent, layer bottom z */
     f32 sun[4];   /**< direction toward the sun, strength (0..1) */
-    f32 pad[4];
+    f32 fine[4];  /**< DENG-854: the fine cascade's centre x, y, 1 / extent, 0 (flags bit 1: on) */
 } de__cloud_shadow_gpu;
 DE_STATIC_ASSERT(sizeof(de__cloud_shadow_gpu) == 64, "CloudShadow is 64 bytes");
 
