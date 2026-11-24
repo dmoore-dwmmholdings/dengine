@@ -18,6 +18,10 @@
  *   terrain       a DeTerrain across a cell boundary (DENG-857): cells.toml lists its tiles per
  *                 cell, a cell load makes its tiles resident (a shared tile once), the last
  *                 unload releases them, and memory returns to the baseline after a flight.
+ *   xref          two cells that reference each other's entities (DENG-858): the cook reports
+ *                 the references and writes one table per cell, the partition resolves them while
+ *                 both cells are loaded, clears them when the target unloads, and resolves them
+ *                 again on reload; memory returns to the baseline.
  */
 #include "de_test.h"
 #include <dengine/de_asset.h>
@@ -724,6 +728,256 @@ TEST_F(streaming, world_partition_terrain, wp_fx) {
     de_tracking_stats end_asset = de_tracking_allocator_stats(&f->t_asset);
     EXPECT_EQ(end_asset.blocks_live, base_asset.blocks_live);
     EXPECT_TRUE(end_asset.bytes_live <= base_asset.bytes_live + 4096u);
+}
+
+/* ---- test_world_partition_xref (DENG-858) ---------------------------------------------------- */
+
+/* A two-cell scratch world: A (0x200, cell (0, 0)) targets B (0x201, cell (1, 0)), B targets A,
+ * and C (0x202, cell (0, 0)) targets A in its own cell. TXLink.tag tells the entities apart. */
+typedef struct TXLink {
+    de_entity target;
+    u32 tag;
+} TXLink;
+
+static const de_field_info k_xlink_fields[] = {
+    DE_FIELD(TXLink, target, DE_FK_ENTITY, DE_FIELD_DEFAULT),
+    DE_FIELD(TXLink, tag, DE_FK_U32, DE_FIELD_DEFAULT),
+};
+
+#if defined(DE_STREAMING_HAS_WORLD_COOK)
+static char g_xref_out[8192];
+static size_t g_xref_len;
+static void xref_cook_sink(void *user, de_cook_stream stream, const char *text, size_t len) {
+    (void)user;
+    (void)stream;
+    if (g_xref_len + len < sizeof g_xref_out) {
+        memcpy(g_xref_out + g_xref_len, text, len);
+        g_xref_len += len;
+        g_xref_out[g_xref_len] = '\0';
+    }
+}
+#endif
+
+static bool xref_world_make(void) {
+#if defined(DE_STREAMING_HAS_WORLD_COOK)
+    static bool made;
+    if (made)
+        return true;
+    mount_once("wptmp", TMP, DE_MOUNT_WRITABLE);
+    bool ok = de_dir_create("wptmp:/xr/assets/scenes") == DE_OK;
+    static const char manifest[] =
+        "# DENG-858 test world: references across a cell boundary (test_world_partition.c).\n"
+        "[project]\nasset_root = \"assets\"\ninclude = [\"assets/worlds/xr/cells.toml\"]\n"
+        "[assets]\n\"levels/xr\" = { type = \"scene\", source = \"scenes/xr.scene.toml\" }\n"
+        "[worlds.xr]\nscenes = [\"levels/xr\"]\nload_radius = 100.0\n"
+        "unload_radius = 150.0\nmax_loads_per_frame = 2\n[worlds.xr.proxy]\nenabled = false\n";
+    static const char scene[] =
+        "[entity.0x0000000000000200.DeTransform]\nposition = [100.0, 100.0, 0.0]\n"
+        "[entity.0x0000000000000200.TXLink]\ntarget = \"0x0000000000000201\"\ntag = 1\n"
+        "[entity.0x0000000000000201.DeTransform]\nposition = [400.0, 100.0, 0.0]\n"
+        "[entity.0x0000000000000201.TXLink]\ntarget = \"0x200\"\ntag = 2\n"
+        "[entity.0x0000000000000202.DeTransform]\nposition = [120.0, 100.0, 0.0]\n"
+        "[entity.0x0000000000000202.TXLink]\ntarget = \"0x0000000000000200\"\ntag = 3\n";
+    ok = ok &&
+         de_file_write_all_atomic("wptmp:/xr/assets.toml", manifest, sizeof manifest - 1) ==
+             DE_OK &&
+         de_file_write_all_atomic("wptmp:/xr/assets/scenes/xr.scene.toml", scene,
+                                  sizeof scene - 1) == DE_OK;
+    if (ok) {
+        const char *argv[] = {TMP "/xr/assets.toml", "--world", "xr"};
+        de_cook_io io = {xref_cook_sink, NULL};
+        g_xref_len = 0;
+        g_xref_out[0] = '\0';
+        ok = de_cook_world_main(3, argv, &io) == DE_COOK_EXIT_OK;
+        if (!ok)
+            printf("%s", g_xref_out);
+    }
+    made = ok;
+    return ok;
+#else
+    return false;
+#endif
+}
+
+typedef struct xref_find {
+    de_entity by_tag[4];
+    de_entity target[4];
+} xref_find;
+
+static void xref_chunk(const de_query_chunk *ch, void *user) {
+    xref_find *x = (xref_find *)user;
+    const TXLink *l = (const TXLink *)ch->columns[0];
+    for (u32 i = 0; i < ch->count; ++i)
+        if (l[i].tag < 4u) {
+            x->by_tag[l[i].tag] = ch->entities[i];
+            x->target[l[i].tag] = l[i].target;
+        }
+}
+
+/* The loaded TXLink entities by tag (DE_ENTITY_NULL-like zero bits when absent). */
+static xref_find xref_scan(wp_fx *f, de_component link) {
+    xref_find x;
+    memset(&x, 0, sizeof x);
+    const de_query_term t = {link, DE_READ};
+    const de_query_desc d = {&t, 1, NULL, 0};
+    de_query q = de_query_create(f->w, &d);
+    EXPECT_TRUE(DE_HANDLE_VALID(q));
+    de_query_each(f->w, q, xref_chunk, &x);
+    de_query_destroy(f->w, q);
+    return x;
+}
+
+TEST_F(streaming, world_partition_xref, wp_fx) {
+#if !DE_HAS_COOKER || !defined(DE_STREAMING_HAS_WORLD_COOK)
+    SKIP(NO_COOKER_MSG);
+#endif
+    ASSERT_TRUE(DE_HANDLE_VALID(de_type_register(f->reg, &DE_TYPE_DESC(TXLink, 1, k_xlink_fields))));
+    if (!xref_world_make())
+        SKIP("cannot write the reference test world in the build tree");
+
+    /* AC1: the cook reports both references and lists one table per cell in its bundle. */
+#if defined(DE_STREAMING_HAS_WORLD_COOK)
+    EXPECT_TRUE(strstr(g_xref_out, "TXLink.target of entity 0x0000000000000200 in cell (0, 0) "
+                                   "references entity 0x0000000000000201 in cell (1, 0)") != NULL);
+    EXPECT_TRUE(strstr(g_xref_out, "TXLink.target of entity 0x0000000000000201 in cell (1, 0) "
+                                   "references entity 0x0000000000000200 in cell (0, 0)") != NULL);
+    EXPECT_TRUE(strstr(g_xref_out, "0x0000000000000202 in cell") == NULL);
+    EXPECT_TRUE(strstr(g_xref_out, "2 cross-cell references") != NULL);
+#endif
+    void *data = NULL;
+    u64 size = 0;
+    ASSERT_EQ(de_file_read_all("wptmp:/xr/assets/worlds/xr/cells.toml", de_heap_allocator(), &data,
+                               &size),
+              DE_OK);
+    const char *toml = (const char *)data;
+    EXPECT_TRUE(strstr(toml, "[bundles.\"world/xr/cell_0_0\"]\nassets = [\"world/xr/cell_0_0\", "
+                             "\"world/xr/xref_0_0\"]\n") != NULL);
+    EXPECT_TRUE(strstr(toml, "[bundles.\"world/xr/cell_1_0\"]\nassets = [\"world/xr/cell_1_0\", "
+                             "\"world/xr/xref_1_0\"]\n") != NULL);
+    EXPECT_TRUE(strstr(toml, "\"world/xr/xref_0_0\" = { type = \"blob\", source = "
+                             "\"worlds/xr/xref_0_0.xref\" }") != NULL);
+    DE_FREE(de_heap_allocator(), data, size + 1);
+    ASSERT_EQ(de_file_read_all("wptmp:/xr/assets/worlds/xr/cell_0_0.scene.toml",
+                               de_heap_allocator(), &data, &size),
+              DE_OK);
+    EXPECT_TRUE(strstr((const char *)data, "target = \"0x0\"") != NULL); /* A, as a world ref */
+    EXPECT_TRUE(strstr((const char *)data, "target = \"0x0000000000000200\"") != NULL); /* C */
+    DE_FREE(de_heap_allocator(), data, size + 1);
+
+    /* The table of cell (0, 0): 2 entities, anchor A, one record A -> B. */
+    ASSERT_EQ(de_file_read_all("wptmp:/xr/assets/worlds/xr/xref_0_0.xref", de_heap_allocator(),
+                               &data, &size),
+              DE_OK);
+    de__xref_view xv;
+    ASSERT_TRUE(de__xref_parse(data, size, &xv));
+    EXPECT_EQ(xv.entity_count, 2u);
+    EXPECT_EQ(xv.anchor_count, 1u);
+    EXPECT_EQ(xv.ref_count, 1u);
+    EXPECT_EQ(de__xref_anchor(&xv, 0), 0x200ull);
+    de__xref_rec rec = de__xref_at(&xv, 0);
+    EXPECT_EQ(rec.source, 0x200ull);
+    EXPECT_EQ(rec.target, 0x201ull);
+    EXPECT_EQ(rec.tcx, 1);
+    EXPECT_EQ(rec.tcy, 0);
+    EXPECT_STREQ(rec.component, "TXLink");
+    EXPECT_STREQ(rec.field, "target");
+    EXPECT_FALSE(de__xref_parse(data, size - 1, &xv));
+    DE_FREE(de_heap_allocator(), data, size + 1);
+
+    mount_once("wxr", TMP "/xr", DE_MOUNT_READ_ONLY);
+    wp_open(f, "wxr:/assets.toml", "xr", 0);
+    const de_component link =
+        de_component_register(f->w, de_type_find(f->reg, "TXLink"), DE_COMP_SERIALIZE);
+    ASSERT_TRUE(DE_HANDLE_VALID(link));
+    de_world_partition_stats st = de_world_partition_get_stats(f->p);
+    ASSERT_EQ(st.cell_count, 2u);
+    EXPECT_EQ(st.xrefs, 0u);
+
+    /* Memory: a warm-up flight first, then the baseline. */
+    for (f64 x = -400.0; x <= 900.0; x += 50.0) {
+        set_camera(f, x, 128.0);
+        settle(f, 0.016f);
+    }
+    set_camera(f, -1000.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(st.cells_loaded, 0u);
+    EXPECT_EQ(st.xrefs, 0u);
+    EXPECT_EQ(st.xrefs_resolved, 0u);
+    asset_pump(f);
+    de_asset_flush_unused(f->s);
+    asset_pump(f);
+    de_tracking_stats base_asset = de_tracking_allocator_stats(&f->t_asset);
+    de_tracking_stats base_part = de_tracking_allocator_stats(&f->t_part);
+
+    /* Cell (0, 0) alone: A's reference waits (null), C's in-cell reference is the usual remap. */
+    set_camera(f, 64.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_LOADED);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 1, 0), DE_WORLD_CELL_UNLOADED);
+    EXPECT_EQ(st.xrefs, 1u);
+    EXPECT_EQ(st.xrefs_resolved, 0u);
+    xref_find x = xref_scan(f, link);
+    ASSERT_TRUE(de_entity_alive(f->w, x.by_tag[1]));
+    EXPECT_FALSE(de_entity_alive(f->w, x.by_tag[2]));
+    EXPECT_EQ(x.target[1].bits, 0u);
+    EXPECT_EQ(x.target[3].bits, x.by_tag[1].bits);
+
+    /* AC2: both cells loaded, both references resolve. */
+    set_camera(f, 300.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(st.cells_loaded, 2u);
+    EXPECT_EQ(st.xrefs, 2u);
+    EXPECT_EQ(st.xrefs_resolved, 2u);
+    x = xref_scan(f, link);
+    ASSERT_TRUE(de_entity_alive(f->w, x.by_tag[2]));
+    EXPECT_EQ(x.target[1].bits, x.by_tag[2].bits);
+    EXPECT_EQ(x.target[2].bits, x.by_tag[1].bits);
+    EXPECT_EQ(x.target[3].bits, x.by_tag[1].bits);
+
+    /* The target cell (0, 0) unloads: B's reference into it is cleared. */
+    set_camera(f, 450.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 0, 0), DE_WORLD_CELL_UNLOADED);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 1, 0), DE_WORLD_CELL_LOADED);
+    EXPECT_EQ(st.xrefs, 1u);
+    EXPECT_EQ(st.xrefs_resolved, 0u);
+    x = xref_scan(f, link);
+    EXPECT_FALSE(de_entity_alive(f->w, x.by_tag[1]));
+    EXPECT_EQ(x.target[2].bits, 0u);
+
+    /* (0, 0) loads again: the references resolve to the new entities. */
+    set_camera(f, 240.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(st.cells_loaded, 2u);
+    EXPECT_EQ(st.xrefs_resolved, 2u);
+    x = xref_scan(f, link);
+    EXPECT_EQ(x.target[1].bits, x.by_tag[2].bits);
+    EXPECT_EQ(x.target[2].bits, x.by_tag[1].bits);
+
+    /* (1, 0) unloads: A's reference is cleared. */
+    set_camera(f, 64.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(de_world_partition_cell_state(f->p, 1, 0), DE_WORLD_CELL_UNLOADED);
+    EXPECT_EQ(st.xrefs, 1u);
+    EXPECT_EQ(st.xrefs_resolved, 0u);
+    x = xref_scan(f, link);
+    EXPECT_EQ(x.target[1].bits, 0u);
+
+    /* Away: memory is back at the baseline. */
+    set_camera(f, -1000.0, 128.0);
+    st = settle(f, 0.016f);
+    EXPECT_EQ(st.cells_loaded, 0u);
+    EXPECT_EQ(st.xrefs, 0u);
+    asset_pump(f);
+    de_asset_flush_unused(f->s);
+    asset_pump(f);
+    EXPECT_EQ(de_asset_get_stats(f->s).assets_resident, 0u);
+    de_tracking_stats end_asset = de_tracking_allocator_stats(&f->t_asset);
+    de_tracking_stats end_part = de_tracking_allocator_stats(&f->t_part);
+    EXPECT_EQ(end_asset.blocks_live, base_asset.blocks_live);
+    EXPECT_TRUE(end_asset.bytes_live <= base_asset.bytes_live + 4096u);
+    EXPECT_EQ(end_part.blocks_live, base_part.blocks_live);
+    EXPECT_EQ(end_part.bytes_live, base_part.bytes_live);
 }
 
 /* ---- no per-frame allocation ----------------------------------------------------------------- */

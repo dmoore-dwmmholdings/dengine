@@ -9,6 +9,10 @@
  *
  * DENG-857: a DeTerrain's 3 x 3 tiles are blobs "world/<world>/terrain_<id>_<tx>_<ty>", each in
  * its own bundle; every cell bundle a tile overlaps depends on it (de__ttile_*, below).
+ *
+ * DENG-858: a cell whose entities reference entities of other cells (or are referenced from
+ * them) has a cross-cell reference table, the blob "world/<world>/xref_<cx>_<cy>" in its own
+ * cell bundle (de__xref_*, below).
  */
 #ifndef DE_STREAMING_INTERNAL_H
 #define DE_STREAMING_INTERNAL_H
@@ -269,6 +273,97 @@ static inline bool de__ttile_parse(const void *data, u64 size, de__ttile_view *o
     v.splat = v.holes + v.w * v.h;
     *out = v;
     return true;
+}
+
+/* ---- Cross-cell entity references (DENG-858) ------------------------------------------ */
+
+/**
+ * The reference table blob, little-endian:
+ *   0  "DEXR"   4 u32 version   8 u32 entities in the cell scene
+ *   12 u32 anchor count (A)     16 u32 reference count (R)     20 u32 0
+ *   24 A x u64: the scene IDs of the cell's entities that are a reference's source or target,
+ *      ascending
+ *   then R records of DE__XREF_REC bytes: u64 source scene ID (an entity of this cell), u64
+ *      target scene ID, i32 target cx, i32 target cy, the component type name and the field
+ *      name, each NUL-padded to DE__XREF_NAME bytes. Ordered by source, component, field.
+ * Scene IDs are the world's (`de-cook world` keeps them unique across the world).
+ */
+#define DE__XREF_MAGIC   "DEXR"
+#define DE__XREF_VERSION 1u
+#define DE__XREF_HEADER  24u
+#define DE__XREF_NAME    48u
+#define DE__XREF_REC     (24u + 2u * DE__XREF_NAME)
+
+/** Writes "xref_<cx>_<cy>", the leaf of a cell's reference table. */
+static inline bool de__xref_leaf(char *buf, size_t cap, i32 cx, i32 cy) {
+    int n = snprintf(buf, cap, "xref_%d_%d", (int)cx, (int)cy);
+    return n > 0 && (size_t)n < cap;
+}
+
+/** Writes "world/<world>/xref_<cx>_<cy>", the table's asset name (in the cell's bundle). */
+static inline bool de__xref_name(char *buf, size_t cap, const char *world, i32 cx, i32 cy) {
+    int n = snprintf(buf, cap, "world/%s/xref_%d_%d", world, (int)cx, (int)cy);
+    return n > 0 && (size_t)n < cap;
+}
+
+/** The blob size of a table with `anchors` anchors and `refs` references. */
+static inline u64 de__xref_bytes(u32 anchors, u32 refs) {
+    return DE__XREF_HEADER + 8u * (u64)anchors + (u64)DE__XREF_REC * refs;
+}
+
+/** A checked table (pointers into the blob). */
+typedef struct de__xref_view {
+    u32 entity_count, anchor_count, ref_count;
+    const u8 *anchors, *refs;
+} de__xref_view;
+
+/** One reference of a table. The names point into the blob and are NUL-terminated. */
+typedef struct de__xref_rec {
+    u64 source, target;
+    i32 tcx, tcy;
+    const char *component, *field;
+} de__xref_rec;
+
+/** Parses a table; false when it is not a version 1 table, its size does not match or a name
+ * is not NUL-terminated. */
+static inline bool de__xref_parse(const void *data, u64 size, de__xref_view *out) {
+    const u8 *b = (const u8 *)data;
+    if (b == NULL || size < DE__XREF_HEADER || memcmp(b, DE__XREF_MAGIC, 4) != 0 ||
+        de__ttile_u32(b + 4) != DE__XREF_VERSION)
+        return false;
+    de__xref_view v;
+    v.entity_count = de__ttile_u32(b + 8);
+    v.anchor_count = de__ttile_u32(b + 12);
+    v.ref_count = de__ttile_u32(b + 16);
+    if (size != de__xref_bytes(v.anchor_count, v.ref_count))
+        return false;
+    v.anchors = b + DE__XREF_HEADER;
+    v.refs = v.anchors + 8u * (u64)v.anchor_count;
+    for (u32 i = 0; i < v.ref_count; ++i) {
+        const u8 *r = v.refs + (u64)DE__XREF_REC * i;
+        if (memchr(r + 24, 0, DE__XREF_NAME) == NULL || r[24] == 0 ||
+            memchr(r + 24 + DE__XREF_NAME, 0, DE__XREF_NAME) == NULL ||
+            r[24 + DE__XREF_NAME] == 0)
+            return false;
+    }
+    *out = v;
+    return true;
+}
+
+static inline u64 de__xref_anchor(const de__xref_view *v, u32 i) {
+    return de__ttile_u64(v->anchors + 8u * i);
+}
+
+static inline de__xref_rec de__xref_at(const de__xref_view *v, u32 i) {
+    const u8 *r = v->refs + (u64)DE__XREF_REC * i;
+    de__xref_rec o;
+    o.source = de__ttile_u64(r);
+    o.target = de__ttile_u64(r + 8);
+    o.tcx = (i32)de__ttile_u32(r + 16);
+    o.tcy = (i32)de__ttile_u32(r + 20);
+    o.component = (const char *)(r + 24);
+    o.field = (const char *)(r + 24 + DE__XREF_NAME);
+    return o;
 }
 
 /** One cell and a sort key. */

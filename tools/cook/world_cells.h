@@ -16,11 +16,20 @@
  *                               draws at least one mesh; see world_proxy.h
  *   terrain_<id>_<tx>_<ty>.tile one per tile of each DeTerrain (DENG-857): its heights, holes
  *                               and splat (format in de_asset.h, "World streaming")
+ *   xref_<cx>_<cy>.xref         the cell's cross-cell reference table (DENG-858), when one of
+ *                               its entities references an entity of another cell or is
+ *                               referenced from one (format in streaming_internal.h)
  *   cells.toml                  [assets] and [bundles] for every cell (and, per proxy, a model
  *                               asset and bundle "world/<name>/proxy_<cx>_<cy>" whose mesh is
  *                               "#proxy"; per tile, a blob asset and bundle
  *                               "world/<name>/terrain_<id>_<tx>_<ty>", in the `depends` of every
  *                               cell bundle it overlaps); include it from the project manifest
+ *
+ * A component field that holds the scene ID (a "0x.." string) of a placed entity in another cell
+ * is a cross-cell reference: the cook reports it (a note), writes "0x0" in the cell scene and
+ * records it, with the world scene IDs of both entities, in the source cell's reference table, a
+ * blob asset "world/<name>/xref_<cx>_<cy>" in the cell's bundle. The world partition resolves it
+ * while both cells are loaded. A reference nested in an array or table is warned and dropped.
  *
  * A cell that a terrain tile overlaps but no entity is in gets an empty scene. A malformed
  * DeTerrain (resolution not 33, arrays of the wrong length or range) is an error; a tile wider

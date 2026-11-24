@@ -42,9 +42,21 @@
  * that is instantiated counts one reference on each tile in its request, and one that unloads
  * gives them back before its request is released. The tiles thus follow the cells' hysteresis and
  * per-frame cap, and the count needs no allocation.
+ *
+ * DENG-858 (cross-cell references): a cell whose bundle holds a reference table
+ * ("world/<name>/xref_<cx>_<cy>", streaming_internal.h) is instantiated with
+ * de__prefab_instantiate_ids, and the cell keeps the entity of each of the table's anchors (the
+ * scene IDs of its entities that are a reference's source or target) and its references, each
+ * with the component and field offset found by reflection. These arrays are the one allocation
+ * from the partition's allocator after open: made when such a cell is instantiated, freed when
+ * it unloads. Once a cell is loaded, its own references whose target's cell is loaded, and the
+ * loaded cells' references that target it, get the target entity; before a cell unloads, the
+ * references of other cells that target it get null.
  */
 #include "partition_editor.h"
 #include "streaming_internal.h"
+
+#include "asset/scene/scene_format.h"
 
 #include <dengine/de_asset.h>
 #include <dengine/de_ecs.h>
@@ -65,6 +77,17 @@
 #define WP_NAME_MAX 64
 #define WP_DEFAULT_MAX_RESIDENT 256u
 
+/* DENG-858: one cross-cell reference of a loaded cell. */
+typedef struct wp_xref {
+    u64 target;      /* the target's world scene ID */
+    i32 tcx, tcy;    /* its cell */
+    de_entity src;   /* the entity of this cell whose field it is */
+    de_component comp;
+    u32 offset;      /* of the DE_FK_ENTITY field in the component */
+    bool usable;     /* the component and field were found */
+    bool resolved;   /* the field holds the target */
+} wp_xref;
+
 typedef struct wp_cell {
     i32 cx, cy;
     de_asset_id scene;
@@ -82,6 +105,12 @@ typedef struct wp_cell {
     u32 entities;
     f64 zmin, zmax;
     char error[WP_ERROR_MAX]; /* "" unless FAILED */
+    /* DENG-858, while LOADED: the reference table's anchors (ascending) and references */
+    u64 *anchor_sid;
+    de_entity *anchor_ent;
+    u32 anchor_count;
+    wp_xref *xrefs;
+    u32 xref_count;
 } wp_cell;
 
 typedef struct wp_tile {
@@ -457,8 +486,12 @@ static void wp_tiles_hold(de_world_partition *p, wp_cell *c, int delta) {
     }
 }
 
+static void wp_xref_free(de_world_partition *p, wp_cell *c);
+
 static void wp_free(de_world_partition *p) {
     const de_allocator *a = p->a;
+    for (u32 i = 0; p->cells != NULL && i < p->cell_count; ++i)
+        wp_xref_free(p, &p->cells[i]);
     if (p->status != NULL)
         DE_FREE(a, p->status, sizeof *p->status * WP_STATUS_MAX);
     if (p->cand != NULL)
@@ -579,8 +612,193 @@ de_result de_world_partition_open(de_asset_system *assets, de_world *world, cons
     return DE_OK;
 }
 
+/* ---- Cross-cell references (DENG-858) ---------------------------------------------------- */
+
+static void wp_xref_free(de_world_partition *p, wp_cell *c) {
+    if (c->anchor_sid != NULL)
+        DE_FREE(p->a, c->anchor_sid, sizeof *c->anchor_sid * c->anchor_count);
+    if (c->anchor_ent != NULL)
+        DE_FREE(p->a, c->anchor_ent, sizeof *c->anchor_ent * c->anchor_count);
+    if (c->xrefs != NULL)
+        DE_FREE(p->a, c->xrefs, sizeof *c->xrefs * c->xref_count);
+    c->anchor_sid = NULL;
+    c->anchor_ent = NULL;
+    c->xrefs = NULL;
+    c->anchor_count = c->xref_count = 0;
+}
+
+/* The entity of anchor `sid` of loaded cell c; DE_ENTITY_NULL when it has none. */
+static de_entity wp_xref_anchor(const wp_cell *c, u64 sid) {
+    u32 lo = 0, hi = c->anchor_count;
+    while (lo < hi) {
+        u32 mid = lo + (hi - lo) / 2u;
+        if (c->anchor_sid[mid] < sid)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo < c->anchor_count && c->anchor_sid[lo] == sid ? c->anchor_ent[lo] : DE_ENTITY_NULL;
+}
+
+/* Writes `e` into reference x's field (marking the component changed). False when the source
+ * entity or its component is gone. */
+static bool wp_xref_write(de_world_partition *p, const wp_xref *x, de_entity e) {
+    if (!x->usable || !de_entity_alive(p->world, x->src))
+        return false;
+    u8 *obj = (u8 *)de_entity_get(p->world, x->src, x->comp);
+    if (obj == NULL)
+        return false;
+    memcpy(obj + x->offset, &e, sizeof e);
+    return true;
+}
+
+/* Gives reference x its target when the target's cell is loaded. */
+static void wp_xref_link(de_world_partition *p, wp_xref *x) {
+    const wp_cell *t = wp_find(p, x->tcx, x->tcy);
+    if (x->resolved || t == NULL || t->state != DE_WORLD_CELL_LOADED)
+        return;
+    const de_entity e = wp_xref_anchor(t, x->target);
+    if (e.bits == 0 || !de_entity_alive(p->world, e) || !wp_xref_write(p, x, e))
+        return;
+    x->resolved = true;
+    p->stats.xrefs_resolved++;
+}
+
+/* Every resolved reference of the loaded cells that targets cell c: null. */
+static void wp_xref_unlink_into(de_world_partition *p, const wp_cell *c) {
+    for (u32 i = 0; i < p->cell_count; ++i) {
+        wp_cell *o = &p->cells[i];
+        if (o == c || o->state != DE_WORLD_CELL_LOADED)
+            continue;
+        for (u32 k = 0; k < o->xref_count; ++k) {
+            wp_xref *x = &o->xrefs[k];
+            if (!x->resolved || x->tcx != c->cx || x->tcy != c->cy)
+                continue;
+            (void)wp_xref_write(p, x, DE_ENTITY_NULL);
+            x->resolved = false;
+            p->stats.xrefs_resolved--;
+        }
+    }
+}
+
+/* Cell c was just instantiated: links its references and the loaded cells' ones into it. */
+static void wp_xref_link_all(de_world_partition *p, wp_cell *c) {
+    for (u32 k = 0; k < c->xref_count; ++k)
+        wp_xref_link(p, &c->xrefs[k]);
+    for (u32 i = 0; i < p->cell_count; ++i) {
+        wp_cell *o = &p->cells[i];
+        if (o == c || o->state != DE_WORLD_CELL_LOADED)
+            continue;
+        for (u32 k = 0; k < o->xref_count; ++k)
+            if (o->xrefs[k].tcx == c->cx && o->xrefs[k].tcy == c->cy)
+                wp_xref_link(p, &o->xrefs[k]);
+    }
+}
+
+/* The reference table in cell c's READY request, parsed into `v`; false when it has none. */
+static bool wp_xref_table(de_world_partition *p, const wp_cell *c, de__xref_view *v) {
+    char name[192];
+    if (!DE_HANDLE_VALID(c->h) || !de__xref_name(name, sizeof name, p->name, c->cx, c->cy))
+        return false;
+    const de_asset_id id = de_asset_id_from(name);
+    u32 n = de_asset_status_list(p->assets, c->h, p->status, WP_STATUS_MAX);
+    n = n < WP_STATUS_MAX ? n : WP_STATUS_MAX;
+    bool in = false;
+    for (u32 i = 0; i < n && !in; ++i)
+        in = p->status[i].id.hash == id.hash && p->status[i].state == DE_LOAD_READY;
+    if (!in)
+        return false;
+    u64 size = 0;
+    const void *data = de_blob_data(p->assets, de_asset_blob(p->assets, id), &size);
+    if (data == NULL || !de__xref_parse(data, size, v)) {
+        DE_WARN(p->log, "world %s: the reference table of cell (%d, %d) is not valid; cook the "
+                "world again", p->name, (int)c->cx, (int)c->cy);
+        return false;
+    }
+    return true;
+}
+
+/* The field `field` of component type `comp` as a DE_FK_ENTITY offset; false when there is none. */
+static bool wp_xref_field(de_world_partition *p, const char *comp, const char *field,
+                          de_component *out, u32 *offset) {
+    *out = de_component_find(p->world, comp);
+    if (!DE_HANDLE_VALID(*out))
+        return false;
+    const de_type_registry *reg = de_world_types(p->world);
+    const de_type_desc *d = de_type_get(reg, de_type_find(reg, comp));
+    for (u32 i = 0; d != NULL && i < d->field_count; ++i)
+        if (strcmp(d->fields[i].name, field) == 0) {
+            if (d->fields[i].kind != DE_FK_ENTITY || d->fields[i].size != sizeof(de_entity))
+                return false;
+            *offset = d->fields[i].offset;
+            return true;
+        }
+    return false;
+}
+
+/* Builds cell c's anchors and references from table `v` and the instantiated entities (`n` of
+ * them, scene IDs ascending). Out of memory: warned, the cell keeps no references. */
+static void wp_xref_load(de_world_partition *p, wp_cell *c, const de__xref_view *v,
+                         const u64 *sids, const de_entity *ents, u32 n) {
+    const u32 na = v->anchor_count, nr = v->ref_count;
+    if (na == 0)
+        return;
+    c->anchor_sid = (u64 *)DE_ALLOC(p->a, sizeof(u64) * na, DE_ALIGNOF(u64), DE_MEM_ASSET);
+    c->anchor_ent =
+        (de_entity *)DE_ALLOC(p->a, sizeof(de_entity) * na, DE_ALIGNOF(de_entity), DE_MEM_ASSET);
+    c->xrefs = nr != 0 ? (wp_xref *)DE_ALLOC(p->a, sizeof(wp_xref) * nr, DE_ALIGNOF(wp_xref),
+                                             DE_MEM_ASSET)
+                       : NULL;
+    c->anchor_count = na;
+    c->xref_count = nr;
+    if (c->anchor_sid == NULL || c->anchor_ent == NULL || (nr != 0 && c->xrefs == NULL)) {
+        if (c->anchor_sid != NULL)
+            DE_FREE(p->a, c->anchor_sid, sizeof(u64) * na);
+        if (c->anchor_ent != NULL)
+            DE_FREE(p->a, c->anchor_ent, sizeof(de_entity) * na);
+        if (c->xrefs != NULL)
+            DE_FREE(p->a, c->xrefs, sizeof(wp_xref) * nr);
+        c->anchor_sid = NULL;
+        c->anchor_ent = NULL;
+        c->xrefs = NULL;
+        c->anchor_count = c->xref_count = 0;
+        DE_WARN(p->log, "world %s: out of memory for the references of cell (%d, %d)", p->name,
+                (int)c->cx, (int)c->cy);
+        return;
+    }
+    u32 j = 0; /* both lists ascend: one merge */
+    for (u32 i = 0; i < na; ++i) {
+        const u64 sid = de__xref_anchor(v, i);
+        while (j < n && sids[j] < sid)
+            ++j;
+        c->anchor_sid[i] = sid;
+        c->anchor_ent[i] = j < n && sids[j] == sid ? ents[j] : DE_ENTITY_NULL;
+    }
+    for (u32 k = 0; k < nr; ++k) {
+        const de__xref_rec r = de__xref_at(v, k);
+        wp_xref *x = &c->xrefs[k];
+        memset(x, 0, sizeof *x);
+        x->target = r.target;
+        x->tcx = r.tcx;
+        x->tcy = r.tcy;
+        x->src = wp_xref_anchor(c, r.source);
+        x->usable = x->src.bits != 0 && wp_xref_field(p, r.component, r.field, &x->comp, &x->offset);
+        if (!x->usable)
+            DE_WARN(p->log, "world %s: cell (%d, %d): %s.%s of entity 0x%016llx is not an entity "
+                    "field of a loaded entity; its reference is ignored", p->name, (int)c->cx,
+                    (int)c->cy, r.component, r.field, (unsigned long long)r.source);
+    }
+    p->stats.xrefs += nr;
+}
+
 static void wp_unload(de_world_partition *p, wp_cell *c) {
     if (c->state == DE_WORLD_CELL_LOADED) {
+        wp_xref_unlink_into(p, c);
+        for (u32 k = 0; k < c->xref_count; ++k)
+            if (c->xrefs[k].resolved)
+                p->stats.xrefs_resolved--;
+        p->stats.xrefs -= c->xref_count;
+        wp_xref_free(p, c);
         wp_tiles_hold(p, c, -1);
         if (p->on_cell != NULL)
             p->on_cell(p->user, c->cx, c->cy, c->root, false);
@@ -693,7 +911,33 @@ static void wp_instantiate(de_world_partition *p, wp_cell *c) {
     wc->cx = c->cx;
     wc->cy = c->cy;
     de_prefab scene = de_asset_scene(p->assets, c->scene);
-    de_result r = de_prefab_instantiate(p->assets, p->world, scene, root, NULL);
+    /* DENG-858: with a reference table, keep the scene ID and entity of each spawned entity. */
+    de__xref_view xv;
+    const bool has_xref = wp_xref_table(p, c, &xv);
+    const u32 cap = has_xref ? (xv.entity_count != 0 ? xv.entity_count : 1u) : 0u;
+    u64 *sids = cap != 0 ? (u64 *)DE_ALLOC(p->a, sizeof(u64) * cap, DE_ALIGNOF(u64),
+                                           DE_MEM_ASSET)
+                         : NULL;
+    de_entity *ents = cap != 0 ? (de_entity *)DE_ALLOC(p->a, sizeof(de_entity) * cap,
+                                                       DE_ALIGNOF(de_entity), DE_MEM_ASSET)
+                               : NULL;
+    u32 got = 0;
+    de_result r;
+    if (sids != NULL && ents != NULL) {
+        r = de__prefab_instantiate_ids(p->assets, p->world, scene, root, NULL, sids, ents, cap,
+                                       &got);
+    } else {
+        if (has_xref)
+            DE_WARN(p->log, "world %s: out of memory for the references of cell (%d, %d)",
+                    p->name, (int)c->cx, (int)c->cy);
+        r = de_prefab_instantiate(p->assets, p->world, scene, root, NULL);
+    }
+    if (r == DE_OK && sids != NULL && ents != NULL)
+        wp_xref_load(p, c, &xv, sids, ents, got);
+    if (sids != NULL)
+        DE_FREE(p->a, sids, sizeof(u64) * cap);
+    if (ents != NULL)
+        DE_FREE(p->a, ents, sizeof(de_entity) * cap);
     if (r != DE_OK) {
         de_entity_despawn_recursive(p->world, root);
         DE_WARN(p->log, "world %s: cannot instantiate cell (%d, %d): %s", p->name, (int)c->cx,
@@ -707,6 +951,7 @@ static void wp_instantiate(de_world_partition *p, wp_cell *c) {
     c->state = DE_WORLD_CELL_LOADED;
     wp_measure(p, c);
     wp_tiles_hold(p, c, 1);
+    wp_xref_link_all(p, c);
     p->stats.total_loads++;
     if (p->on_cell != NULL)
         p->on_cell(p->user, c->cx, c->cy, root, true);
