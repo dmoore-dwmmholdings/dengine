@@ -14,9 +14,17 @@
  *   cell_<cx>_<cy>.proxy.gltf   the cell's far proxy mesh (DENG-830), when the world's
  *                               [worlds.<name>.proxy] is enabled (the default) and the cell
  *                               draws at least one mesh; see world_proxy.h
+ *   terrain_<id>_<tx>_<ty>.tile one per tile of each DeTerrain (DENG-857): its heights, holes
+ *                               and splat (format in de_asset.h, "World streaming")
  *   cells.toml                  [assets] and [bundles] for every cell (and, per proxy, a model
  *                               asset and bundle "world/<name>/proxy_<cx>_<cy>" whose mesh is
- *                               "#proxy"); include it from the project manifest
+ *                               "#proxy"; per tile, a blob asset and bundle
+ *                               "world/<name>/terrain_<id>_<tx>_<ty>", in the `depends` of every
+ *                               cell bundle it overlaps); include it from the project manifest
+ *
+ * A cell that a terrain tile overlaps but no entity is in gets an empty scene. A malformed
+ * DeTerrain (resolution not 33, arrays of the wrong length or range) is an error; a tile wider
+ * than 9 cells is refused.
  *
  * The proxy keeps `triangle_ratio` of the cell's triangles; the partition draws it while the cell
  * is not loaded and crossfades it over `fade_seconds` (world_partition.c). A mesh the baker

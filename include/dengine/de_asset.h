@@ -829,6 +829,18 @@ DE_API void de_asset_flush_unused(de_asset_system *s); /* evict every zero-ref a
  * becomes a scene asset "world/<name>/cell_<cx>_<cy>" and a bundle of the same name, listed in a
  * generated `cells.toml` that the project includes. The output is byte-identical for the same
  * input.
+ *
+ * Terrain (DENG-857): each placed DeTerrain is also cut into its 3 x 3 tiles (16 samples on a
+ * side, the far edge shared with the next tile). Grid columns run along world +x and rows along
+ * world +y from the entity's world position (rotation and scale are not applied). Tile (tx, ty)
+ * becomes a blob asset and bundle "world/<name>/terrain_<id>_<tx>_<ty>" (`id` the entity's scene
+ * ID in 16 hex digits), and every cell bundle the tile overlaps lists it in `depends`, so a cell
+ * that a terrain only overlaps is a cell too (with an empty scene). Loading a cell thus makes its
+ * tiles resident, a tile shared by two cells loads once, and the last cell to unload releases it;
+ * de_world_partition_terrain_tile reports a tile's references. The blob is little-endian: "DETT",
+ * u32 version 1, u64 terrain ID, u32 tx, ty, x0, y0, w, h (first sample, sample count), f64
+ * origin x, y, z, spacing, height (80 bytes), then w*h u16 heights (z = origin z + h / 65535 *
+ * height), w*h hole bytes and w*h*4 splat bytes, all in row order.
  */
 /** Most streaming sources the asset system keeps; extra ones are ignored. */
 #define DE_ASSET_MAX_STREAMING_SOURCES 16u
@@ -939,6 +951,8 @@ typedef struct de_world_partition_stats {
     u32 loads_started;  /**< in the last update */
     u32 unloads;        /**< in the last update */
     u64 total_loads, total_unloads;
+    u32 terrain_tiles;          /**< DENG-857: terrain tile bundles the world has */
+    u32 terrain_tiles_resident; /**< tiles at least one loaded cell holds */
 } de_world_partition_stats;
 
 /**
@@ -967,6 +981,15 @@ DE_API void de_world_cell_of(f64 x, f64 y, i32 *cx, i32 *cy);
  */
 DE_API bool de_world_partition_proxy(const de_world_partition *p, i32 cx, i32 cy, bool *visible,
                                      f32 *alpha);
+
+/**
+ * DENG-857: terrain tile (tx, ty) of the DeTerrain entity with scene ID `terrain` (the blob
+ * "world/<name>/terrain_<id>_<tx>_<ty>", see "World streaming"). Writes to `refs` how many loaded
+ * cells hold it (0: not resident) and to `asset` its blob asset ID; either may be NULL. Returns
+ * false when the world has no such tile.
+ */
+DE_API bool de_world_partition_terrain_tile(const de_world_partition *p, u64 terrain, u32 tx,
+                                            u32 ty, u32 *refs, de_asset_id *asset);
 
 /**
  * Cell origins relative to the camera, for the GPU (SPEC §5.5): `out[i]` gets

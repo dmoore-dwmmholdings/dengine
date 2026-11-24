@@ -6,6 +6,9 @@
  * [cx*256, cx*256+256) x [cy*256, cy*256+256); its origin is (cx*256, cy*256, 0).
  * A cell's asset and bundle are both named "world/<world>/cell_<cx>_<cy>", cx and cy in decimal
  * with a '-' for negatives and no '+' or leading zeros.
+ *
+ * DENG-857: a DeTerrain's 3 x 3 tiles are blobs "world/<world>/terrain_<id>_<tx>_<ty>", each in
+ * its own bundle; every cell bundle a tile overlaps depends on it (de__ttile_*, below).
  */
 #ifndef DE_STREAMING_INTERNAL_H
 #define DE_STREAMING_INTERNAL_H
@@ -123,6 +126,149 @@ static inline bool de__cell_name_parse(const char *name, const char *world, i32 
 /** The same for a far proxy bundle "world/<world>/proxy_<cx>_<cy>" (DENG-830). */
 static inline bool de__cell_proxy_parse(const char *name, const char *world, i32 *cx, i32 *cy) {
     return de__cell_kind_parse(name, world, "/proxy_", cx, cy);
+}
+
+/* ---- Terrain tiles (DENG-857) ----------------------------------------------------------- */
+
+/** Samples on a side of a DeTerrain grid and of one tile (as DE_TERRAIN_RES, DE_TERRAIN_TILE). */
+#define DE__TTILE_RES   33u
+#define DE__TTILE_STEP  16u
+/** Tiles on a side: ceil(33 / 16) = 3, as the terrain module's undo tiles. */
+#define DE__TTILE_COUNT 3u
+/** The tile blob: magic, version, then the fields of de__ttile_view, then the samples. */
+#define DE__TTILE_MAGIC   "DETT"
+#define DE__TTILE_VERSION 1u
+#define DE__TTILE_HEADER  80u
+
+/**
+ * Writes "terrain_<id>_<tx>_<ty>" (`id` as 16 lowercase hex digits), the leaf of a terrain tile
+ * blob. Returns false when it does not fit.
+ */
+static inline bool de__ttile_leaf(char *buf, size_t cap, u64 terrain, u32 tx, u32 ty) {
+    int n = snprintf(buf, cap, "terrain_%016llx_%u_%u", (unsigned long long)terrain,
+                     (unsigned)tx, (unsigned)ty);
+    return n > 0 && (size_t)n < cap;
+}
+
+/** Writes "world/<world>/terrain_<id>_<tx>_<ty>", a tile's asset and bundle name. */
+static inline bool de__ttile_name(char *buf, size_t cap, const char *world, u64 terrain, u32 tx,
+                                  u32 ty) {
+    char leaf[64];
+    if (!de__ttile_leaf(leaf, sizeof leaf, terrain, tx, ty))
+        return false;
+    int n = snprintf(buf, cap, "world/%s/%s", world, leaf);
+    return n > 0 && (size_t)n < cap;
+}
+
+/** Parses a tile bundle name of world `world`; false for any other or non-canonical name. */
+static inline bool de__ttile_name_parse(const char *name, const char *world, u64 *terrain,
+                                        u32 *tx, u32 *ty) {
+    size_t wl = strlen(world);
+    if (strncmp(name, "world/", 6) != 0 || strncmp(name + 6, world, wl) != 0 ||
+        strncmp(name + 6 + wl, "/terrain_", 9) != 0)
+        return false;
+    const char *p = name + 6 + wl + 9;
+    u64 v = 0;
+    for (int i = 0; i < 16; ++i, ++p) {
+        u32 d;
+        if (*p >= '0' && *p <= '9')
+            d = (u32)(*p - '0');
+        else if (*p >= 'a' && *p <= 'f')
+            d = (u32)(*p - 'a' + 10);
+        else
+            return false;
+        v = (v << 4) | d;
+    }
+    if (*p != '_')
+        return false;
+    ++p;
+    i32 x = 0, y = 0;
+    if (!de__cell_parse_int(&p, '_', &x))
+        return false;
+    ++p;
+    if (!de__cell_parse_int(&p, '\0', &y))
+        return false;
+    if (x < 0 || y < 0 || (u32)x >= DE__TTILE_COUNT || (u32)y >= DE__TTILE_COUNT)
+        return false;
+    *terrain = v;
+    *tx = (u32)x;
+    *ty = (u32)y;
+    return true;
+}
+
+/** The first sample and the sample count of tile `t` on one axis (its far edge included). */
+static inline void de__ttile_span(u32 t, u32 *first, u32 *count) {
+    u32 f = t * DE__TTILE_STEP, e = f + DE__TTILE_STEP;
+    if (e > DE__TTILE_RES - 1u)
+        e = DE__TTILE_RES - 1u;
+    *first = f;
+    *count = e - f + 1u;
+}
+
+/**
+ * A parsed tile blob. Grid column i is world +x, row j is world +y (Z up): sample (i, j) of the
+ * tile is at origin + ((x0 + i) * spacing, (y0 + j) * spacing, heights / 65535 * height).
+ * `heights` are little-endian u16 (read with de__ttile_height), `holes` one byte per sample, and
+ * `splat` DE_TERRAIN_LAYERS (4) bytes per sample, all in row order.
+ */
+typedef struct de__ttile_view {
+    u64 terrain; /**< the terrain entity's scene ID */
+    u32 tx, ty, x0, y0, w, h;
+    f64 origin[3];
+    f64 spacing, height;
+    const u8 *heights, *holes, *splat;
+} de__ttile_view;
+
+static inline u32 de__ttile_u32(const u8 *p) {
+    return (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24;
+}
+
+static inline u64 de__ttile_u64(const u8 *p) {
+    return (u64)de__ttile_u32(p) | (u64)de__ttile_u32(p + 4) << 32;
+}
+
+static inline f64 de__ttile_f64(const u8 *p) {
+    u64 v = de__ttile_u64(p);
+    f64 d;
+    memcpy(&d, &v, sizeof d);
+    return d;
+}
+
+static inline u16 de__ttile_height(const de__ttile_view *v, u32 i) {
+    return (u16)(v->heights[2u * i] | v->heights[2u * i + 1u] << 8);
+}
+
+/** The blob size of a w x h tile. */
+static inline u64 de__ttile_bytes(u32 w, u32 h) {
+    return DE__TTILE_HEADER + (u64)w * h * 7u;
+}
+
+/** Parses a tile blob; false when it is not a version 1 tile or its size does not match. */
+static inline bool de__ttile_parse(const void *data, u64 size, de__ttile_view *out) {
+    const u8 *b = (const u8 *)data;
+    if (b == NULL || size < DE__TTILE_HEADER || memcmp(b, DE__TTILE_MAGIC, 4) != 0 ||
+        de__ttile_u32(b + 4) != DE__TTILE_VERSION)
+        return false;
+    de__ttile_view v;
+    v.terrain = de__ttile_u64(b + 8);
+    v.tx = de__ttile_u32(b + 16);
+    v.ty = de__ttile_u32(b + 20);
+    v.x0 = de__ttile_u32(b + 24);
+    v.y0 = de__ttile_u32(b + 28);
+    v.w = de__ttile_u32(b + 32);
+    v.h = de__ttile_u32(b + 36);
+    for (int i = 0; i < 3; ++i)
+        v.origin[i] = de__ttile_f64(b + 40 + 8 * i);
+    v.spacing = de__ttile_f64(b + 64);
+    v.height = de__ttile_f64(b + 72);
+    if (v.w == 0 || v.h == 0 || v.w > DE__TTILE_RES || v.h > DE__TTILE_RES ||
+        size != de__ttile_bytes(v.w, v.h))
+        return false;
+    v.heights = b + DE__TTILE_HEADER;
+    v.holes = v.heights + 2u * v.w * v.h;
+    v.splat = v.holes + v.w * v.h;
+    *out = v;
+    return true;
 }
 
 /** One cell and a sort key. */
