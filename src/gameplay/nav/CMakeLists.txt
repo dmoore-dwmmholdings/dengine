@@ -32,7 +32,7 @@ de_add_module(
 # nav_recast_bridge.cpp, behind the extern "C" nav_recast_bridge.h (DENG-2 Q1). As with
 # de_audio_dsp, aggregate module-object consumers also need this non-module library.
 add_library(de_nav_build STATIC
-    nav_build.h nav_build.c nav_cook.c nav_settings.c
+    nav_build.h nav_build.c nav_cook.c nav_settings.c nav_tiles.c
     nav_recast_bridge.h nav_recast_bridge.cpp)
 target_include_directories(de_nav_build PUBLIC "${DE_ROOT_DIR}/src")
 target_link_libraries(de_nav_build PUBLIC de_core PRIVATE de_tp_recastnavigation de_tp_tomlc17

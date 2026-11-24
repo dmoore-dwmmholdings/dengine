@@ -6,6 +6,8 @@
  *   settings_custom_roundtrip    agents, areas, bounds, tile size and auto rebake survive a file
  *   settings_rejects_bad         out-of-range and malformed files are refused, `out` untouched
  *   settings_runtime_load        the runtime path: load a file, take each agent's build desc
+ *   tiles_format                 DENG-864: nav.tiles round-trips; malformed files are refused
+ *   tiles_runtime_load           DENG-864: de_nav_settings_load_tiles by agent type name
  */
 #if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
 #define _DARWIN_C_SOURCE
@@ -14,6 +16,8 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 #include "de_test.h"
+
+#include "gameplay/nav/nav_build.h"
 
 #include <dengine/de_gameplay.h>
 #include <dengine/de_platform.h>
@@ -166,4 +170,150 @@ TEST(nav_settings, settings_runtime_load) {
     EXPECT_EQ(de_nav_settings_build_desc(&rt, 2, &d), DE_ERR_INVALID_ARGUMENT);
     de_error_clear();
     ASSERT_EQ(de_file_delete("navrt:/nav.toml"), DE_OK);
+}
+
+/* ---- DENG-864: nav.tiles ---- */
+
+/* A one-agent file: three records and a DNAV container with no tile (valid, header only). */
+static void tiles_file(const char *name, f32 tile_size, u8 **out, u64 *size, u8 **dnav,
+                       u64 *dnav_size) {
+    de_nav_settings s;
+    de_nav_settings_default(&s);
+    s.tile_size = tile_size;
+    de__nav_container_info info;
+    memset(&info, 0, sizeof info);
+    ASSERT_EQ(de_nav_settings_build_desc(&s, 0, &info.desc), DE_OK);
+    ASSERT_EQ(de__nav_container_write(de_heap_allocator(), &info, NULL, 0, dnav, dnav_size), DE_OK);
+    static const de__nav_tile_record recs[3] = {
+        {1, 10, 0, 0x1111}, {5, 20, 2, 0x2222}, {15, 0, 0, 0xFFFFFFFFFFFFFFFFull}};
+    de__nav_tiles_agent g;
+    memset(&g, 0, sizeof g);
+    snprintf(g.name, sizeof g.name, "%s", name);
+    g.bmin_x = -16, g.bmin_y = -16;
+    g.tile_size = tile_size;
+    g.tiles_x = 4, g.tiles_y = 4;
+    g.record_count = 3;
+    g.records = recs;
+    g.dnav = *dnav;
+    g.dnav_size = *dnav_size;
+    ASSERT_EQ(de__nav_tiles_write(de_heap_allocator(), &g, 1, out, size), DE_OK);
+}
+
+TEST(nav_settings, tiles_format) {
+    u8 *file = NULL, *dnav = NULL;
+    u64 size = 0, dsize = 0;
+    tiles_file("humanoid", 8.0f, &file, &size, &dnav, &dsize);
+    EXPECT_EQ(size, 16u + 80u + 3u * 24u + ((dsize + 7u) & ~(u64)7u));
+    u32 count = 0;
+    const char *why = NULL;
+    ASSERT_TRUE(de__nav_tiles_read(file, size, &count, &why));
+    ASSERT_EQ(count, 1u);
+    de__nav_tiles_agent g;
+    ASSERT_TRUE(de__nav_tiles_agent_at(file, size, 0, &g));
+    EXPECT_EQ(strcmp(g.name, "humanoid"), 0);
+    EXPECT_TRUE(g.bmin_x == -16.0 && g.bmin_y == -16.0 && g.tile_size == 8.0f);
+    EXPECT_EQ(g.tiles_x, 4u);
+    EXPECT_EQ(g.record_count, 3u);
+    EXPECT_EQ(g.dnav_size, dsize);
+    de__nav_tile_record r;
+    de__nav_tiles_record(&g, 1, &r);
+    EXPECT_EQ(r.tile, 5u);
+    EXPECT_EQ(r.polys, 20u);
+    EXPECT_EQ(r.links, 2u);
+    EXPECT_EQ(r.fp, 0x2222u);
+    de__nav_tiles_record(&g, 2, &r);
+    EXPECT_EQ(r.fp, 0xFFFFFFFFFFFFFFFFull);
+    EXPECT_FALSE(de__nav_tiles_agent_at(file, size, 1, &g));
+
+    /* Malformed copies are refused. */
+    u8 *bad = (u8 *)malloc((size_t)size + 8);
+    ASSERT_TRUE(bad != NULL);
+    memcpy(bad, file, (size_t)size);
+    EXPECT_FALSE(de__nav_tiles_read(bad, 8, &count, &why));        /* truncated header */
+    EXPECT_FALSE(de__nav_tiles_read(bad, size - 8, &count, &why)); /* truncated agent */
+    memset(bad + size, 0, 8);
+    EXPECT_FALSE(de__nav_tiles_read(bad, size + 8, &count, &why)); /* trailing bytes */
+    EXPECT_EQ(strcmp(why, "nav.tiles: trailing bytes"), 0);
+    bad[0] ^= 1u; /* magic */
+    EXPECT_FALSE(de__nav_tiles_read(bad, size, &count, &why));
+    bad[0] ^= 1u;
+    bad[4] = 2; /* version */
+    EXPECT_FALSE(de__nav_tiles_read(bad, size, &count, &why));
+    bad[4] = 1;
+    bad[16 + 80 + 24] = 0; /* record 1 tile 5 -> 0: below record 0 */
+    EXPECT_FALSE(de__nav_tiles_read(bad, size, &count, &why));
+    EXPECT_EQ(strcmp(why, "nav.tiles: bad tile record"), 0);
+    bad[16 + 80 + 24] = 16; /* tile 16 of 16 */
+    EXPECT_FALSE(de__nav_tiles_read(bad, size, &count, &why));
+    bad[16 + 80 + 24] = 5;
+    bad[16] = 0; /* empty name */
+    EXPECT_FALSE(de__nav_tiles_read(bad, size, &count, &why));
+    bad[16] = 'h';
+    bad[16 + 60] = 0; /* tiles_x 0 */
+    EXPECT_FALSE(de__nav_tiles_read(bad, size, &count, &why));
+    bad[16 + 60] = 4;
+    bad[16 + 80 + 72] = 0xFF; /* the DNAV magic */
+    EXPECT_FALSE(de__nav_tiles_read(bad, size, &count, &why));
+    memcpy(bad, file, (size_t)size);
+    ASSERT_TRUE(de__nav_tiles_read(bad, size, &count, &why));
+    free(bad);
+
+    /* Two agents of one name are refused. */
+    de__nav_tiles_agent two[2];
+    ASSERT_TRUE(de__nav_tiles_agent_at(file, size, 0, &two[0]));
+    two[0].records = NULL;
+    two[0].record_count = 0;
+    two[1] = two[0];
+    u8 *dup = NULL;
+    u64 dup_size = 0;
+    ASSERT_EQ(de__nav_tiles_write(de_heap_allocator(), two, 2, &dup, &dup_size), DE_OK);
+    EXPECT_FALSE(de__nav_tiles_read(dup, dup_size, &count, &why));
+    EXPECT_EQ(strcmp(why, "nav.tiles: duplicate agent name"), 0);
+    DE_FREE(de_heap_allocator(), dup, (size_t)dup_size);
+
+    /* The path beside nav.toml. */
+    char path[64];
+    ASSERT_TRUE(de__nav_tiles_path("project:/nav.toml", path, sizeof path));
+    EXPECT_EQ(strcmp(path, "project:/nav.tiles"), 0);
+    ASSERT_TRUE(de__nav_tiles_path("x:/navsettings", path, sizeof path));
+    EXPECT_EQ(strcmp(path, "x:/navsettings.tiles"), 0);
+    EXPECT_FALSE(de__nav_tiles_path("project:/nav.toml", path, 8));
+
+    DE_FREE(de_heap_allocator(), file, (size_t)size);
+    DE_FREE(de_heap_allocator(), dnav, (size_t)dsize);
+}
+
+TEST(nav_settings, tiles_runtime_load) {
+    char dir[] = "/tmp/de_nav_tiles_XXXXXX";
+    ASSERT_TRUE(mkdtemp(dir) != NULL);
+    ASSERT_EQ(de_fs_mount("navtl", dir, DE_MOUNT_WRITABLE, 0), DE_OK);
+    u8 *file = NULL, *dnav = NULL;
+    u64 size = 0, dsize = 0;
+    tiles_file("humanoid", 8.0f, &file, &size, &dnav, &dsize);
+    ASSERT_EQ(de_file_write_all_atomic("navtl:/nav.tiles", file, size), DE_OK);
+    DE_FREE(de_heap_allocator(), file, (size_t)size);
+    DE_FREE(de_heap_allocator(), dnav, (size_t)dsize);
+
+    de_nav *n = NULL;
+    ASSERT_EQ(de_nav_create(de_heap_allocator(), NULL, &n), DE_OK);
+    EXPECT_EQ(de_nav_settings_load_tiles(n, "navtl:/nav.tiles", "humanoid"), DE_OK);
+    EXPECT_EQ(de_nav_settings_load_tiles(n, "navtl:/nav.tiles", "tank"), DE_ERR_NOT_FOUND);
+    EXPECT_EQ(de_nav_settings_load_tiles(n, "navtl:/none.tiles", "humanoid"), DE_ERR_NOT_FOUND);
+    EXPECT_EQ(de_nav_settings_load_tiles(NULL, "navtl:/nav.tiles", "humanoid"),
+              DE_ERR_INVALID_ARGUMENT);
+    /* A file baked with another tile size does not fit this navmesh. */
+    tiles_file("humanoid", 16.0f, &file, &size, &dnav, &dsize);
+    ASSERT_EQ(de_file_write_all_atomic("navtl:/nav16.tiles", file, size), DE_OK);
+    DE_FREE(de_heap_allocator(), file, (size_t)size);
+    DE_FREE(de_heap_allocator(), dnav, (size_t)dsize);
+    EXPECT_EQ(de_nav_settings_load_tiles(n, "navtl:/nav16.tiles", "humanoid"),
+              DE_ERR_INVALID_ARGUMENT);
+    /* A malformed file. */
+    ASSERT_EQ(de_file_write_all_atomic("navtl:/bad.tiles", "DNVT", 4), DE_OK);
+    EXPECT_EQ(de_nav_settings_load_tiles(n, "navtl:/bad.tiles", "humanoid"), DE_ERR_PARSE);
+    de_error_clear();
+    de_nav_destroy(n);
+    ASSERT_EQ(de_file_delete("navtl:/nav.tiles"), DE_OK);
+    ASSERT_EQ(de_file_delete("navtl:/nav16.tiles"), DE_OK);
+    ASSERT_EQ(de_file_delete("navtl:/bad.tiles"), DE_OK);
 }

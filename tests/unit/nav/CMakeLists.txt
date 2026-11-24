@@ -54,3 +54,7 @@ de_add_test(NAME nav_settings
     SOURCES test_nav_settings.c
     LIBS de_nav de_nav_build de_asset de_ecs de_reflect de_task de_platform de_core
     TIMEOUT 60)
+if(TARGET test_nav_settings)
+    # DENG-864: the nav.tiles format tests use the internal nav_build.h.
+    target_include_directories(test_nav_settings PRIVATE "${DE_ROOT_DIR}/src")
+endif()

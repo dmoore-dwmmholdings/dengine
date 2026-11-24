@@ -200,6 +200,53 @@ bool de__nav_container_read(const u8 *data, u64 size, de__nav_container_info *in
 /** Tile `index` of a container that de__nav_container_read accepted (walks from the start). */
 bool de__nav_container_tile(const u8 *data, u64 size, u32 index, de__nav_tile_blob *out);
 
+/* ---- Editor bake file "DNVT" (DENG-864, docs/formats/nav_tiles.md) ------------------------- */
+/*
+ * The editor's baked tiles, one file `nav.tiles` beside the project's `nav.toml`. Little-endian:
+ *   u32 magic 'DNVT' (0x54564E44), u32 version (1), u32 agent_count, u32 reserved (0)
+ *   agent_count x {
+ *     char name[40] (NUL-terminated, NUL padded), f64 bmin_x, f64 bmin_y, f32 tile_size,
+ *     u32 tiles_x, u32 tiles_y, u32 record_count, u64 dnav_size
+ *     record_count x { u32 tile (y * tiles_x + x), u32 polys, u32 links, u32 reserved, u64 fp }
+ *     dnav_size bytes of a DNAV container (0 = no tile has data), zero padding to 8
+ *   }
+ * Records are sorted by tile, one per baked tile of the editor's grid (tiles_x * tiles_y <= 4096).
+ */
+#define DE__NAV_TILES_MAGIC      0x54564E44u
+#define DE__NAV_TILES_VERSION    1u
+#define DE__NAV_TILES_NAME       40u
+#define DE__NAV_TILES_MAX_TILES  4096u
+#define DE__NAV_TILES_MAX_AGENTS 16u
+
+typedef struct de__nav_tile_record {
+    u32 tile, polys, links;
+    u64 fp;
+} de__nav_tile_record;
+
+typedef struct de__nav_tiles_agent {
+    char name[DE__NAV_TILES_NAME];
+    f64 bmin_x, bmin_y;
+    f32 tile_size;
+    u32 tiles_x, tiles_y;
+    u32 record_count;
+    const de__nav_tile_record *records; /* write: the records, sorted by tile */
+    const u8 *record_data;              /* read: the records in the file (de__nav_tiles_record) */
+    const u8 *dnav;                     /* the DNAV container, or NULL */
+    u64 dnav_size;
+} de__nav_tiles_agent;
+
+/** Writes a DNVT file; `*out` comes from `a` (free with size `*out_size`). */
+de_result de__nav_tiles_write(const de_allocator *a, const de__nav_tiles_agent *agents, u32 count,
+                              u8 **out, u64 *out_size);
+/** Checks a DNVT file (each DNAV container included). false with a message in `*why`. */
+bool de__nav_tiles_read(const u8 *data, u64 size, u32 *agent_count, const char **why);
+/** Agent `index` of a file that de__nav_tiles_read accepted (points into `data`). */
+bool de__nav_tiles_agent_at(const u8 *data, u64 size, u32 index, de__nav_tiles_agent *out);
+/** Record `k` of an agent from de__nav_tiles_agent_at. */
+void de__nav_tiles_record(const de__nav_tiles_agent *ag, u32 k, de__nav_tile_record *out);
+/** The tiles file beside settings file `toml_vpath`: ".toml" becomes ".tiles" (else appended). */
+bool de__nav_tiles_path(const char *toml_vpath, char *out, size_t cap);
+
 /* ---- Source format (the `navmesh` importer) -------------------------------------------------- */
 
 /**

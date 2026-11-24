@@ -1,11 +1,11 @@
 /* editor_nav.c: world.nav (DENG-582; DIDE protocol 1.25, DIDE-128, DIDE-R174; DENG-863: 1.27).
  *
  * Methods nav.info, nav.configure, nav.bake, nav.cancelBake, nav.tiles, nav.tileMesh,
- * nav.testPath, nav.testPath2d and nav.overlay, and the topic nav.bake. The service keeps one editor de_nav per
- * agent type, bound (not attached) to the engine's world, and bakes the protocol's tiles one
- * de_nav_rebuild_tiles call each on the nav's task system, a few in flight at a time. The
- * reflected components DeNavLink and DeNavModifier (src/gameplay/nav/nav_components.c) go into
- * every bake as off-mesh links and area or carve volumes. DeNavGrid2D is registered and
+ * nav.testPath, nav.testPath2d and nav.overlay, and the topic nav.bake. The service keeps one
+ * editor de_nav per agent type, bound (not attached) to the engine's world, and bakes the
+ * protocol's tiles one de_nav_rebuild_tiles call each on the nav's task system, a few in flight at
+ * a time. The reflected components DeNavLink and DeNavModifier (src/gameplay/nav/nav_components.c)
+ * go into every bake as off-mesh links and area or carve volumes. DeNavGrid2D is registered and
  * reflected here and the service attaches the `nav2d.grid` system (DENG-832,
  * de_nav2d_grid_attach) to the editor world, unless a game already did. nav.testPath2d runs
  * de_nav2d_find_path on the built grid of a DeNavGrid2D entity; NavInfo.plane2d reports the
@@ -22,10 +22,17 @@
  *
  * Persistence (DENG-833): the settings (agents, areas, bounds, tileSize, autoRebake) live in the
  * project file `nav.toml` beside the root manifest (de_nav_settings_*, de_gameplay.h). The service
- * loads it when the project is known (register, and when the manifest path changes) and nav.configure
- * rewrites it, so a restart keeps them and the game runtime reads the same file.
+ * loads it when the project is known (register, and when the manifest path changes) and
+ * nav.configure rewrites it, so a restart keeps them and the game runtime reads the same file.
  *
- * Limits: the navmeshes are not saved with the scene. tileSize / cellSize must be a whole number of cells from 8 to 1024 (Recast tiles).
+ * Baked tiles (DENG-864): when a bake ends (done, canceled or failed) the service writes every
+ * agent type's baked tiles, with their fingerprints, polygon and link counts, to `nav.tiles`
+ * beside nav.toml (docs/formats/nav_tiles.md). With a new world or project it loads them back
+ * into the agent types of the same name, grid and build settings, so a restart needs no rebake;
+ * tiles whose inputs differ in this world show DIRTY and rebake as usual.
+ *
+ * Limits: one nav.tiles per project, not per scene. tileSize / cellSize must be a whole number of
+ * cells from 8 to 1024 (Recast tiles).
  */
 #if defined(_WIN32)
 #define _CRT_SECURE_NO_WARNINGS /* snprintf */
@@ -112,6 +119,7 @@ typedef struct nv_state {
     u32 tiles_x, tiles_y;
     bool auto_rebake;
     char settings_path[1024]; /* the nav.toml last loaded or written; empty = no project */
+    bool tiles_pending;       /* nav.tiles to load (new world or new project) */
     u64 revision;
     u64 frame;
 
@@ -575,10 +583,13 @@ static void enqueue(u32 agent, u32 t) {
     ++g_nv.total;
 }
 
+static void save_tiles(de__editor *ed);
+
 static void fail_bake(de__editor *ed, const char *why) {
     clear_queue();
     send_progress(ed, DE_EP_NAV_BAKE_STATE_FAILED, why);
     g_nv.running = false;
+    save_tiles(ed); /* the tiles that landed */
 }
 
 /* Applies finished rebuilds and records their tiles. */
@@ -721,6 +732,7 @@ static void sync_world(de__editor *ed) {
     drop_all();
     g_nv.world = w;
     g_nv.has_ids = false;
+    g_nv.tiles_pending = w != NULL;
     if (w != NULL) {
         (void)ensure_ids(ed);
         /* DENG-863: the 2D grids nav.testPath2d and the grid overlay read. A no-op when the
@@ -840,6 +852,7 @@ static void load_project(de__editor *ed) {
     if (g_nv.running || any_baked())
         return;
     memcpy(g_nv.settings_path, path, sizeof path);
+    g_nv.tiles_pending = true;
     de_nav_settings s;
     const de_result r = de_nav_settings_load(path, &s);
     if (r == DE_OK) {
@@ -862,6 +875,142 @@ static void save_project(de__editor *ed) {
         DE_WARN(ed->log, "nav: could not write %s: %s", path, de_error_last()->message);
         de_error_clear();
     }
+}
+
+/* ---------- Baked tiles nav.tiles (DENG-864) ---------- */
+
+static bool same_desc(const de_navmesh_build_desc *a, const de_navmesh_build_desc *b) {
+    return a->tile_size == b->tile_size && a->cell_size == b->cell_size &&
+           a->cell_height == b->cell_height && a->agent_radius == b->agent_radius &&
+           a->agent_height == b->agent_height && a->agent_max_climb == b->agent_max_climb &&
+           a->agent_max_slope_rad == b->agent_max_slope_rad &&
+           a->collision_mask == b->collision_mask;
+}
+
+static bool tiles_vpath(de__editor *ed, char *out, size_t cap) {
+    char toml[1024];
+    return settings_vpath(ed, toml, sizeof toml) && de__nav_tiles_path(toml, out, cap);
+}
+
+static de__nav_tile_record g_records[NV_MAX_AGENTS][NV_MAX_TILES];
+static i32 g_txz[NV_MAX_TILES * 2];
+
+/* Writes the baked tiles of every agent type, with their fingerprints, to nav.tiles. Called when
+ * a bake ends; a tile baked empty is a record with no Detour data. */
+static void save_tiles(de__editor *ed) {
+    char path[1024];
+    if (!tiles_vpath(ed, path, sizeof path))
+        return; /* no project yet */
+    de__nav_tiles_agent ags[NV_MAX_AGENTS];
+    u8 *dnav[NV_MAX_AGENTS] = {NULL};
+    memset(ags, 0, sizeof ags);
+    bool ok = true;
+    for (u32 i = 0; i < g_nv.agent_count; ++i) {
+        de__nav_tiles_agent *g = &ags[i];
+        const nv_nav *n = &g_nv.navs[i];
+        snprintf(g->name, sizeof g->name, "%s", g_nv.agents[i].name);
+        g->bmin_x = g_nv.bmin[0], g->bmin_y = g_nv.bmin[1];
+        g->tile_size = g_nv.tile_size;
+        g->tiles_x = g_nv.tiles_x, g->tiles_y = g_nv.tiles_y;
+        g->records = g_records[i];
+        if (n->tiles == NULL || n->nav == NULL)
+            continue;
+        u32 pairs = 0;
+        for (u32 t = 0; t < tile_count(); ++t) {
+            const nv_tile *r = &n->tiles[t];
+            if (!r->baked)
+                continue;
+            g_records[i][g->record_count++] = (de__nav_tile_record){t, r->polys, r->links, r->fp};
+            i32 tx, tz;
+            if (engine_tile(n, t, &tx, &tz)) {
+                g_txz[pairs * 2u] = tx;
+                g_txz[pairs * 2u + 1u] = tz;
+                ++pairs;
+            }
+        }
+        if (de__nav_write_container(n->nav, heap(), g_txz, pairs, &dnav[i], &g->dnav_size) !=
+            DE_OK) {
+            ok = false;
+            break;
+        }
+        g->dnav = dnav[i];
+    }
+    u8 *file = NULL;
+    u64 size = 0;
+    if (ok && de__nav_tiles_write(heap(), ags, g_nv.agent_count, &file, &size) == DE_OK) {
+        if (de_file_write_all_atomic(path, file, size) != DE_OK) {
+            DE_WARN(ed->log, "nav: could not write %s: %s", path, de_error_last()->message);
+            de_error_clear();
+        }
+        DE_FREE(heap(), file, (size_t)size);
+    } else {
+        DE_WARN(ed->log, "nav: could not encode %s", path);
+    }
+    for (u32 i = 0; i < NV_MAX_AGENTS; ++i)
+        if (dnav[i] != NULL)
+            DE_FREE(heap(), dnav[i], (size_t)ags[i].dnav_size);
+}
+
+/* Loads nav.tiles into agent types of the same name, grid and build settings, so a restart keeps
+ * the bake. Only into a world with no tile baked and no bake running. The tiles keep their saved
+ * fingerprints, so the ones whose inputs differ in this world are DIRTY (and auto rebake redoes
+ * them). A missing file is quiet; a bad one is logged and ignored (the next bake rewrites it). */
+static void load_tiles(de__editor *ed) {
+    g_nv.tiles_pending = false;
+    char path[1024];
+    if (g_nv.world == NULL || g_nv.running || any_baked() || !tiles_vpath(ed, path, sizeof path))
+        return;
+    void *data = NULL;
+    u64 size = 0;
+    if (de_file_read_all(path, heap(), &data, &size) != DE_OK) {
+        de_error_clear();
+        return;
+    }
+    const u8 *bytes = (const u8 *)data;
+    u32 count = 0;
+    const char *why = NULL;
+    if (!de__nav_tiles_read(bytes, size, &count, &why)) {
+        DE_WARN(ed->log, "nav: %s ignored: %s", path, why != NULL ? why : "malformed");
+        count = 0;
+    }
+    for (u32 k = 0; k < count; ++k) {
+        de__nav_tiles_agent g;
+        if (!de__nav_tiles_agent_at(bytes, size, k, &g))
+            continue;
+        const i32 i = agent_index(de_ep_cstr(g.name));
+        if (i < 0 || g.bmin_x != g_nv.bmin[0] || g.bmin_y != g_nv.bmin[1] ||
+            g.tile_size != g_nv.tile_size || g.tiles_x != g_nv.tiles_x || g.tiles_y != g_nv.tiles_y)
+            continue; /* another grid or agent type: the tiles do not apply */
+        if (g.dnav_size > 0) {
+            de__nav_container_info info;
+            const de_navmesh_build_desc d = desc_of(&g_nv.agents[i]);
+            if (!de__nav_container_read(g.dnav, g.dnav_size, &info, NULL) ||
+                !same_desc(&info.desc, &d))
+                continue; /* baked with other agent settings */
+        }
+        if (!nav_ensure(ed, (u32)i))
+            continue;
+        nv_nav *n = &g_nv.navs[i];
+        if (g.dnav_size > 0 && de__nav_add_container(n->nav, g.dnav, g.dnav_size) != DE_OK) {
+            DE_WARN(ed->log, "nav: %s: tiles of %s skipped: %s", path, g.name,
+                    de_error_last()->message);
+            de_error_clear();
+            nav_reset(n);
+            continue;
+        }
+        for (u32 r = 0; r < g.record_count; ++r) {
+            de__nav_tile_record rec;
+            de__nav_tiles_record(&g, r, &rec);
+            nv_tile *t = &n->tiles[rec.tile];
+            t->baked = true;
+            t->revision = ++g_nv.revision;
+            t->polys = rec.polys;
+            t->links = rec.links;
+            t->fp = rec.fp;
+            t->ms = 0.0f;
+        }
+    }
+    DE_FREE(heap(), data, (size_t)size + 1);
 }
 
 /* ---------- nav.info ---------- */
@@ -1258,6 +1407,7 @@ static void on_cancel(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
     de_ep_write_response_nav_cancel_bake(w, req->id, &o);
     send_progress(ed, DE_EP_NAV_BAKE_STATE_CANCELED, NULL);
     g_nv.running = false;
+    save_tiles(ed); /* the tiles that landed */
 }
 
 /* ---------- nav.tiles and nav.tileMesh ---------- */
@@ -1748,6 +1898,8 @@ static void tick(de__editor *ed) {
     load_project(ed);
     if (g_nv.world == NULL)
         return;
+    if (g_nv.tiles_pending)
+        load_tiles(ed);
     ++g_nv.frame;
     land(ed);
     if (g_nv.running) {
@@ -1757,6 +1909,7 @@ static void tick(de__editor *ed) {
         if (g_nv.qcount == 0 && !bake_in_flight()) {
             send_progress(ed, DE_EP_NAV_BAKE_STATE_DONE, NULL);
             g_nv.running = false;
+            save_tiles(ed);
         } else if (g_nv.landed_count > 0) {
             send_progress(ed, DE_EP_NAV_BAKE_STATE_RUNNING, NULL);
         }
@@ -1787,6 +1940,8 @@ void de__ed_nav_register(de__editor *ed) {
     load_project(ed);
     g_nv.cat = de_draw_category_register("navigation", 0x60e060, false);
     sync_world(ed);
+    if (g_nv.tiles_pending)
+        load_tiles(ed);
     de__ed_on(ed, DE_EP_METHOD_NAV_INFO, on_info);
     de__ed_on(ed, DE_EP_METHOD_NAV_CONFIGURE, on_configure);
     de__ed_on(ed, DE_EP_METHOD_NAV_BAKE, on_bake);

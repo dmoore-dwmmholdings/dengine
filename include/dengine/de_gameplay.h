@@ -43,8 +43,10 @@ DE_API de_navmesh de_asset_navmesh(de_asset_system *s, de_asset_id id);
  * The settings the editor's `nav.configure` writes and the game runtime reads: agent types, area
  * names and costs, bounds, tile size and auto rebake, in the project file `nav.toml` (TOML,
  * `[[agent]]`, `[[area]]`, `[bounds]`). The editor loads it at start and rewrites it on every
- * `nav.configure`; the runtime loads the same file and bakes with it. Baked tiles are not stored
- * (the `navmesh` asset holds cooked tiles). Main thread only. */
+ * `nav.configure`; the runtime loads the same file and bakes with it. DENG-864: when a bake ends
+ * the editor also writes the baked tiles of every agent type to `nav.tiles` beside nav.toml
+ * (format: docs/formats/nav_tiles.md); the runtime adds them with de_nav_settings_load_tiles
+ * instead of baking. The `navmesh` asset still holds cooked tiles. Main thread only. */
 #define DE_NAV_MAX_AGENTS     4u
 #define DE_NAV_MAX_AREAS      16u
 #define DE_NAV_AGENT_NAME_MAX 32u
@@ -95,6 +97,13 @@ DE_API de_result de_nav_settings_build_desc(const de_nav_settings *s, u32 agent,
 /** Runtime nav setup: rebuilds every tile of the bounds for agent `agent` of `s` (background, as
  *  de_nav_rebuild_tiles). Call it once per agent type after the world is attached. */
 DE_API de_result de_nav_settings_bake(de_nav *n, const de_nav_settings *s, u32 agent);
+/** Adds the tiles the editor baked for agent type `agent` from the tiles file `vpath` (the
+ *  project's `nav.tiles`, beside nav.toml), as de_nav_add_navmesh does with a cooked navmesh. No
+ *  build runs. DE_ERR_NOT_FOUND when the file or the agent type is absent (bake with
+ *  de_nav_settings_bake instead), DE_ERR_PARSE when the file is malformed, DE_ERR_INVALID_ARGUMENT
+ *  when its tile size or origin differs from the navmesh's. The file is not checked against the
+ *  world: the editor rewrites it after each bake. */
+DE_API de_result de_nav_settings_load_tiles(de_nav *n, const char *vpath, const char *agent);
 
 /* ---- DENG-77: queries, off-mesh links, dynamic obstacles ----
  * Queries run on the main thread or on a frame worker of the nav's task system (one Detour
