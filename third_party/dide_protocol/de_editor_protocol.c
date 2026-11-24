@@ -319,6 +319,28 @@ bool de_ep_nav_bake_state_parse(de_ep_str s, de_ep_nav_bake_state *out) {
     return false;
 }
 
+const char *de_ep_nav_plane2d_name(de_ep_nav_plane2d v) {
+    switch (v) {
+    case DE_EP_NAV_PLANE2D_SIDE_XZ:
+        return "side_xz";
+    case DE_EP_NAV_PLANE2D_TOP_XY:
+        return "top_xy";
+    }
+    return "";
+}
+
+bool de_ep_nav_plane2d_parse(de_ep_str s, de_ep_nav_plane2d *out) {
+    if (de_ep_str_eq(s, "side_xz")) {
+        *out = DE_EP_NAV_PLANE2D_SIDE_XZ;
+        return true;
+    }
+    if (de_ep_str_eq(s, "top_xy")) {
+        *out = DE_EP_NAV_PLANE2D_TOP_XY;
+        return true;
+    }
+    return false;
+}
+
 const char *de_ep_nav_tile_state_name(de_ep_nav_tile_state v) {
     switch (v) {
     case DE_EP_NAV_TILE_STATE_UNBAKED:
@@ -7746,6 +7768,7 @@ void de_ep_write_nav_info(mpack_writer_t *w, const de_ep_nav_info *v) {
     ++n;
     n += v->has_bake ? 1u : 0u;
     ++n;
+    n += v->has_plane2d ? 1u : 0u;
     mpack_start_map(w, n);
     mpack_write_cstr(w, "revision");
     mpack_write_u64(w, v->revision);
@@ -7791,6 +7814,10 @@ void de_ep_write_nav_info(mpack_writer_t *w, const de_ep_nav_info *v) {
     }
     mpack_write_cstr(w, "overlay");
     de_ep_write_nav_overlay_params(w, &v->overlay);
+    if (v->has_plane2d) {
+        mpack_write_cstr(w, "plane2d");
+        mpack_write_cstr(w, de_ep_nav_plane2d_name(v->plane2d));
+    }
     mpack_finish_map(w);
 }
 
@@ -7865,6 +7892,15 @@ void de_ep_read_nav_info(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_info *out)
         } else if (de_ep_str_eq(k, "overlay")) {
             seen |= (uint64_t)1 << 14;
             de_ep_read_nav_overlay_params(r, a, &out->overlay);
+        } else if (de_ep_str_eq(k, "plane2d")) {
+            seen |= (uint64_t)1 << 15;
+            out->has_plane2d = true;
+            {
+                de_ep_str s_;
+                de_ep_read_str(r, &s_);
+                if (!de_ep_nav_plane2d_parse(s_, &out->plane2d))
+                    mpack_reader_flag_error(r, mpack_error_data);
+            }
         } else {
             mpack_discard(r);
         }
@@ -7881,6 +7917,7 @@ void de_ep_write_nav_overlay_params(mpack_writer_t *w, const de_ep_nav_overlay_p
     ++n;
     ++n;
     n += v->has_path ? 1u : 0u;
+    n += v->has_grids ? 1u : 0u;
     mpack_start_map(w, n);
     if (v->has_agent) {
         mpack_write_cstr(w, "agent");
@@ -7899,6 +7936,10 @@ void de_ep_write_nav_overlay_params(mpack_writer_t *w, const de_ep_nav_overlay_p
             mpack_write_double(w, v->path.items[i_2]);
         }
         mpack_finish_array(w);
+    }
+    if (v->has_grids) {
+        mpack_write_cstr(w, "grids");
+        mpack_write_bool(w, v->grids);
     }
     mpack_finish_map(w);
 }
@@ -7933,6 +7974,10 @@ void de_ep_read_nav_overlay_params(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_
                 out->path.items[i_3] = mpack_expect_double(r);
             }
             mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "grids")) {
+            seen |= (uint64_t)1 << 5;
+            out->has_grids = true;
+            out->grids = mpack_expect_bool(r);
         } else {
             mpack_discard(r);
         }
@@ -8033,6 +8078,125 @@ void de_ep_read_nav_path(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_path *out)
     }
     mpack_done_map(r);
     if ((seen & UINT64_C(127)) != UINT64_C(127))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_nav_path2d(mpack_writer_t *w, const de_ep_nav_path2d *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "points");
+    mpack_start_array(w, v->points.count);
+    for (uint32_t i_1 = 0; i_1 < v->points.count; ++i_1) {
+        mpack_write_double(w, v->points.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "length");
+    mpack_write_double(w, v->length);
+    mpack_write_cstr(w, "revision");
+    mpack_write_u64(w, v->revision);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_nav_path2d(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_path2d *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "points")) {
+            seen |= (uint64_t)1 << 0;
+            out->points.count = mpack_expect_array(r);
+            out->points.items = (double *)de_ep_arena_array(r, a, out->points.count, sizeof(*out->points.items));
+            for (uint32_t i_3 = 0; out->points.items && i_3 < out->points.count; ++i_3)
+            {
+                out->points.items[i_3] = mpack_expect_double(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "length")) {
+            seen |= (uint64_t)1 << 1;
+            out->length = mpack_expect_double(r);
+        } else if (de_ep_str_eq(k, "revision")) {
+            seen |= (uint64_t)1 << 2;
+            out->revision = mpack_expect_u64(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(7)) != UINT64_C(7))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_nav_test_path2d_params(mpack_writer_t *w, const de_ep_nav_test_path2d_params *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    n += v->has_jps ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "grid");
+    mpack_write_u64(w, v->grid);
+    mpack_write_cstr(w, "from");
+    mpack_start_array(w, v->from.count);
+    for (uint32_t i_1 = 0; i_1 < v->from.count; ++i_1) {
+        mpack_write_double(w, v->from.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "to");
+    mpack_start_array(w, v->to.count);
+    for (uint32_t i_1 = 0; i_1 < v->to.count; ++i_1) {
+        mpack_write_double(w, v->to.items[i_1]);
+    }
+    mpack_finish_array(w);
+    if (v->has_jps) {
+        mpack_write_cstr(w, "jps");
+        mpack_write_bool(w, v->jps);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_nav_test_path2d_params(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_test_path2d_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "grid")) {
+            seen |= (uint64_t)1 << 0;
+            out->grid = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "from")) {
+            seen |= (uint64_t)1 << 1;
+            out->from.count = mpack_expect_array(r);
+            out->from.items = (double *)de_ep_arena_array(r, a, out->from.count, sizeof(*out->from.items));
+            for (uint32_t i_3 = 0; out->from.items && i_3 < out->from.count; ++i_3)
+            {
+                out->from.items[i_3] = mpack_expect_double(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "to")) {
+            seen |= (uint64_t)1 << 2;
+            out->to.count = mpack_expect_array(r);
+            out->to.items = (double *)de_ep_arena_array(r, a, out->to.count, sizeof(*out->to.items));
+            for (uint32_t i_3 = 0; out->to.items && i_3 < out->to.count; ++i_3)
+            {
+                out->to.items[i_3] = mpack_expect_double(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "jps")) {
+            seen |= (uint64_t)1 << 3;
+            out->has_jps = true;
+            out->jps = mpack_expect_bool(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(7)) != UINT64_C(7))
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
@@ -16108,6 +16272,7 @@ static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
     "nav.info",
     "nav.overlay",
     "nav.testPath",
+    "nav.testPath2d",
     "nav.tileMesh",
     "nav.tiles",
     "net.checksums",
@@ -16250,6 +16415,7 @@ static const char *const de_ep__capabilities[DE_EP_METHOD_COUNT] = {
     "assets.materialGraph",
     "assets.materialGraph",
     "assets.materialGraph",
+    "world.nav",
     "world.nav",
     "world.nav",
     "world.nav",
@@ -17147,6 +17313,19 @@ bool de_ep_read_params_nav_test_path(const de_ep_request *req, de_ep_arena *a, d
 void de_ep_write_response_nav_test_path(mpack_writer_t *w, uint64_t id, const de_ep_nav_path *result) {
     de_ep_write_result_begin(w, id);
     de_ep_write_nav_path(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_nav_test_path2d(const de_ep_request *req, de_ep_arena *a, de_ep_nav_test_path2d_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_nav_test_path2d_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_nav_test_path2d(mpack_writer_t *w, uint64_t id, const de_ep_nav_path2d *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_nav_path2d(w, result);
     de_ep_write_result_end(w);
 }
 

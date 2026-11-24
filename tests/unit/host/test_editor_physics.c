@@ -200,7 +200,7 @@ TEST_F(editor_physics, advertises_the_capabilities, phys_fx) {
     }
     EXPECT_TRUE(authoring);
     EXPECT_TRUE(spring);
-    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.26"); /* pinned dide 8ba115b0 (DENG-831) */
+    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.27"); /* pinned dide 4538ed96 (DENG-863) */
 }
 
 /* The DIDE conformance probes at 1.23. */

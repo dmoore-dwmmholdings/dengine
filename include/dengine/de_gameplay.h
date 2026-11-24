@@ -265,6 +265,9 @@ DE_API void de_nav2d_grid_flush(de_world *w);
  *         component is not a valid grid.
  */
 DE_API bool de_nav2d_grid_get(de_world *w, de_entity e, de_nav2d_grid *out, u32 *revision);
+/** The plane the grid system of `w` was attached with (DENG-863: the editor reports it as
+ *  NavInfo.plane2d). False (and `*out` untouched) when `w` has no grid system. */
+DE_API bool de_nav2d_grid_plane(de_world *w, de_plane_2d *out);
 
 /* ===================== Tilemaps (LDtk / Tiled / Aseprite tilesets) ===================== */
 typedef struct DeTilemap {

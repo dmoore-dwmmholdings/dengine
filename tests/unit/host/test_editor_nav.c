@@ -5,6 +5,10 @@
  *   jump_link_used           AC2: a DeNavLink across a gap is used by nav.testPath
  *   cancel_and_overlay       nav.cancelBake and nav.overlay round-trip through nav.info
  *   settings_persist         DENG-833: nav.configure writes nav.toml; a new service reads it back
+ *   plane2d_in_info          DENG-863: nav.info.plane2d is side_xz by default, or the system's plane
+ *   test_path2d_found        DENG-863: nav.testPath2d finds a path around blocked cells (jps on, off)
+ *   test_path2d_errors       DENG-863: each not_found and invalid_params case of nav.testPath2d
+ *   overlay_grids            DENG-863: nav.overlay grids draws the DeNavGrid2D cells
  */
 #if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
 #define _DARWIN_C_SOURCE
@@ -18,6 +22,7 @@
 #include "gameplay/nav/nav_components.h"
 #include "host/editor/editor_internal.h"
 #include "host/host_internal.h"
+#include <dengine/de_debug.h>
 #include <dengine/de_ecs.h>
 #include <dengine/de_physics.h>
 #include <dengine/de_gameplay.h>
@@ -32,6 +37,8 @@
 #define STORAGE  (4u << 20)
 #define RESPONSE (1u << 20)
 #define PARAMS   (64u << 10)
+
+#define EXPECT_NEAR(a, b, t) EXPECT_TRUE(fabs((a) - (b)) < (t))
 
 typedef struct nav_fx {
     de_engine engine;
@@ -593,6 +600,204 @@ TEST_F(editor_nav, settings_persist, nav_fx) {
     EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(r, "areas")), 2u);
     de__ed_nav_set_settings_path(NULL);
     ASSERT_EQ(de_file_delete("ednav:/nav.toml"), DE_OK);
+}
+
+/* ---------- DENG-863: nav.testPath2d, NavInfo.plane2d, NavOverlayParams.grids ---------- */
+
+/* A DeNavGrid2D entity at (x, y, z): `w` x `h` cells of `cs` m, area 0 everywhere except the
+ * `blocked` cells (given as x, y pairs). */
+static de_entity add_grid(nav_fx *f, f64 x, f64 y, f64 z, u32 w, u32 h, f32 cs, const u32 *blocked,
+                          u32 nblocked) {
+    de_world *world = f->engine.world;
+    const de_builtin_component_ids b = de_builtin_components(world);
+    const de_entity e = de_entity_spawn(world);
+    de_transform *t = (de_transform *)de_entity_add(world, e, b.transform);
+    ASSERT_TRUE(t != NULL);
+    *t = de_transform_identity();
+    t->position.x = x, t->position.y = y, t->position.z = z;
+    const de_component gc = de_component_find(world, "DeNavGrid2D");
+    DeNavGrid2D *g = (DeNavGrid2D *)de_entity_add(world, e, gc);
+    ASSERT_TRUE(g != NULL);
+    memset(g, 0, sizeof *g);
+    g->width = w, g->height = h, g->cell_size = cs;
+    for (u32 i = 0; i < nblocked; ++i)
+        g->cells[blocked[i * 2 + 1] * w + blocked[i * 2]] = DE_NAV_GRID2D_BLOCKED;
+    return e;
+}
+
+typedef struct path2d_rec {
+    bool ok;
+    de_ep_error code;
+    u32 points;
+    f64 first[3], last[3], length;
+    u64 revision;
+} path2d_rec;
+static path2d_rec test_path2d(nav_fx *f, u64 grid, const double *from, u32 nfrom, const double *to,
+                              bool has_jps, bool jps) {
+    de_ep_nav_test_path2d_params q;
+    memset(&q, 0, sizeof q);
+    q.grid = grid;
+    q.from = (de_ep_list_f64){(double *)from, nfrom};
+    q.to = (de_ep_list_f64){(double *)to, 3};
+    q.has_jps = has_jps;
+    q.jps = jps;
+    mpack_writer_t w;
+    mpack_writer_init(&w, f->params, PARAMS);
+    de_ep_write_nav_test_path2d_params(&w, &q);
+    const size_t psize = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    const de_ep_request req = {.id = 7, .method = de_ep_cstr("nav"), .params = {f->params, psize}};
+    ASSERT_TRUE(f->editor.handlers[DE_EP_METHOD_NAV_TEST_PATH2D] != NULL);
+    de_ep_arena a = {f->storage, STORAGE, 0};
+    mpack_writer_init(&w, f->response, RESPONSE);
+    f->editor.handlers[DE_EP_METHOD_NAV_TEST_PATH2D](&f->editor, &req, &a, &w);
+    const size_t size = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    if (f->parsed)
+        mpack_tree_destroy(&f->tree);
+    mpack_tree_init_data(&f->tree, f->response, size);
+    mpack_tree_parse(&f->tree);
+    f->parsed = true;
+    ASSERT_EQ(mpack_tree_error(&f->tree), mpack_ok);
+    mpack_node_t root = mpack_tree_root(&f->tree);
+    path2d_rec p;
+    memset(&p, 0, sizeof p);
+    if (mpack_node_map_contains_cstr(root, "error")) {
+        p.code = (de_ep_error)mpack_node_i32(
+            mpack_node_map_cstr(mpack_node_map_cstr(root, "error"), "code"));
+        return p;
+    }
+    mpack_node_t r = mpack_node_map_cstr(root, "result");
+    p.ok = true;
+    mpack_node_t pts = mpack_node_map_cstr(r, "points");
+    p.points = (u32)mpack_node_array_length(pts) / 3;
+    for (u32 k = 0; p.points > 0 && k < 3; ++k) {
+        p.first[k] = mpack_node_double(mpack_node_array_at(pts, k));
+        p.last[k] = mpack_node_double(mpack_node_array_at(pts, (p.points - 1) * 3 + k));
+    }
+    p.length = mpack_node_double(mpack_node_map_cstr(r, "length"));
+    p.revision = mpack_node_u64(mpack_node_map_cstr(r, "revision"));
+    return p;
+}
+
+TEST_F(editor_nav, plane2d_in_info, nav_fx) {
+    mpack_node_t r = result_of(call(f, DE_EP_METHOD_NAV_INFO, NULL));
+    EXPECT_TRUE(is_str(mpack_node_map_cstr(r, "plane2d"), "side_xz"));
+    mpack_node_t ov = mpack_node_map_cstr(r, "overlay");
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(ov, "grids")));
+    /* A game that attached the system on the top-down plane first: the service reports it. */
+    de_nav2d_grid_detach(f->engine.world);
+    ASSERT_EQ(de_nav2d_grid_attach(f->engine.world, &(de_nav2d_grid_system_desc){.plane = DE_PLANE_TOP_XY}),
+              DE_OK);
+    r = result_of(call(f, DE_EP_METHOD_NAV_INFO, NULL));
+    EXPECT_TRUE(is_str(mpack_node_map_cstr(r, "plane2d"), "top_xy"));
+}
+
+TEST_F(editor_nav, test_path2d_found, nav_fx) {
+    /* 5 x 3 cells of 1 m at world (10, 7, 20); the plane is side_xz, so cell (cx, cy) has its
+     * centre at (10.5 + cx, 7, 20.5 + cy). Column 2 is blocked at rows 0 and 1. */
+    const u32 blocked[] = {2, 0, 2, 1};
+    const de_entity e = add_grid(f, 10, 7, 20, 5, 3, 1.0f, blocked, 2);
+    const double from[3] = {10.5, 99, 20.5}, to[3] = {14.5, -3, 20.5};
+    path2d_rec p = test_path2d(f, e.bits, from, 3, to, false, false); /* jps absent: true */
+    ASSERT_TRUE(p.ok);
+    EXPECT_GE(p.points, 3u);
+    EXPECT_NEAR(p.first[0], 10.5, 1e-6);
+    EXPECT_NEAR(p.first[1], 7.0, 1e-6); /* the grid entity's off-plane coordinate */
+    EXPECT_NEAR(p.first[2], 20.5, 1e-6);
+    EXPECT_NEAR(p.last[0], 14.5, 1e-6);
+    EXPECT_NEAR(p.last[1], 7.0, 1e-6);
+    EXPECT_NEAR(p.last[2], 20.5, 1e-6);
+    EXPECT_TRUE(p.length > 4.0); /* it goes around the wall */
+    EXPECT_GT(p.revision, 0u);
+    const f64 jps_length = p.length;
+    p = test_path2d(f, e.bits, from, 3, to, true, false);
+    ASSERT_TRUE(p.ok);
+    EXPECT_NEAR(p.length, jps_length, 1e-4); /* A* and JPS agree on the cost */
+    p = test_path2d(f, e.bits, from, 3, to, true, true);
+    ASSERT_TRUE(p.ok);
+    EXPECT_NEAR(p.length, jps_length, 1e-4);
+    /* The same cell: one point, no length. */
+    p = test_path2d(f, e.bits, from, 3, from, false, false);
+    ASSERT_TRUE(p.ok);
+    EXPECT_EQ(p.points, 1u);
+    EXPECT_NEAR(p.length, 0.0, 1e-9);
+}
+
+TEST_F(editor_nav, test_path2d_errors, nav_fx) {
+    const u32 blocked[] = {2, 0, 2, 1};
+    const de_entity e = add_grid(f, 10, 7, 20, 5, 3, 1.0f, blocked, 2);
+    const u32 wall[] = {2, 0, 2, 1, 2, 2};
+    const de_entity split = add_grid(f, 0, 0, 0, 5, 3, 1.0f, wall, 3);
+    const double in_a[3] = {10.5, 0, 20.5}, in_b[3] = {14.5, 0, 20.5};
+    /* not_found: an end outside the grid. */
+    const double outside[3] = {0.0, 0, 0.0};
+    path2d_rec p = test_path2d(f, e.bits, outside, 3, in_b, false, false);
+    EXPECT_FALSE(p.ok);
+    EXPECT_EQ(p.code, DE_EP_ERR_NOT_FOUND);
+    p = test_path2d(f, e.bits, in_a, 3, outside, false, false);
+    EXPECT_EQ(p.code, DE_EP_ERR_NOT_FOUND);
+    /* not_found: an end on a blocked cell (cell (2, 0)). */
+    const double on_wall[3] = {12.5, 0, 20.5};
+    p = test_path2d(f, e.bits, on_wall, 3, in_b, false, false);
+    EXPECT_EQ(p.code, DE_EP_ERR_NOT_FOUND);
+    p = test_path2d(f, e.bits, in_a, 3, on_wall, false, false);
+    EXPECT_EQ(p.code, DE_EP_ERR_NOT_FOUND);
+    /* not_found: the ends are not connected (a full wall in column 2). */
+    const double s_a[3] = {0.5, 0, 0.5}, s_b[3] = {4.5, 0, 0.5};
+    p = test_path2d(f, split.bits, s_a, 3, s_b, true, true);
+    EXPECT_FALSE(p.ok);
+    EXPECT_EQ(p.code, DE_EP_ERR_NOT_FOUND);
+    p = test_path2d(f, split.bits, s_a, 3, s_b, true, false);
+    EXPECT_EQ(p.code, DE_EP_ERR_NOT_FOUND);
+    /* invalid_params: an entity with no grid, a dead entity, and a grid that is not valid. */
+    const de_entity plain = de_entity_spawn(f->engine.world);
+    p = test_path2d(f, plain.bits, in_a, 3, in_b, false, false);
+    EXPECT_EQ(p.code, DE_EP_ERR_INVALID_PARAMS);
+    p = test_path2d(f, 0xdeadbeefull, in_a, 3, in_b, false, false);
+    EXPECT_EQ(p.code, DE_EP_ERR_INVALID_PARAMS);
+    const de_entity bad = add_grid(f, 0, 0, 0, 0, 3, 1.0f, NULL, 0); /* width 0 */
+    p = test_path2d(f, bad.bits, in_a, 3, in_b, false, false);
+    EXPECT_EQ(p.code, DE_EP_ERR_INVALID_PARAMS);
+    /* invalid_params: a bad point (2 values, or not finite). */
+    p = test_path2d(f, e.bits, in_a, 2, in_b, false, false);
+    EXPECT_EQ(p.code, DE_EP_ERR_INVALID_PARAMS);
+    const double nan3[3] = {NAN, 0, 20.5};
+    p = test_path2d(f, e.bits, in_a, 3, nan3, false, false);
+    EXPECT_EQ(p.code, DE_EP_ERR_INVALID_PARAMS);
+}
+
+TEST_F(editor_nav, overlay_grids, nav_fx) {
+    const u32 blocked[] = {1, 1};
+    add_grid(f, 0, 0, 0, 3, 2, 2.0f, blocked, 1);
+    de_draw_line_item items[1024];
+    /* Off by default: nothing is drawn. */
+    frame(f);
+    EXPECT_EQ(de_draw_update(0.0f, items, 1024), 0u);
+    /* grids on, with no agent type: the cells are drawn in the navigation category. */
+    de_ep_nav_overlay_params oq;
+    memset(&oq, 0, sizeof oq);
+    oq.has_grids = true;
+    oq.grids = true;
+    result_of(call(f, DE_EP_METHOD_NAV_OVERLAY, &oq));
+    frame(f);
+    const u32 on = de_draw_update(0.0f, items, 1024);
+    EXPECT_GE(on, 6u); /* at least one line per cell */
+    mpack_node_t r = result_of(call(f, DE_EP_METHOD_NAV_INFO, NULL));
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(mpack_node_map_cstr(r, "overlay"), "grids")));
+    /* Blocked cells are drawn dark, walkable ones are not. */
+    u32 dark = 0, bright = 0;
+    for (u32 i = 0; i < on; ++i) {
+        const bool d = items[i].color.x < 0.2f && items[i].color.y < 0.2f;
+        dark += d, bright += !d;
+    }
+    EXPECT_GT(dark, 0u);
+    EXPECT_GT(bright, 0u);
+    /* Switched off again. */
+    oq.grids = false;
+    result_of(call(f, DE_EP_METHOD_NAV_OVERLAY, &oq));
+    frame(f);
+    EXPECT_EQ(de_draw_update(0.0f, items, 1024), 0u);
 }
 
 #endif /* !DE_SHIPPING */

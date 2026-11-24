@@ -231,6 +231,14 @@ bool de_nav2d_grid_get(de_world *w, de_entity e, de_nav2d_grid *out, u32 *revisi
     return true;
 }
 
+bool de_nav2d_grid_plane(de_world *w, de_plane_2d *out) {
+    const de__nav2d_grid_sys *s = sys_of(w);
+    if (s == NULL || out == NULL)
+        return false;
+    *out = s->plane;
+    return true;
+}
+
 /* ---- Attach ---------------------------------------------------------------------------------- */
 
 static void ref_destruct(void *obj) {

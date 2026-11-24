@@ -5,6 +5,7 @@
  *   test_nav2d_grid_build_and_path   an added grid is built; blocked cells (255) stop a path
  *   test_nav2d_grid_unchanged_no_alloc  runs with no change rebuild nothing and allocate nothing
  *   test_nav2d_grid_change_rebuilds  a write to the component builds the grid again
+ *   test_nav2d_grid_plane            de_nav2d_grid_plane reports the attached plane (DENG-863)
  *   test_nav2d_grid_origin           the origin follows DeTransform on the system's plane
  *   test_nav2d_grid_remove_despawn   removing the component or despawning frees the grid
  *   test_nav2d_grid_invalid          bad width, height or cell_size build no grid
@@ -170,6 +171,18 @@ TEST(nav2d_grid, test_nav2d_grid_change_rebuilds) {
     de_nav2d_grid_flush(f.w);
     ASSERT_TRUE(de_nav2d_grid_get(f.w, e, &ng, &rev2));
     EXPECT_EQ(rev2, rev1 + 1u);
+    teardown(&f);
+}
+
+/* DENG-863: the system reports the plane it was attached with. */
+TEST(nav2d_grid, test_nav2d_grid_plane) {
+    fixture f;
+    de_plane_2d p = DE_PLANE_SIDE_XZ;
+    setup(&f, DE_PLANE_TOP_XY);
+    ASSERT_TRUE(de_nav2d_grid_plane(f.w, &p));
+    EXPECT_EQ((int)p, (int)DE_PLANE_TOP_XY);
+    de_nav2d_grid_detach(f.w);
+    EXPECT_FALSE(de_nav2d_grid_plane(f.w, &p));
     teardown(&f);
 }
 
