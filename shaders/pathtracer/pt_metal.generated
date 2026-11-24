@@ -2103,6 +2103,7 @@ struct PtFog_0
     array<float4, int(3)> inverse_0;
     float4 extent_density_0;
     float4 albedo_g_0;
+    float4 params_1;
 };
 
 
@@ -2117,6 +2118,7 @@ struct PtFog_natural_0
     _Array_natural_vectorx3Cfloatx2C4x3E3_0 inverse_0;
     packed_float4 extent_density_0;
     packed_float4 albedo_g_0;
+    packed_float4 params_1;
 };
 
 
@@ -2127,7 +2129,7 @@ PtFog_0 DeROBuffer_operatorx5Bx5D_get_1(const DeROBuffer_0 thread* this_4, uint 
 
     array<float4, int(3)> _S187 = { { float4((*_S186).inverse_0.data_5[int(0)]) , float4((*_S186).inverse_0.data_5[int(1)]) , float4((*_S186).inverse_0.data_5[int(2)])  } };
 
-    PtFog_0 _S188 = { _S187, float4((*_S186).extent_density_0) , float4((*_S186).albedo_g_0)  };
+    PtFog_0 _S188 = { _S187, float4((*_S186).extent_density_0) , float4((*_S186).albedo_g_0) , float4((*_S186).params_1)  };
 
     return _S188;
 }
@@ -3115,7 +3117,7 @@ struct DeGpuLight_0
 {
     array<float4, int(3)> transform_0;
     float4 color_1;
-    float4 params_1;
+    float4 params_2;
     float4 area_0;
     uint kind_0;
     uint flags_1;
@@ -3128,7 +3130,7 @@ struct DeGpuLight_natural_0
 {
     _Array_natural_vectorx3Cfloatx2C4x3E3_0 transform_0;
     packed_float4 color_1;
-    packed_float4 params_1;
+    packed_float4 params_2;
     packed_float4 area_0;
     uint kind_0;
     uint flags_1;
@@ -3144,7 +3146,7 @@ DeGpuLight_0 DeROBuffer_operatorx5Bx5D_get_2(const DeROBuffer_0 thread* this_6, 
 
     array<float4, int(3)> _S275 = { { float4((*_S274).transform_0.data_5[int(0)]) , float4((*_S274).transform_0.data_5[int(1)]) , float4((*_S274).transform_0.data_5[int(2)])  } };
 
-    DeGpuLight_0 _S276 = { _S275, float4((*_S274).color_1) , float4((*_S274).params_1) , float4((*_S274).area_0) , (*_S274).kind_0, (*_S274).flags_1, (*_S274).entity_lo_0, (*_S274).entity_hi_0 };
+    DeGpuLight_0 _S276 = { _S275, float4((*_S274).color_1) , float4((*_S274).params_2) , float4((*_S274).area_0) , (*_S274).kind_0, (*_S274).flags_1, (*_S274).entity_lo_0, (*_S274).entity_hi_0 };
 
     return _S276;
 }
@@ -3542,6 +3544,10 @@ struct VertexAttribs_0
     array<float2, int(2)> uv_0;
     bool has_tangent_0;
     float object_scale_0;
+    float3 object_position_0;
+    float3 position_dx_0;
+    float3 position_dy_0;
+    float time_0;
 };
 
 
@@ -6099,48 +6105,68 @@ float2 de_resolve_uv_0(const DeResolvePoint_0 thread* r_25, uint set_3, float2 t
 }
 
 
-VertexAttribs_0 de_resolve_attribs_0(const DeResolvePoint_0 thread* r_26, float3 eye_0, TextureLodInfo_0 thread* lod_9, KernelContext_0 thread* kernelContext_64)
+void de_resolve_world_pos_diff_0(const DeResolvePoint_0 thread* r_26, float3 thread* dx_3, float3 thread* dy_3)
+{
+
+    float3 _S592 = de_vis_transform_point_0(&(&r_26->inst_0)->transform_1, r_26->object_pos_0[int(0)]);
+
+    float3 _S593 = de_vis_transform_point_0(&(&r_26->inst_0)->transform_1, r_26->object_pos_0[int(1)]);
+
+    float3 _S594 = de_vis_transform_point_0(&(&r_26->inst_0)->transform_1, r_26->object_pos_0[int(2)]);
+
+    *dx_3 = _S592 * float3(r_26->bary_dx_0.x)  + _S593 * float3(r_26->bary_dx_0.y)  + _S594 * float3(r_26->bary_dx_0.z) ;
+    *dy_3 = _S592 * float3(r_26->bary_dy_0.x)  + _S593 * float3(r_26->bary_dy_0.y)  + _S594 * float3(r_26->bary_dy_0.z) ;
+    return;
+}
+
+
+VertexAttribs_0 de_resolve_attribs_0(const DeResolvePoint_0 thread* r_27, float3 eye_0, float time_1, TextureLodInfo_0 thread* lod_9, KernelContext_0 thread* kernelContext_64)
 {
     thread VertexAttribs_0 v_16;
 
-    float3 _S592 = de_resolve_world_pos_0(r_26);
-    (&v_16)->position_1 = _S592;
+    float3 _S595 = de_resolve_world_pos_0(r_27);
+    (&v_16)->position_1 = _S595;
 
-    float3 _S593 = de_resolve_normal_0(r_26, &(&v_16)->tangent_2, &(&v_16)->geometric_normal_0, kernelContext_64);
-    (&v_16)->normal_1 = _S593;
-    float3 to_eye_0 = eye_0 - _S592;
+    float3 _S596 = de_resolve_normal_0(r_27, &(&v_16)->tangent_2, &(&v_16)->geometric_normal_0, kernelContext_64);
+    (&v_16)->normal_1 = _S596;
+    float3 to_eye_0 = eye_0 - _S595;
     float l2_3 = dot(to_eye_0, to_eye_0);
 
-    float3 _S594;
+    float3 _S597;
     if(l2_3 > 0.0f)
     {
 
-        _S594 = to_eye_0 * float3(rsqrt(l2_3)) ;
+        _S597 = to_eye_0 * float3(rsqrt(l2_3)) ;
 
     }
     else
     {
 
-        _S594 = (&v_16)->normal_1;
+        _S597 = (&v_16)->normal_1;
 
     }
 
-    (&v_16)->view_1 = _S594;
+    (&v_16)->view_1 = _S597;
 
-    float4 _S595 = de_resolve_color_0(r_26, kernelContext_64);
-    (&v_16)->color_3 = _S595;
+    float4 _S598 = de_resolve_color_0(r_27, kernelContext_64);
+    (&v_16)->color_3 = _S598;
 
-    float2 _S596 = de_resolve_uv_0(r_26, 0U, &lod_9->dx_0[int(0)], &lod_9->dy_0[int(0)], kernelContext_64);
-    (&v_16)->uv_0[int(0)] = _S596;
+    float2 _S599 = de_resolve_uv_0(r_27, 0U, &lod_9->dx_0[int(0)], &lod_9->dy_0[int(0)], kernelContext_64);
+    (&v_16)->uv_0[int(0)] = _S599;
 
-    float2 _S597 = de_resolve_uv_0(r_26, 1U, &lod_9->dx_0[int(1)], &lod_9->dy_0[int(1)], kernelContext_64);
-    (&v_16)->uv_0[int(1)] = _S597;
+    float2 _S600 = de_resolve_uv_0(r_27, 1U, &lod_9->dx_0[int(1)], &lod_9->dy_0[int(1)], kernelContext_64);
+    (&v_16)->uv_0[int(1)] = _S600;
 
-    bool _S598 = de_vis_mesh_has_stream_0(&r_26->mesh_2, 2U);
-    (&v_16)->has_tangent_0 = _S598;
+    bool _S601 = de_vis_mesh_has_stream_0(&r_27->mesh_2, 2U);
+    (&v_16)->has_tangent_0 = _S601;
 
-    float _S599 = de_vis_transform_det_0(&(&r_26->inst_0)->transform_1);
-    (&v_16)->object_scale_0 = pow(abs(_S599), 0.3333333432674408f);
+    float _S602 = de_vis_transform_det_0(&(&r_27->inst_0)->transform_1);
+    (&v_16)->object_scale_0 = pow(abs(_S602), 0.3333333432674408f);
+    (&v_16)->object_position_0 = float3((&r_27->inst_0)->transform_1[int(0)].w, (&r_27->inst_0)->transform_1[int(1)].w, (&r_27->inst_0)->transform_1[int(2)].w);
+
+    de_resolve_world_pos_diff_0(r_27, &(&v_16)->position_dx_0, &(&v_16)->position_dy_0);
+
+    (&v_16)->time_0 = time_1;
     lod_9->sampler_0 = 0U;
     lod_9->feedback_0 = 0U;
     lod_9->feedback_capacity_0 = 0U;
@@ -6164,50 +6190,50 @@ uint de_material_texture_1(const DeGpuMaterial_0 thread* m_21, uint s_40)
 SurfaceData_0 UnlitModel_resolve_gbuffer_0(const DeGpuMaterial_0 thread* m_22, const VertexAttribs_0 thread* v_17, const TextureLodInfo_0 thread* lod_10, KernelContext_0 thread* kernelContext_65)
 {
 
-    thread VertexAttribs_0 _S600 = *v_17;
+    thread VertexAttribs_0 _S603 = *v_17;
 
-    thread TextureLodInfo_0 _S601 = *lod_10;
+    thread TextureLodInfo_0 _S604 = *lod_10;
 
-    bool _S602 = de_sprite_is_0(m_22);
+    bool _S605 = de_sprite_is_0(m_22);
 
 
-    if(_S602)
+    if(_S605)
     {
 
-        float2 _S603 = de_sprite_uv_0(m_22, (&_S600)->uv_0[int(0)]);
+        float2 _S606 = de_sprite_uv_0(m_22, (&_S603)->uv_0[int(0)]);
 
-        (&_S600)->uv_0[int(0)] = _S603;
-        float2 _S604 = m_22->subsurface_0.zw;
+        (&_S603)->uv_0[int(0)] = _S606;
+        float2 _S607 = m_22->subsurface_0.zw;
 
-        (&_S601)->dx_0[int(0)] = (&_S601)->dx_0[int(0)] * _S604;
-        (&_S601)->dy_0[int(0)] = (&_S601)->dy_0[int(0)] * _S604;
+        (&_S604)->dx_0[int(0)] = (&_S604)->dx_0[int(0)] * _S607;
+        (&_S604)->dy_0[int(0)] = (&_S604)->dy_0[int(0)] * _S607;
 
     }
 
-    float4 _S605 = m_22->base_color_1 * (&_S600)->color_3;
+    float4 _S608 = m_22->base_color_1 * (&_S603)->color_3;
 
-    float4 _S606 = float4(1.0f, 1.0f, 1.0f, 1.0f);
+    float4 _S609 = float4(1.0f, 1.0f, 1.0f, 1.0f);
 
-    thread VertexAttribs_0 _S607 = _S600;
+    thread VertexAttribs_0 _S610 = _S603;
 
-    thread TextureLodInfo_0 _S608 = _S601;
+    thread TextureLodInfo_0 _S611 = _S604;
 
-    float4 _S609 = de_resolve_sample_0(m_22, 0U, &_S607, &_S608, _S606, kernelContext_65);
+    float4 _S612 = de_resolve_sample_0(m_22, 0U, &_S610, &_S611, _S609, kernelContext_65);
 
-    float4 base_5 = _S605 * _S609;
+    float4 base_5 = _S608 * _S612;
 
 
     thread SurfaceData_0 s_41 = de_surface_default_0();
-    float3 _S610 = base_5.xyz;
+    float3 _S613 = base_5.xyz;
 
-    (&s_41)->base_color_0 = _S610;
+    (&s_41)->base_color_0 = _S613;
     (&s_41)->ao_0 = 1.0f;
-    (&s_41)->normal_0 = (&_S600)->normal_1;
-    (&s_41)->clearcoat_normal_0 = (&_S600)->normal_1;
+    (&s_41)->normal_0 = (&_S603)->normal_1;
+    (&s_41)->clearcoat_normal_0 = (&_S603)->normal_1;
     (&s_41)->roughness_1 = 0.0f;
     (&s_41)->metallic_0 = 0.0f;
     (&s_41)->specular_0 = 0.0f;
-    (&s_41)->emissive_0 = _S610;
+    (&s_41)->emissive_0 = _S613;
     (&s_41)->model_0 = (m_22->model_1) & 31U;
     (&s_41)->features_0 = 256U;
     return s_41;
@@ -6225,15 +6251,15 @@ struct DeRtSurface_0
 DeRtSurface_0 de_rt_surface_0(const DeResolvePoint_0 thread* point_0, const DeSceneConstants_0 thread* sc_1, float3 eye_1, uint sampler_3, uint lut_5, KernelContext_0 thread* kernelContext_66)
 {
 
-    float3 _S611 = float3(0.0f) ;
+    float3 _S614 = float3(0.0f) ;
 
-    SurfaceData_0 _S612 = { _S611, 0.0f, _S611, 0.0f, float4(0.0f) , 0.0f, 0.0f, _S611, 0U, 0U, _S611, 0.0f, 0U, 0.0f, 0.0f, _S611, _S611, 0.0f, 0.0f, float2(0.0f) , 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, _S611, 0.0f, 0.0f, _S611 };
+    SurfaceData_0 _S615 = { _S614, 0.0f, _S614, 0.0f, float4(0.0f) , 0.0f, 0.0f, _S614, 0U, 0U, _S614, 0.0f, 0U, 0.0f, 0.0f, _S614, _S614, 0.0f, 0.0f, float2(0.0f) , 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, _S614, 0.0f, 0.0f, _S614 };
 
     thread DeRtSurface_0 result_0;
 
-    (&result_0)->material_1 = _S612;
+    (&result_0)->material_1 = _S615;
 
-    (&result_0)->position_3 = _S611;
+    (&result_0)->position_3 = _S614;
 
     (&result_0)->valid_1 = false;
 
@@ -6243,50 +6269,50 @@ DeRtSurface_0 de_rt_surface_0(const DeResolvePoint_0 thread* point_0, const DeSc
         return result_0;
     }
 
-    uint _S613 = de_resolve_material_0(point_0);
+    uint _S616 = de_resolve_material_0(point_0);
 
-    DeGpuMaterial_0 _S614 = de_resolve_material_of_0(_S613, sc_1, kernelContext_66);
+    DeGpuMaterial_0 _S617 = de_resolve_material_of_0(_S616, sc_1, kernelContext_66);
 
     thread TextureLodInfo_0 lod_11;
 
-    VertexAttribs_0 _S615 = de_resolve_attribs_0(point_0, eye_1, &lod_11, kernelContext_66);
+    VertexAttribs_0 _S618 = de_resolve_attribs_0(point_0, eye_1, 0.0f, &lod_11, kernelContext_66);
 
     (&lod_11)->sampler_0 = sampler_3;
 
-    SurfaceData_0 _S616;
-    if((_S614.model_1) == 1U)
+    SurfaceData_0 _S619;
+    if((_S617.model_1) == 1U)
     {
 
-        thread DeGpuMaterial_0 _S617 = _S614;
+        thread DeGpuMaterial_0 _S620 = _S617;
 
-        thread VertexAttribs_0 _S618 = _S615;
+        thread VertexAttribs_0 _S621 = _S618;
 
-        thread TextureLodInfo_0 _S619 = lod_11;
+        thread TextureLodInfo_0 _S622 = lod_11;
 
-        SurfaceData_0 _S620 = UnlitModel_resolve_gbuffer_0(&_S617, &_S618, &_S619, kernelContext_66);
+        SurfaceData_0 _S623 = UnlitModel_resolve_gbuffer_0(&_S620, &_S621, &_S622, kernelContext_66);
 
-        _S616 = _S620;
+        _S619 = _S623;
 
     }
     else
     {
 
-        thread DeGpuMaterial_0 _S621 = _S614;
+        thread DeGpuMaterial_0 _S624 = _S617;
 
-        thread VertexAttribs_0 _S622 = _S615;
+        thread VertexAttribs_0 _S625 = _S618;
 
-        thread TextureLodInfo_0 _S623 = lod_11;
+        thread TextureLodInfo_0 _S626 = lod_11;
 
-        SurfaceData_0 _S624 = StandardModelT_resolve_gbuffer_0(&_S621, &_S622, &_S623, kernelContext_66);
+        SurfaceData_0 _S627 = StandardModelT_resolve_gbuffer_0(&_S624, &_S625, &_S626, kernelContext_66);
 
-        _S616 = _S624;
+        _S619 = _S627;
 
     }
 
-    (&result_0)->material_1 = _S616;
+    (&result_0)->material_1 = _S619;
     (&(&result_0)->material_1)->brdf_lut_0 = lut_5;
 
-    (&result_0)->position_3 = _S615.position_1;
+    (&result_0)->position_3 = _S618.position_1;
 
     (&result_0)->valid_1 = true;
 
@@ -6313,27 +6339,27 @@ DeRtSurface_0 de_rt_hit_surface_0(const DeRtContext_0 thread* q_3, const DeRtHit
     if((hit_0->pth_t) < 0.0f)
     {
 
-        float3 _S625 = float3(0.0f) ;
+        float3 _S628 = float3(0.0f) ;
 
-        SurfaceData_0 _S626 = { _S625, 0.0f, _S625, 0.0f, float4(0.0f) , 0.0f, 0.0f, _S625, 0U, 0U, _S625, 0.0f, 0U, 0.0f, 0.0f, _S625, _S625, 0.0f, 0.0f, float2(0.0f) , 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, _S625, 0.0f, 0.0f, _S625 };
+        SurfaceData_0 _S629 = { _S628, 0.0f, _S628, 0.0f, float4(0.0f) , 0.0f, 0.0f, _S628, 0U, 0U, _S628, 0.0f, 0U, 0.0f, 0.0f, _S628, _S628, 0.0f, 0.0f, float2(0.0f) , 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, _S628, 0.0f, 0.0f, _S628 };
 
-        DeRtSurface_0 _S627 = { _S626, _S625, false };
+        DeRtSurface_0 _S630 = { _S629, _S628, false };
 
-        return _S627;
+        return _S630;
     }
 
-    DeResolvePoint_0 _S628 = de_rt_point_0(q_3, hit_0->pth_instance, hit_0->pth_primitive, float2(hit_0->pth_u, hit_0->pth_v), kernelContext_67);
+    DeResolvePoint_0 _S631 = de_rt_point_0(q_3, hit_0->pth_instance, hit_0->pth_primitive, float2(hit_0->pth_u, hit_0->pth_v), kernelContext_67);
 
-    thread DeROBuffer_0 _S629 = de_robuffer_6(q_3->ptq_scene);
+    thread DeROBuffer_0 _S632 = de_robuffer_6(q_3->ptq_scene);
 
-    DeSceneConstants_0 _S630 = DeROBuffer_operatorx5Bx5D_get_6(&_S629, q_3->ptq_view, kernelContext_67);
+    DeSceneConstants_0 _S633 = DeROBuffer_operatorx5Bx5D_get_6(&_S632, q_3->ptq_view, kernelContext_67);
 
-    thread DeResolvePoint_0 _S631 = _S628;
+    thread DeResolvePoint_0 _S634 = _S631;
 
-    thread DeSceneConstants_0 _S632 = _S630;
+    thread DeSceneConstants_0 _S635 = _S633;
 
-    DeRtSurface_0 _S633 = de_rt_surface_0(&_S631, &_S632, eye_2, q_3->ptq_sampler, lut_6, kernelContext_67);
-    return _S633;
+    DeRtSurface_0 _S636 = de_rt_surface_0(&_S634, &_S635, eye_2, q_3->ptq_sampler, lut_6, kernelContext_67);
+    return _S636;
 }
 
 
@@ -6347,15 +6373,15 @@ texture2d<float, access::read_write> de_rwtex2d_0(uint idx_18, KernelContext_0 t
 void pt_store_aov_0(const PtParams_0 thread* p_8, const DeRtRay_0 thread* ray_0, const DeRtHit_0 thread* hit_1, uint pixel_4, KernelContext_0 thread* kernelContext_69)
 {
 
-    uint _S634 = p_8->ptp_width;
-    uint _S635 = pixel_4 % p_8->ptp_width;
+    uint _S637 = p_8->ptp_width;
+    uint _S638 = pixel_4 % p_8->ptp_width;
 
-    uint _S636 = pixel_4 / _S634;
+    uint _S639 = pixel_4 / _S637;
 
-    uint2 xy_1 = uint2(_S635, _S636);
-    float4 _S637 = float4(int4(int(0)) );
+    uint2 xy_1 = uint2(_S638, _S639);
+    float4 _S640 = float4(int4(int(0)) );
 
-    float _S638 = hit_1->pth_t;
+    float _S641 = hit_1->pth_t;
 
     float4 albedo_1;
 
@@ -6369,51 +6395,51 @@ void pt_store_aov_0(const PtParams_0 thread* p_8, const DeRtRay_0 thread* ray_0,
     if((hit_1->pth_t) >= 0.0f)
     {
 
-        DeRtContext_0 _S639 = pt_query_0(p_8, kernelContext_69);
-        float3 _S640 = ray_0->ptr_origin.xyz;
+        DeRtContext_0 _S642 = pt_query_0(p_8, kernelContext_69);
+        float3 _S643 = ray_0->ptr_origin.xyz;
 
-        thread DeRtContext_0 _S641 = _S639;
+        thread DeRtContext_0 _S644 = _S642;
 
-        DeRtSurface_0 _S642 = de_rt_hit_surface_0(&_S641, hit_1, _S640, p_8->ptp_brdf_lut, kernelContext_69);
-        if(_S642.valid_1)
+        DeRtSurface_0 _S645 = de_rt_hit_surface_0(&_S644, hit_1, _S643, p_8->ptp_brdf_lut, kernelContext_69);
+        if(_S645.valid_1)
         {
 
-            float4 _S643 = float4(_S642.material_1.base_color_0, 1.0f);
+            float4 _S646 = float4(_S645.material_1.base_color_0, 1.0f);
 
-            float4 _S644 = float4(_S642.material_1.normal_0, _S642.material_1.roughness_1);
+            float4 _S647 = float4(_S645.material_1.normal_0, _S645.material_1.roughness_1);
 
-            float4 _S645 = float4(_S640 + ray_0->ptr_direction.xyz * float3(_S638) , 1.0f);
-            float2 _S646 = float2(hit_1->pth_u, hit_1->pth_v);
+            float4 _S648 = float4(_S643 + ray_0->ptr_direction.xyz * float3(_S641) , 1.0f);
+            float2 _S649 = float2(hit_1->pth_u, hit_1->pth_v);
 
-            thread DeRtContext_0 _S647 = _S639;
+            thread DeRtContext_0 _S650 = _S642;
 
-            DeResolvePoint_0 _S648 = de_rt_point_0(&_S647, hit_1->pth_instance, hit_1->pth_primitive, _S646, kernelContext_69);
+            DeResolvePoint_0 _S651 = de_rt_point_0(&_S650, hit_1->pth_instance, hit_1->pth_primitive, _S649, kernelContext_69);
 
-            thread DeResolvePoint_0 _S649 = _S648;
+            thread DeResolvePoint_0 _S652 = _S651;
 
-            uint _S650 = de_resolve_material_0(&_S649);
+            uint _S653 = de_resolve_material_0(&_S652);
 
-            albedo_1 = _S643;
+            albedo_1 = _S646;
 
-            normal_2 = _S644;
+            normal_2 = _S647;
 
-            depth_0 = _S638;
+            depth_0 = _S641;
 
-            position_4 = _S645;
+            position_4 = _S648;
 
-            material_2 = _S650;
+            material_2 = _S653;
 
         }
         else
         {
 
-            albedo_1 = _S637;
+            albedo_1 = _S640;
 
-            normal_2 = _S637;
+            normal_2 = _S640;
 
             depth_0 = 0.0f;
 
-            position_4 = _S637;
+            position_4 = _S640;
 
             material_2 = 4294967295U;
 
@@ -6423,37 +6449,37 @@ void pt_store_aov_0(const PtParams_0 thread* p_8, const DeRtRay_0 thread* ray_0,
     else
     {
 
-        albedo_1 = _S637;
+        albedo_1 = _S640;
 
-        normal_2 = _S637;
+        normal_2 = _S640;
 
         depth_0 = 0.0f;
 
-        position_4 = _S637;
+        position_4 = _S640;
 
         material_2 = 4294967295U;
 
     }
 
-    texture2d<float, access::read_write> _S651 = de_rwtex2d_0(p_8->ptp_aov_albedo, kernelContext_69);
+    texture2d<float, access::read_write> _S654 = de_rwtex2d_0(p_8->ptp_aov_albedo, kernelContext_69);
 
-    _S651.write(albedo_1,xy_1);
+    _S654.write(albedo_1,xy_1);
 
-    texture2d<float, access::read_write> _S652 = de_rwtex2d_0(p_8->ptp_aov_normal, kernelContext_69);
+    texture2d<float, access::read_write> _S655 = de_rwtex2d_0(p_8->ptp_aov_normal, kernelContext_69);
 
-    _S652.write(normal_2,xy_1);
+    _S655.write(normal_2,xy_1);
 
-    texture2d<float, access::read_write> _S653 = de_rwtex2d_0(p_8->ptp_aov_depth, kernelContext_69);
+    texture2d<float, access::read_write> _S656 = de_rwtex2d_0(p_8->ptp_aov_depth, kernelContext_69);
 
-    _S653.write(float4(depth_0, 0.0f, 0.0f, 0.0f),xy_1);
+    _S656.write(float4(depth_0, 0.0f, 0.0f, 0.0f),xy_1);
 
-    texture2d<float, access::read_write> _S654 = de_rwtex2d_0(p_8->ptp_aov_position, kernelContext_69);
+    texture2d<float, access::read_write> _S657 = de_rwtex2d_0(p_8->ptp_aov_position, kernelContext_69);
 
-    _S654.write(position_4,xy_1);
+    _S657.write(position_4,xy_1);
 
-    texture2d<float, access::read_write> _S655 = de_rwtex2d_0(p_8->ptp_aov_material, kernelContext_69);
+    texture2d<float, access::read_write> _S658 = de_rwtex2d_0(p_8->ptp_aov_material, kernelContext_69);
 
-    _S655.write(float4(float(material_2 & 65535U), float(material_2 >> 16U), 0.0f, 0.0f),xy_1);
+    _S658.write(float4(float(material_2 & 65535U), float(material_2 >> 16U), 0.0f, 0.0f),xy_1);
     return;
 }
 
@@ -6461,23 +6487,23 @@ void pt_store_aov_0(const PtParams_0 thread* p_8, const DeRtRay_0 thread* ray_0,
 bool di_analytic_in_view_0(const DiSource_0 thread* source_0, uint excluded_mask_0)
 {
 
-    uint _S656 = source_0->first_0;
+    uint _S659 = source_0->first_0;
 
-    uint _S657;
+    uint _S660;
     if((source_0->first_0) == 0U)
     {
 
-        _S657 = 4294967295U;
+        _S660 = 4294967295U;
 
     }
     else
     {
 
-        _S657 = _S656;
+        _S660 = _S659;
 
     }
 
-    return (_S657 & (~excluded_mask_0)) != 0U;
+    return (_S660 & (~excluded_mask_0)) != 0U;
 }
 
 
@@ -6487,9 +6513,9 @@ uint de_light_kind_0(const DeClusterLight_0 thread* l_13)
 }
 
 
-float de_light_window_0(float d_5, float r_27)
+float de_light_window_0(float d_5, float r_28)
 {
-    float x_14 = d_5 / r_27;
+    float x_14 = d_5 / r_28;
     float w_7 = saturate(1.0f - x_14 * x_14 * x_14 * x_14);
     return w_7 * w_7;
 }
@@ -6512,52 +6538,52 @@ float3 pt_light_categories_0(const PtParams_0 thread* p_9)
 
     }
 
-    int _S658;
+    int _S661;
     if(environment_0)
     {
 
-        _S658 = int(1);
+        _S661 = int(1);
 
     }
     else
     {
 
-        _S658 = int(0);
+        _S661 = int(0);
 
     }
 
-    float _S659 = float(_S658);
+    float _S662 = float(_S661);
 
     if((p_9->ptp_source_count) > 0U)
     {
 
-        _S658 = int(1);
+        _S661 = int(1);
 
     }
     else
     {
 
-        _S658 = int(0);
+        _S661 = int(0);
 
     }
 
-    float _S660 = float(_S658);
+    float _S663 = float(_S661);
 
     if((p_9->ptp_light_count) > 0U)
     {
 
-        _S658 = int(1);
+        _S661 = int(1);
 
     }
     else
     {
 
-        _S658 = int(0);
+        _S661 = int(0);
 
     }
 
-    float _S661 = float(_S658);
-    return float3(_S659, _S660, _S661) / float3(max(_S659 + _S660 + _S661, 1.0f)) ;
+    float _S664 = float(_S661);
+    return float3(_S662, _S663, _S664) / float3(max(_S662 + _S663 + _S664, 1.0f)) ;
 }
 
 
@@ -6578,11 +6604,11 @@ float4 pt_area_hit_0(const PtParams_0 thread* p_10, const DeRtRay_0 thread* ray_
 
     }
 
-    float3 _S662 = float3(int3(int(0)) );
+    float3 _S665 = float3(int3(int(0)) );
 
     *light_pdf_0 = 0.0f;
 
-    float3 emitted_0 = _S662;
+    float3 emitted_0 = _S665;
 
     uint i_20 = 0U;
     for(;;)
@@ -6597,29 +6623,29 @@ float4 pt_area_hit_0(const PtParams_0 thread* p_10, const DeRtRay_0 thread* ray_
             break;
         }
 
-        thread DeROBuffer_0 _S663 = de_robuffer_8(p_10->ptp_sources);
+        thread DeROBuffer_0 _S666 = de_robuffer_8(p_10->ptp_sources);
 
-        DiSource_0 _S664 = DeROBuffer_operatorx5Bx5D_get_8(&_S663, i_20, kernelContext_70);
+        DiSource_0 _S667 = DeROBuffer_operatorx5Bx5D_get_8(&_S666, i_20, kernelContext_70);
 
-        bool _S665;
-        if((_S664.kind_1) != 0U)
+        bool _S668;
+        if((_S667.kind_1) != 0U)
         {
 
-            _S665 = true;
+            _S668 = true;
 
         }
         else
         {
 
-            thread DiSource_0 _S666 = _S664;
+            thread DiSource_0 _S669 = _S667;
 
-            bool _S667 = di_analytic_in_view_0(&_S666, p_10->ptp_excluded_light_mask);
+            bool _S670 = di_analytic_in_view_0(&_S669, p_10->ptp_excluded_light_mask);
 
-            _S665 = !_S667;
+            _S668 = !_S670;
 
         }
 
-        if(_S665)
+        if(_S668)
         {
 
             i_20 = i_20 + 1U;
@@ -6627,27 +6653,27 @@ float4 pt_area_hit_0(const PtParams_0 thread* p_10, const DeRtRay_0 thread* ray_
             continue;
         }
 
-        thread DeClusterLight_0 _S668 = _S664.light_0;
+        thread DeClusterLight_0 _S671 = _S667.light_0;
 
-        uint _S669 = de_light_kind_0(&_S668);
+        uint _S672 = de_light_kind_0(&_S671);
 
-        bool _S670;
+        bool _S673;
 
 
-        if(_S669 != 3U)
+        if(_S672 != 3U)
         {
 
-            _S670 = _S669 != 4U;
+            _S673 = _S672 != 4U;
 
         }
         else
         {
 
-            _S670 = false;
+            _S673 = false;
 
         }
 
-        if(_S670)
+        if(_S673)
         {
 
             i_20 = i_20 + 1U;
@@ -6656,11 +6682,11 @@ float4 pt_area_hit_0(const PtParams_0 thread* p_10, const DeRtRay_0 thread* ray_
         }
 
 
-        float3 normal_3 = normalize(_S664.light_0.direction_0.xyz);
+        float3 normal_3 = normalize(_S667.light_0.direction_0.xyz);
 
-        float3 _S671 = ray_1->ptr_direction.xyz;
+        float3 _S674 = ray_1->ptr_direction.xyz;
 
-        float denom_4 = dot(normal_3, _S671);
+        float denom_4 = dot(normal_3, _S674);
         if(!(denom_4 < -9.99999997475242708e-07f))
         {
 
@@ -6669,27 +6695,27 @@ float4 pt_area_hit_0(const PtParams_0 thread* p_10, const DeRtRay_0 thread* ray_
             continue;
         }
 
-        float3 _S672 = _S664.light_0.position_0.xyz;
+        float3 _S675 = _S667.light_0.position_0.xyz;
 
-        float3 _S673 = ray_1->ptr_origin.xyz;
+        float3 _S676 = ray_1->ptr_origin.xyz;
 
-        float t_14 = dot(_S672 - _S673, normal_3) / denom_4;
+        float t_14 = dot(_S675 - _S676, normal_3) / denom_4;
 
-        bool _S674;
+        bool _S677;
         if(t_14 > (ray_1->ptr_origin.w))
         {
 
-            _S674 = t_14 < nearest_0;
+            _S677 = t_14 < nearest_0;
 
         }
         else
         {
 
-            _S674 = false;
+            _S677 = false;
 
         }
 
-        if(!_S674)
+        if(!_S677)
         {
 
             i_20 = i_20 + 1U;
@@ -6697,18 +6723,18 @@ float4 pt_area_hit_0(const PtParams_0 thread* p_10, const DeRtRay_0 thread* ray_
             continue;
         }
 
-        float3 x_15 = normalize(_S664.light_0.axis_0.xyz);
-        float3 delta_0 = _S673 + _S671 * float3(t_14)  - _S672;
-        float _S675 = _S664.light_0.shape_0.y;
+        float3 x_15 = normalize(_S667.light_0.axis_0.xyz);
+        float3 delta_0 = _S676 + _S674 * float3(t_14)  - _S675;
+        float _S678 = _S667.light_0.shape_0.y;
 
-        float _S676 = _S664.light_0.shape_0.z;
+        float _S679 = _S667.light_0.shape_0.z;
 
-        float2 uv_2 = float2(dot(delta_0, x_15) / max(_S675, 1.00000001335143196e-10f), dot(delta_0, normalize(cross(normal_3, x_15))) / max(_S676, 1.00000001335143196e-10f));
-        bool _S677 = _S669 == 3U;
+        float2 uv_2 = float2(dot(delta_0, x_15) / max(_S678, 1.00000001335143196e-10f), dot(delta_0, normalize(cross(normal_3, x_15))) / max(_S679, 1.00000001335143196e-10f));
+        bool _S680 = _S672 == 3U;
 
         bool inside_0;
 
-        if(_S677)
+        if(_S680)
         {
 
             inside_0 = all((abs(uv_2)) <= (float2(1.0f) ));
@@ -6728,30 +6754,30 @@ float4 pt_area_hit_0(const PtParams_0 thread* p_10, const DeRtRay_0 thread* ray_
             continue;
         }
 
-        float3 _S678 = _S664.light_0.color_2.xyz * float3(de_light_window_0(t_14, _S664.light_0.position_0.w)) ;
+        float3 _S681 = _S667.light_0.color_2.xyz * float3(de_light_window_0(t_14, _S667.light_0.position_0.w)) ;
 
         float area_1;
-        if(_S677)
+        if(_S680)
         {
 
-            area_1 = 4.0f * _S675 * _S676;
+            area_1 = 4.0f * _S678 * _S679;
 
         }
         else
         {
 
-            area_1 = 3.14159274101257324f * _S675 * _S675;
+            area_1 = 3.14159274101257324f * _S678 * _S678;
 
         }
-        float _S679 = _S664.pdf_1 * t_14 * t_14 / max(area_1 * - denom_4, 9.99999968265522539e-21f);
+        float _S682 = _S667.pdf_1 * t_14 * t_14 / max(area_1 * - denom_4, 9.99999968265522539e-21f);
 
-        float3 _S680 = pt_light_categories_0(p_10);
+        float3 _S683 = pt_light_categories_0(p_10);
 
-        *light_pdf_0 = _S679 * _S680.y;
+        *light_pdf_0 = _S682 * _S683.y;
 
         nearest_0 = t_14;
 
-        emitted_0 = _S678;
+        emitted_0 = _S681;
 
         i_20 = i_20 + 1U;
 
@@ -6774,9 +6800,9 @@ float4 pt_area_hit_0(const PtParams_0 thread* p_10, const DeRtRay_0 thread* ray_
 float pt_power_0(float a_8, float b_30)
 {
 
-    float _S681 = a_8 * a_8;
+    float _S684 = a_8 * a_8;
 
-    return _S681 / max(_S681 + b_30 * b_30, 1.00000000317107685e-30f);
+    return _S684 / max(_S684 + b_30 * b_30, 1.00000000317107685e-30f);
 }
 
 
@@ -6785,162 +6811,162 @@ float3 de_ibl_rotate_0(const DeIbl_0 thread* ibl_1, float3 d_6)
     float c_13 = ibl_1->rotation_0.x;
 
     float s_42 = ibl_1->rotation_0.y;
-    float _S682 = d_6.x;
+    float _S685 = d_6.x;
 
-    float _S683 = d_6.y;
+    float _S686 = d_6.y;
 
-    return float3(c_13 * _S682 + s_42 * _S683, - s_42 * _S682 + c_13 * _S683, d_6.z);
+    return float3(c_13 * _S685 + s_42 * _S686, - s_42 * _S685 + c_13 * _S686, d_6.z);
 }
 
 
 uint de_ibl_cube_face_0(float3 d_7, float2 thread* st_0)
 {
     float3 a_9 = abs(d_7);
-    float _S684 = a_9.x;
+    float _S687 = a_9.x;
 
-    float _S685 = a_9.y;
+    float _S688 = a_9.y;
 
-    bool _S686;
+    bool _S689;
 
-    if(_S684 >= _S685)
+    if(_S687 >= _S688)
     {
 
-        _S686 = _S684 >= (a_9.z);
+        _S689 = _S687 >= (a_9.z);
 
     }
     else
     {
 
-        _S686 = false;
+        _S689 = false;
 
     }
 
-    float _S687;
+    float _S690;
 
-    uint _S688;
+    uint _S691;
 
-    if(_S686)
+    if(_S689)
     {
-        float inv_3 = 1.0f / _S684;
+        float inv_3 = 1.0f / _S687;
         (*st_0).y = - d_7.y * inv_3;
-        bool _S689 = (d_7.x) >= 0.0f;
+        bool _S692 = (d_7.x) >= 0.0f;
 
-        if(_S689)
+        if(_S692)
         {
 
-            _S687 = - d_7.z * inv_3;
+            _S690 = - d_7.z * inv_3;
 
         }
         else
         {
 
-            _S687 = d_7.z * inv_3;
+            _S690 = d_7.z * inv_3;
 
         }
 
-        (*st_0).x = _S687;
-        if(_S689)
+        (*st_0).x = _S690;
+        if(_S692)
         {
 
-            _S688 = 0U;
+            _S691 = 0U;
 
         }
         else
         {
 
-            _S688 = 1U;
+            _S691 = 1U;
 
         }
 
-        return _S688;
+        return _S691;
     }
-    float _S690 = a_9.z;
+    float _S693 = a_9.z;
 
-    if(_S685 >= _S690)
+    if(_S688 >= _S693)
     {
-        float inv_4 = 1.0f / _S685;
+        float inv_4 = 1.0f / _S688;
         (*st_0).x = d_7.x * inv_4;
-        bool _S691 = (d_7.y) >= 0.0f;
+        bool _S694 = (d_7.y) >= 0.0f;
 
-        if(_S691)
+        if(_S694)
         {
 
-            _S687 = d_7.z * inv_4;
+            _S690 = d_7.z * inv_4;
 
         }
         else
         {
 
-            _S687 = - d_7.z * inv_4;
+            _S690 = - d_7.z * inv_4;
 
         }
 
-        (*st_0).y = _S687;
-        if(_S691)
+        (*st_0).y = _S690;
+        if(_S694)
         {
 
-            _S688 = 2U;
+            _S691 = 2U;
 
         }
         else
         {
 
-            _S688 = 3U;
+            _S691 = 3U;
 
         }
 
-        return _S688;
+        return _S691;
     }
-    float inv_5 = 1.0f / _S690;
+    float inv_5 = 1.0f / _S693;
     (*st_0).y = - d_7.y * inv_5;
-    bool _S692 = (d_7.z) >= 0.0f;
+    bool _S695 = (d_7.z) >= 0.0f;
 
-    if(_S692)
+    if(_S695)
     {
 
-        _S687 = d_7.x * inv_5;
+        _S690 = d_7.x * inv_5;
 
     }
     else
     {
 
-        _S687 = - d_7.x * inv_5;
+        _S690 = - d_7.x * inv_5;
 
     }
 
-    (*st_0).x = _S687;
-    if(_S692)
+    (*st_0).x = _S690;
+    if(_S695)
     {
 
-        _S688 = 4U;
+        _S691 = 4U;
 
     }
     else
     {
 
-        _S688 = 5U;
+        _S691 = 5U;
 
     }
 
-    return _S688;
+    return _S691;
 }
 
 
 float2 de_ibl_strip_uv_0(const DeIbl_0 thread* ibl_2, float3 d_8, float lod_13)
 {
 
-    float3 _S693 = de_ibl_rotate_0(ibl_2, d_8);
+    float3 _S696 = de_ibl_rotate_0(ibl_2, d_8);
 
     thread float2 st_1;
-    uint face_0 = de_ibl_cube_face_0(_S693, &st_1);
+    uint face_0 = de_ibl_cube_face_0(_S696, &st_1);
 
-    float2 _S694 = float2(0.5f) ;
+    float2 _S697 = float2(0.5f) ;
 
 
     float h_26 = 0.5f / max(float(ibl_2->face_size_0) / exp2(ceil(max(lod_13, 0.0f))), 1.0f);
-    float _S695 = 1.0f - h_26;
+    float _S698 = 1.0f - h_26;
 
-    float2 uv_3 = clamp(st_1 * _S694 + _S694, float2(h_26, h_26), float2(_S695, _S695));
+    float2 uv_3 = clamp(st_1 * _S697 + _S697, float2(h_26, h_26), float2(_S698, _S698));
     return float2(uv_3.x, (float(face_0) + uv_3.y) / 6.0f);
 }
 
@@ -6956,22 +6982,22 @@ float3 de_ibl_radiance_0(const DeIbl_0 thread* ibl_3, float3 d_9, float roughnes
 
     float lod_14 = clamp(saturate(roughness_5) * ibl_3->rotation_0.z, 0.0f, ibl_3->rotation_0.w);
 
-    float2 _S696 = de_ibl_strip_uv_0(ibl_3, d_9, lod_14);
+    float2 _S699 = de_ibl_strip_uv_0(ibl_3, d_9, lod_14);
 
-    texture2d<float, access::sample> _S697 = de_tex2d_0(ibl_3->strip_0, kernelContext_71);
+    texture2d<float, access::sample> _S700 = de_tex2d_0(ibl_3->strip_0, kernelContext_71);
 
-    sampler _S698 = de_sampler_0(ibl_3->sampler_2, kernelContext_71);
+    sampler _S701 = de_sampler_0(ibl_3->sampler_2, kernelContext_71);
 
-    return ((_S697).sample((_S698), (_S696), level((lod_14)))).xyz * float3(ibl_3->sh_0[int(0)].w) ;
+    return ((_S700).sample((_S701), (_S699), level((lod_14)))).xyz * float3(ibl_3->sh_0[int(0)].w) ;
 }
 
 
 float3 pt_environment_0(const PtParams_0 thread* p_11, float3 wi_25, KernelContext_0 thread* kernelContext_72)
 {
 
-    float3 _S699 = de_ibl_radiance_0(&p_11->ptp_ibl, wi_25, 0.0f, kernelContext_72);
+    float3 _S702 = de_ibl_radiance_0(&p_11->ptp_ibl, wi_25, 0.0f, kernelContext_72);
 
-    return _S699;
+    return _S702;
 }
 
 
@@ -6995,113 +7021,113 @@ float pt_env_pdf_0(const PtParams_0 thread* p_12, float3 wi_26, KernelContext_0 
 
     }
 
-    uint _S700 = min(uint((1.0f - wi_26.z) * 8.0f), 15U) * 32U + min(uint(phi_2 * 5.09295797348022461f), 31U);
+    uint _S703 = min(uint((1.0f - wi_26.z) * 8.0f), 15U) * 32U + min(uint(phi_2 * 5.09295797348022461f), 31U);
 
-    thread DeROBuffer_0 _S701 = de_robuffer_7(p_12->ptp_env_cdf);
+    thread DeROBuffer_0 _S704 = de_robuffer_7(p_12->ptp_env_cdf);
 
-    float2 _S702 = DeROBuffer_operatorx5Bx5D_get_7(&_S701, _S700, kernelContext_73);
+    float2 _S705 = DeROBuffer_operatorx5Bx5D_get_7(&_S704, _S703, kernelContext_73);
 
-    return _S702.y * 40.74366378784179688f;
+    return _S705.y * 40.74366378784179688f;
 }
 
 
 bool pt_hit_emits_0(const PtParams_0 thread* p_13, const DeRtRay_0 thread* ray_2, const DeRtHit_0 thread* hit_2, KernelContext_0 thread* kernelContext_74)
 {
 
-    DeRtContext_0 _S703 = pt_query_0(p_13, kernelContext_74);
-    float2 _S704 = float2(hit_2->pth_u, hit_2->pth_v);
+    DeRtContext_0 _S706 = pt_query_0(p_13, kernelContext_74);
+    float2 _S707 = float2(hit_2->pth_u, hit_2->pth_v);
 
-    thread DeRtContext_0 _S705 = _S703;
+    thread DeRtContext_0 _S708 = _S706;
 
-    DeResolvePoint_0 _S706 = de_rt_point_0(&_S705, hit_2->pth_instance, hit_2->pth_primitive, _S704, kernelContext_74);
-    if(!_S706.valid_0)
+    DeResolvePoint_0 _S709 = de_rt_point_0(&_S708, hit_2->pth_instance, hit_2->pth_primitive, _S707, kernelContext_74);
+    if(!_S709.valid_0)
     {
 
         return false;
     }
 
-    thread DeROBuffer_0 _S707 = de_robuffer_6(_S703.ptq_scene);
+    thread DeROBuffer_0 _S710 = de_robuffer_6(_S706.ptq_scene);
 
-    DeSceneConstants_0 _S708 = DeROBuffer_operatorx5Bx5D_get_6(&_S707, _S703.ptq_view, kernelContext_74);
+    DeSceneConstants_0 _S711 = DeROBuffer_operatorx5Bx5D_get_6(&_S710, _S706.ptq_view, kernelContext_74);
 
-    thread DeResolvePoint_0 _S709 = _S706;
+    thread DeResolvePoint_0 _S712 = _S709;
 
-    uint _S710 = de_resolve_material_0(&_S709);
+    uint _S713 = de_resolve_material_0(&_S712);
 
-    thread DeSceneConstants_0 _S711 = _S708;
+    thread DeSceneConstants_0 _S714 = _S711;
 
-    DeGpuMaterial_0 _S712 = de_resolve_material_of_0(_S710, &_S711, kernelContext_74);
+    DeGpuMaterial_0 _S715 = de_resolve_material_of_0(_S713, &_S714, kernelContext_74);
 
 
-    if(((_S712.flags_0) & 2U) != 0U)
+    if(((_S715.flags_0) & 2U) != 0U)
     {
 
         return true;
     }
 
-    thread array<float4, int(3)> _S713 = _S706.inst_0.transform_1;
+    thread array<float4, int(3)> _S716 = _S709.inst_0.transform_1;
 
-    float3 _S714 = de_vis_transform_point_0(&_S713, _S706.object_pos_0[int(0)]);
+    float3 _S717 = de_vis_transform_point_0(&_S716, _S709.object_pos_0[int(0)]);
 
-    thread array<float4, int(3)> _S715 = _S706.inst_0.transform_1;
+    thread array<float4, int(3)> _S718 = _S709.inst_0.transform_1;
 
-    float3 _S716 = de_vis_transform_point_0(&_S715, _S706.object_pos_0[int(1)]);
+    float3 _S719 = de_vis_transform_point_0(&_S718, _S709.object_pos_0[int(1)]);
 
-    thread array<float4, int(3)> _S717 = _S706.inst_0.transform_1;
+    thread array<float4, int(3)> _S720 = _S709.inst_0.transform_1;
 
-    float3 _S718 = de_vis_transform_point_0(&_S717, _S706.object_pos_0[int(2)]);
+    float3 _S721 = de_vis_transform_point_0(&_S720, _S709.object_pos_0[int(2)]);
 
-    thread array<float4, int(3)> _S719 = _S706.inst_0.transform_1;
+    thread array<float4, int(3)> _S722 = _S709.inst_0.transform_1;
 
-    float _S720 = de_vis_transform_det_0(&_S719);
+    float _S723 = de_vis_transform_det_0(&_S722);
 
-    int _S721;
+    int _S724;
 
 
 
-    if(_S720 < 0.0f)
+    if(_S723 < 0.0f)
     {
 
-        _S721 = int(-1);
+        _S724 = int(-1);
 
     }
     else
     {
 
-        _S721 = int(1);
+        _S724 = int(1);
 
     }
-    return (dot(cross(_S716 - _S714, _S718 - _S714), - ray_2->ptr_direction.xyz) * float(_S721)) > 0.0f;
+    return (dot(cross(_S719 - _S717, _S721 - _S717), - ray_2->ptr_direction.xyz) * float(_S724)) > 0.0f;
 }
 
 
 float3 pt_source_normal_0(const PtParams_0 thread* p_14, const DiSource_0 thread* source_1, KernelContext_0 thread* kernelContext_75)
 {
 
-    float3 _S722 = source_1->p0_0.xyz;
+    float3 _S725 = source_1->p0_0.xyz;
 
-    float3 normal_4 = cross(source_1->p1_0.xyz - _S722, source_1->p2_0.xyz - _S722);
+    float3 normal_4 = cross(source_1->p1_0.xyz - _S725, source_1->p2_0.xyz - _S725);
 
     float3 normal_5;
     if((source_1->material_0) != 4294967295U)
     {
 
-        DeRtContext_0 _S723 = pt_query_0(p_14, kernelContext_75);
+        DeRtContext_0 _S726 = pt_query_0(p_14, kernelContext_75);
 
-        thread DeROBuffer_0 _S724 = de_robuffer_6(_S723.ptq_scene);
+        thread DeROBuffer_0 _S727 = de_robuffer_6(_S726.ptq_scene);
 
-        DeSceneConstants_0 _S725 = DeROBuffer_operatorx5Bx5D_get_6(&_S724, _S723.ptq_view, kernelContext_75);
+        DeSceneConstants_0 _S728 = DeROBuffer_operatorx5Bx5D_get_6(&_S727, _S726.ptq_view, kernelContext_75);
 
-        thread DeROBuffer_0 _S726 = de_robuffer_5(_S725.instances_0);
+        thread DeROBuffer_0 _S729 = de_robuffer_5(_S728.instances_0);
 
-        DeGpuInstance_0 _S727 = DeROBuffer_operatorx5Bx5D_get_5(&_S726, source_1->index_1, kernelContext_75);
+        DeGpuInstance_0 _S730 = DeROBuffer_operatorx5Bx5D_get_5(&_S729, source_1->index_1, kernelContext_75);
 
-        thread array<float4, int(3)> _S728 = _S727.transform_1;
+        thread array<float4, int(3)> _S731 = _S730.transform_1;
 
-        float _S729 = de_vis_transform_det_0(&_S728);
+        float _S732 = de_vis_transform_det_0(&_S731);
 
 
-        if(_S729 < 0.0f)
+        if(_S732 < 0.0f)
         {
 
             normal_5 = - normal_4;
@@ -7145,26 +7171,26 @@ float pt_emission_pdf_0(const PtParams_0 thread* p_15, const DeRtHit_0 thread* h
             break;
         }
 
-        thread DeROBuffer_0 _S730 = de_robuffer_8(p_15->ptp_sources);
+        thread DeROBuffer_0 _S733 = de_robuffer_8(p_15->ptp_sources);
 
-        DiSource_0 _S731 = DeROBuffer_operatorx5Bx5D_get_8(&_S730, i_21, kernelContext_76);
+        DiSource_0 _S734 = DeROBuffer_operatorx5Bx5D_get_8(&_S733, i_21, kernelContext_76);
 
-        bool _S732;
+        bool _S735;
 
-        if((_S731.kind_1) != 1U)
+        if((_S734.kind_1) != 1U)
         {
 
-            _S732 = true;
+            _S735 = true;
 
         }
         else
         {
 
-            _S732 = (_S731.index_1) != (h_27->pth_instance);
+            _S735 = (_S734.index_1) != (h_27->pth_instance);
 
         }
 
-        if(_S732)
+        if(_S735)
         {
 
             i_21 = i_21 + 1U;
@@ -7172,21 +7198,21 @@ float pt_emission_pdf_0(const PtParams_0 thread* p_15, const DeRtHit_0 thread* h
             continue;
         }
 
-        DeRtContext_0 _S733 = pt_query_0(p_15, kernelContext_76);
+        DeRtContext_0 _S736 = pt_query_0(p_15, kernelContext_76);
 
-        thread DeROBuffer_0 _S734 = de_robuffer_6(_S733.ptq_scene);
+        thread DeROBuffer_0 _S737 = de_robuffer_6(_S736.ptq_scene);
 
-        DeSceneConstants_0 _S735 = DeROBuffer_operatorx5Bx5D_get_6(&_S734, _S733.ptq_view, kernelContext_76);
+        DeSceneConstants_0 _S738 = DeROBuffer_operatorx5Bx5D_get_6(&_S737, _S736.ptq_view, kernelContext_76);
 
-        thread DeROBuffer_0 _S736 = de_robuffer_5(_S735.instances_0);
+        thread DeROBuffer_0 _S739 = de_robuffer_5(_S738.instances_0);
 
-        DeGpuInstance_0 _S737 = DeROBuffer_operatorx5Bx5D_get_5(&_S736, h_27->pth_instance, kernelContext_76);
+        DeGpuInstance_0 _S740 = DeROBuffer_operatorx5Bx5D_get_5(&_S739, h_27->pth_instance, kernelContext_76);
 
-        thread DeROBuffer_0 _S738 = de_robuffer_4(_S735.meshes_0);
+        thread DeROBuffer_0 _S741 = de_robuffer_4(_S738.meshes_0);
 
-        DeGpuMesh_0 _S739 = DeROBuffer_operatorx5Bx5D_get_4(&_S738, _S737.mesh_0, kernelContext_76);
+        DeGpuMesh_0 _S742 = DeROBuffer_operatorx5Bx5D_get_4(&_S741, _S740.mesh_0, kernelContext_76);
 
-        if((_S739.lods_0[h_27->pth_lod].index_first_0 + h_27->pth_primitive * 3U) != (_S731.first_0))
+        if((_S742.lods_0[h_27->pth_lod].index_first_0 + h_27->pth_primitive * 3U) != (_S734.first_0))
         {
 
             i_21 = i_21 + 1U;
@@ -7198,13 +7224,13 @@ float pt_emission_pdf_0(const PtParams_0 thread* p_15, const DeRtHit_0 thread* h
 
         float d2_0 = dot(delta_1, delta_1);
 
-        thread DiSource_0 _S740 = _S731;
+        thread DiSource_0 _S743 = _S734;
 
-        float3 _S741 = pt_source_normal_0(p_15, &_S740, kernelContext_76);
-        float cosine_0 = dot(_S741, - normalize(delta_1));
+        float3 _S744 = pt_source_normal_0(p_15, &_S743, kernelContext_76);
+        float cosine_0 = dot(_S744, - normalize(delta_1));
 
         float cosine_1;
-        if((_S731.radiance_0.w) > 0.0f)
+        if((_S734.radiance_0.w) > 0.0f)
         {
 
             cosine_1 = abs(cosine_0);
@@ -7225,11 +7251,11 @@ float pt_emission_pdf_0(const PtParams_0 thread* p_15, const DeRtHit_0 thread* h
             continue;
         }
 
-        float _S742 = _S731.pdf_1 * d2_0 / max(_S731.p0_0.w * cosine_1, 9.99999968265522539e-21f);
+        float _S745 = _S734.pdf_1 * d2_0 / max(_S734.p0_0.w * cosine_1, 9.99999968265522539e-21f);
 
-        float3 _S743 = pt_light_categories_0(p_15);
+        float3 _S746 = pt_light_categories_0(p_15);
 
-        result_1 = result_1 + _S742 * _S743.y;
+        result_1 = result_1 + _S745 * _S746.y;
 
         i_21 = i_21 + 1U;
 
@@ -7249,140 +7275,140 @@ float3 pt_endpoint_0(const PtParams_0 thread* p_16, const DeRtRay_0 thread* ray_
         return float3(int3(int(0)) );
     }
 
-    float _S744 = hit_3->pth_t;
+    float _S747 = hit_3->pth_t;
     thread float area_pdf_0;
 
-    float4 _S745 = pt_area_hit_0(p_16, ray_3, hit_3->pth_t, &area_pdf_0, kernelContext_77);
+    float4 _S748 = pt_area_hit_0(p_16, ray_3, hit_3->pth_t, &area_pdf_0, kernelContext_77);
 
-    float _S746;
-    if((_S745.w) >= 0.0f)
+    float _S749;
+    if((_S748.w) >= 0.0f)
     {
 
-        float3 _S747 = _S745.xyz;
+        float3 _S750 = _S748.xyz;
 
         if(strategy_0 == 2U)
         {
 
-            _S746 = 1.0f;
+            _S749 = 1.0f;
 
         }
         else
         {
 
-            _S746 = pt_power_0(last_pdf_0, area_pdf_0);
+            _S749 = pt_power_0(last_pdf_0, area_pdf_0);
 
         }
 
-        return _S747 * float3(_S746) ;
+        return _S750 * float3(_S749) ;
     }
 
-    if(_S744 < 0.0f)
+    if(_S747 < 0.0f)
     {
 
-        float3 _S748 = ray_3->ptr_direction.xyz;
+        float3 _S751 = ray_3->ptr_direction.xyz;
 
-        float3 _S749 = pt_environment_0(p_16, _S748, kernelContext_77);
+        float3 _S752 = pt_environment_0(p_16, _S751, kernelContext_77);
 
         if(strategy_0 == 2U)
         {
 
-            _S746 = 1.0f;
+            _S749 = 1.0f;
 
         }
         else
         {
 
-            float _S750 = pt_env_pdf_0(p_16, _S748, kernelContext_77);
+            float _S753 = pt_env_pdf_0(p_16, _S751, kernelContext_77);
 
-            float3 _S751 = pt_light_categories_0(p_16);
+            float3 _S754 = pt_light_categories_0(p_16);
 
-            _S746 = pt_power_0(last_pdf_0, _S750 * _S751.x);
+            _S749 = pt_power_0(last_pdf_0, _S753 * _S754.x);
 
         }
 
-        return _S749 * float3(_S746) ;
+        return _S752 * float3(_S749) ;
     }
 
-    DeRtContext_0 _S752 = pt_query_0(p_16, kernelContext_77);
-    float3 _S753 = ray_3->ptr_origin.xyz;
+    DeRtContext_0 _S755 = pt_query_0(p_16, kernelContext_77);
+    float3 _S756 = ray_3->ptr_origin.xyz;
 
-    thread DeRtContext_0 _S754 = _S752;
+    thread DeRtContext_0 _S757 = _S755;
 
-    DeRtSurface_0 _S755 = de_rt_hit_surface_0(&_S754, hit_3, _S753, p_16->ptp_brdf_lut, kernelContext_77);
-    float3 position_6 = _S753 + ray_3->ptr_direction.xyz * float3(_S744) ;
+    DeRtSurface_0 _S758 = de_rt_hit_surface_0(&_S757, hit_3, _S756, p_16->ptp_brdf_lut, kernelContext_77);
+    float3 position_6 = _S756 + ray_3->ptr_direction.xyz * float3(_S747) ;
 
-    bool _S756;
-    if(_S755.valid_1)
+    bool _S759;
+    if(_S758.valid_1)
     {
 
-        _S756 = any((_S755.material_1.emissive_0) != (float3(0.0f) ));
+        _S759 = any((_S758.material_1.emissive_0) != (float3(0.0f) ));
 
     }
     else
     {
 
-        _S756 = false;
+        _S759 = false;
 
     }
 
-    if(_S756)
+    if(_S759)
     {
 
-        bool _S757 = pt_hit_emits_0(p_16, ray_3, hit_3, kernelContext_77);
+        bool _S760 = pt_hit_emits_0(p_16, ray_3, hit_3, kernelContext_77);
 
-        _S756 = _S757;
+        _S759 = _S760;
 
     }
     else
     {
 
-        _S756 = false;
+        _S759 = false;
 
     }
 
-    float3 _S758;
+    float3 _S761;
 
-    if(_S756)
+    if(_S759)
     {
 
         if(strategy_0 == 2U)
         {
 
-            _S746 = 1.0f;
+            _S749 = 1.0f;
 
         }
         else
         {
 
-            float _S759 = pt_emission_pdf_0(p_16, hit_3, previous_1, position_6, kernelContext_77);
+            float _S762 = pt_emission_pdf_0(p_16, hit_3, previous_1, position_6, kernelContext_77);
 
-            _S746 = pt_power_0(last_pdf_0, _S759);
+            _S749 = pt_power_0(last_pdf_0, _S762);
 
         }
 
-        _S758 = _S755.material_1.emissive_0 * float3(_S746) ;
+        _S761 = _S758.material_1.emissive_0 * float3(_S749) ;
 
     }
     else
     {
 
-        _S758 = float3(int3(int(0)) );
+        _S761 = float3(int3(int(0)) );
 
     }
 
-    return _S758;
+    return _S761;
 }
 
 
 float3 pt_random3_0(uint table_2, uint pixel_5, uint sample_3, uint dimension_2, KernelContext_0 thread* kernelContext_78)
 {
 
-    float _S760 = pt_random_1(table_2, pixel_5, sample_3, dimension_2, kernelContext_78);
+    float _S763 = pt_random_1(table_2, pixel_5, sample_3, dimension_2, kernelContext_78);
 
-    float _S761 = pt_random_1(table_2, pixel_5, sample_3, dimension_2 + 1U, kernelContext_78);
+    float _S764 = pt_random_1(table_2, pixel_5, sample_3, dimension_2 + 1U, kernelContext_78);
 
-    float _S762 = pt_random_1(table_2, pixel_5, sample_3, dimension_2 + 2U, kernelContext_78);
-    return float3(_S760, _S761, _S762);
+    float _S765 = pt_random_1(table_2, pixel_5, sample_3, dimension_2 + 2U, kernelContext_78);
+    return float3(_S763, _S764, _S765);
 }
 
 
@@ -7393,66 +7419,66 @@ float3 pt_env_direction_0(float2 uv_4)
 
     float phi_3 = 6.28318548202514648f * uv_4.x;
 
-    float r_28 = sqrt(max(0.0f, 1.0f - z_2 * z_2));
-    return float3(r_28 * cos(phi_3), r_28 * sin(phi_3), z_2);
+    float r_29 = sqrt(max(0.0f, 1.0f - z_2 * z_2));
+    return float3(r_29 * cos(phi_3), r_29 * sin(phi_3), z_2);
 }
 
 
 float3 de_rt_offset_0(float3 p_17, float3 geometric_normal_1, float3 direction_2)
 {
 
-    float _S763 = max(1.0f, max(abs(p_17.x), max(abs(p_17.y), abs(p_17.z))));
+    float _S766 = max(1.0f, max(abs(p_17.x), max(abs(p_17.y), abs(p_17.z))));
 
-    int _S764;
+    int _S767;
     if((dot(geometric_normal_1, direction_2)) >= 0.0f)
     {
 
-        _S764 = int(1);
+        _S767 = int(1);
 
     }
     else
     {
 
-        _S764 = int(-1);
+        _S767 = int(-1);
 
     }
 
-    return p_17 + geometric_normal_1 * float3(float(_S764))  * float3((0.00000999999974738f * _S763)) ;
+    return p_17 + geometric_normal_1 * float3(float(_S767))  * float3((0.00000999999974738f * _S766)) ;
 }
 
 
 float3 de_rt_tangent_0(float3 n_7)
 {
 
-    float3 _S765;
+    float3 _S768;
 
     if((abs(n_7.z)) < 0.99900001287460327f)
     {
 
-        _S765 = float3(0.0f, 0.0f, 1.0f);
+        _S768 = float3(0.0f, 0.0f, 1.0f);
 
     }
     else
     {
 
-        _S765 = float3(0.0f, 1.0f, 0.0f);
+        _S768 = float3(0.0f, 1.0f, 0.0f);
 
     }
 
-    return normalize(cross(_S765, n_7));
+    return normalize(cross(_S768, n_7));
 }
 
 
 DeRtRay_0 de_rt_shadow_ray_0(const DeClusterLight_0 thread* l_14, float3 p_18, float3 normal_6, float2 u_11)
 {
 
-    uint _S766 = de_light_kind_0(l_14);
+    uint _S769 = de_light_kind_0(l_14);
     float phi_4 = 6.28318548202514648f * u_11.y;
-    bool _S767 = _S766 == 0U;
+    bool _S770 = _S769 == 0U;
 
     float3 center_0;
 
-    if(_S767)
+    if(_S770)
     {
 
         center_0 = - l_14->direction_0.xyz;
@@ -7471,7 +7497,7 @@ DeRtRay_0 de_rt_shadow_ray_0(const DeClusterLight_0 thread* l_14, float3 p_18, f
     float3 wi_27;
 
     float distance_0;
-    if(_S767)
+    if(_S770)
     {
 
         float z_3 = 1.0f - u_11.x * (1.0f - cos(clamp(l_14->direction_0.w, 0.0f, 1.54999995231628418f)));
@@ -7485,24 +7511,24 @@ DeRtRay_0 de_rt_shadow_ray_0(const DeClusterLight_0 thread* l_14, float3 p_18, f
     {
 
         float3 target_0 = l_14->position_0.xyz;
-        bool _S768 = _S766 == 3U;
+        bool _S771 = _S769 == 3U;
 
-        bool _S769;
+        bool _S772;
 
-        if(_S768)
+        if(_S771)
         {
 
-            _S769 = true;
+            _S772 = true;
 
         }
         else
         {
 
-            _S769 = _S766 == 4U;
+            _S772 = _S769 == 4U;
 
         }
 
-        if(_S769)
+        if(_S772)
         {
 
             float3 x_17 = normalize(l_14->axis_0.xyz);
@@ -7510,7 +7536,7 @@ DeRtRay_0 de_rt_shadow_ray_0(const DeClusterLight_0 thread* l_14, float3 p_18, f
             float3 y_2 = normalize(cross(l_14->direction_0.xyz, x_17));
 
             float2 xy_2;
-            if(_S768)
+            if(_S771)
             {
 
                 xy_2 = float2(2.0f)  * u_11 - float2(1.0f) ;
@@ -7532,9 +7558,9 @@ DeRtRay_0 de_rt_shadow_ray_0(const DeClusterLight_0 thread* l_14, float3 p_18, f
 
             float z_4 = 1.0f - 2.0f * u_11.x;
 
-            float r_29 = sqrt(max(0.0f, 1.0f - z_4 * z_4));
+            float r_30 = sqrt(max(0.0f, 1.0f - z_4 * z_4));
 
-            wi_27 = target_0 + float3(l_14->direction_0.w)  * float3(r_29 * cos(phi_4), r_29 * sin(phi_4), z_4);
+            wi_27 = target_0 + float3(l_14->direction_0.w)  * float3(r_30 * cos(phi_4), r_30 * sin(phi_4), z_4);
 
         }
 
@@ -7548,26 +7574,26 @@ DeRtRay_0 de_rt_shadow_ray_0(const DeClusterLight_0 thread* l_14, float3 p_18, f
 
     }
 
-    float _S770 = max(0.00009999999747379f, 0.00000999999974738f * max(abs(p_18.x), max(abs(p_18.y), abs(p_18.z))));
+    float _S773 = max(0.00009999999747379f, 0.00000999999974738f * max(abs(p_18.x), max(abs(p_18.y), abs(p_18.z))));
 
     thread DeRtRay_0 ray_4;
 
-    float _S771;
+    float _S774;
     if((dot(normal_6, wi_27)) >= 0.0f)
     {
 
-        _S771 = _S770;
+        _S774 = _S773;
 
     }
     else
     {
 
-        _S771 = - _S770;
+        _S774 = - _S773;
 
     }
 
-    (&ray_4)->ptr_origin = float4(p_18 + normal_6 * float3(_S771) , 0.00000999999974738f);
-    (&ray_4)->ptr_direction = float4(wi_27, max(0.0f, distance_0 - _S770));
+    (&ray_4)->ptr_origin = float4(p_18 + normal_6 * float3(_S774) , 0.00000999999974738f);
+    (&ray_4)->ptr_direction = float4(wi_27, max(0.0f, distance_0 - _S773));
 
     return ray_4;
 }
@@ -7593,9 +7619,9 @@ DeLightHit_0 de_light_punctual_0(const DeClusterLight_0 thread* l_16, float3 p_1
 {
     thread DeLightHit_0 h_28;
 
-    uint _S772 = de_light_kind_0(l_16);
+    uint _S775 = de_light_kind_0(l_16);
 
-    if(_S772 == 0U)
+    if(_S775 == 0U)
     {
         (&h_28)->wi_28 = - l_16->direction_0.xyz;
         (&h_28)->illuminance_0 = l_16->color_2.xyz;
@@ -7603,44 +7629,44 @@ DeLightHit_0 de_light_punctual_0(const DeClusterLight_0 thread* l_16, float3 p_1
         return h_28;
     }
 
-    float4 _S773 = l_16->position_0;
+    float4 _S776 = l_16->position_0;
 
     float3 v_19 = l_16->position_0.xyz - p_19;
     float d2_1 = dot(v_19, v_19);
     float d_10 = sqrt(d2_1);
 
-    float3 _S774;
+    float3 _S777;
     if(d_10 > 0.0f)
     {
 
-        _S774 = v_19 / float3(d_10) ;
+        _S777 = v_19 / float3(d_10) ;
 
     }
     else
     {
 
-        _S774 = float3(0.0f, 0.0f, 1.0f);
+        _S777 = float3(0.0f, 0.0f, 1.0f);
 
     }
 
-    (&h_28)->wi_28 = _S774;
+    (&h_28)->wi_28 = _S777;
     (&h_28)->distance_2 = d_10;
-    float r_30 = _S773.w;
-    if(!(d_10 < r_30))
+    float r_31 = _S776.w;
+    if(!(d_10 < r_31))
     {
         (&h_28)->illuminance_0 = float3(0.0f, 0.0f, 0.0f);
         return h_28;
     }
     float rs_2 = l_16->direction_0.w;
-    float e_3 = de_light_window_0(d_10, r_30) / max(d2_1, max(rs_2 * rs_2, 9.99999993922529029e-09f));
+    float e_3 = de_light_window_0(d_10, r_31) / max(d2_1, max(rs_2 * rs_2, 9.99999993922529029e-09f));
 
     float e_4;
-    if(_S772 == 2U)
+    if(_S775 == 2U)
     {
 
-        float _S775 = de_spot_factor_0(l_16, - (&h_28)->wi_28);
+        float _S778 = de_spot_factor_0(l_16, - (&h_28)->wi_28);
 
-        e_4 = e_3 * _S775;
+        e_4 = e_3 * _S778;
 
     }
     else
@@ -7727,31 +7753,31 @@ struct DiParams_0
 DeSceneConstants_0 di_scene_0(const DiParams_0 thread* p_20, KernelContext_0 thread* kernelContext_79)
 {
 
-    thread DeROBuffer_0 _S776 = de_robuffer_6(p_20->scene_1);
+    thread DeROBuffer_0 _S779 = de_robuffer_6(p_20->scene_1);
 
-    DeSceneConstants_0 _S777 = DeROBuffer_operatorx5Bx5D_get_6(&_S776, p_20->scene_slot_0, kernelContext_79);
+    DeSceneConstants_0 _S780 = DeROBuffer_operatorx5Bx5D_get_6(&_S779, p_20->scene_slot_0, kernelContext_79);
 
-    return _S777;
+    return _S780;
 }
 
 
 bool de_sprite_opacity_0(const DeGpuMaterial_0 thread* material_3, float2 plane_uv_0, uint sampler_5, KernelContext_0 thread* kernelContext_80)
 {
     float alpha_7 = material_3->base_color_1.w;
-    uint _S778 = material_3->textures_1[int(0)].x;
+    uint _S781 = material_3->textures_1[int(0)].x;
 
-    uint texture_2 = _S778 & 1073741823U;
+    uint texture_2 = _S781 & 1073741823U;
 
     float alpha_8;
     if(texture_2 != 0U)
     {
 
-        texture2d<float, access::sample> _S779 = de_tex2d_0(texture_2, kernelContext_80);
+        texture2d<float, access::sample> _S782 = de_tex2d_0(texture_2, kernelContext_80);
         thread uint width_2;
 
         thread uint height_2;
 
-        (*((&width_2)) = (_S779).get_width(0)),(*((&height_2)) = (_S779).get_height(0));
+        (*((&width_2)) = (_S782).get_width(0)),(*((&height_2)) = (_S782).get_height(0));
         float2 half_texel_0 = float2(0.5f)  / float2(float(width_2), float(height_2));
         float2 a_10 = material_3->subsurface_0.xy;
 
@@ -7760,21 +7786,21 @@ bool de_sprite_opacity_0(const DeGpuMaterial_0 thread* material_3, float2 plane_
 
         float2 hi_0 = max(a_10, b_31) - half_texel_0;
 
-        float2 _S780 = de_sprite_uv_0(material_3, plane_uv_0);
-        float2 uv_5 = clamp(_S780, min(lo_0, hi_0), max(lo_0, hi_0));
-        if((_S778 & 1073741824U) != 0U)
+        float2 _S783 = de_sprite_uv_0(material_3, plane_uv_0);
+        float2 uv_5 = clamp(_S783, min(lo_0, hi_0), max(lo_0, hi_0));
+        if((_S781 & 1073741824U) != 0U)
         {
-            int3 _S781 = int3(clamp(int2(floor(uv_5 * float2(float(width_2), float(height_2)))), int2(int(0)) , int2(int(width_2), int(height_2)) - int2(int(1)) ), int(0));
+            int3 _S784 = int3(clamp(int2(floor(uv_5 * float2(float(width_2), float(height_2)))), int2(int(0)) , int2(int(width_2), int(height_2)) - int2(int(1)) ), int(0));
 
-            alpha_8 = alpha_7 * ((_S779).read(vec<uint,2>(((_S781)).xy), uint(((_S781)).z))).w;
+            alpha_8 = alpha_7 * ((_S782).read(vec<uint,2>(((_S784)).xy), uint(((_S784)).z))).w;
 
         }
         else
         {
 
-            sampler _S782 = de_sampler_0(sampler_5, kernelContext_80);
+            sampler _S785 = de_sampler_0(sampler_5, kernelContext_80);
 
-            alpha_8 = alpha_7 * ((_S779).sample((_S782), (uv_5), level((0.0f)))).w;
+            alpha_8 = alpha_7 * ((_S782).sample((_S785), (uv_5), level((0.0f)))).w;
 
         }
 
@@ -7790,18 +7816,18 @@ bool de_sprite_opacity_0(const DeGpuMaterial_0 thread* material_3, float2 plane_
 }
 
 
-bool de_rt_material_opacity_0(const DeResolvePoint_0 thread* r_31, const DeGpuMaterial_0 thread* m_23, uint sampler_6, KernelContext_0 thread* kernelContext_81)
+bool de_rt_material_opacity_0(const DeResolvePoint_0 thread* r_32, const DeGpuMaterial_0 thread* m_23, uint sampler_6, KernelContext_0 thread* kernelContext_81)
 {
 
-    bool _S783 = de_sprite_is_0(m_23);
-    if(_S783)
+    bool _S786 = de_sprite_is_0(m_23);
+    if(_S786)
     {
 
-        float3 _S784 = de_resolve_object_pos_0(r_31);
+        float3 _S787 = de_resolve_object_pos_0(r_32);
 
-        bool _S785 = de_sprite_opacity_0(m_23, float2(_S784.x, 1.0f - _S784.y), sampler_6, kernelContext_81);
+        bool _S788 = de_sprite_opacity_0(m_23, float2(_S787.x, 1.0f - _S787.y), sampler_6, kernelContext_81);
 
-        return _S785;
+        return _S788;
     }
 
     if((m_23->alpha_mode_0) != 1U)
@@ -7812,43 +7838,43 @@ bool de_rt_material_opacity_0(const DeResolvePoint_0 thread* r_31, const DeGpuMa
 
     float a_11 = m_23->base_color_1.w;
 
-    uint _S786 = de_material_texture_1(m_23, 0U);
+    uint _S789 = de_material_texture_1(m_23, 0U);
 
     float a_12;
 
-    if(_S786 != 0U)
+    if(_S789 != 0U)
     {
 
-        uint _S787 = de_material_texcoord_1(m_23, 0U);
-        thread float2 dx_3;
+        uint _S790 = de_material_texcoord_1(m_23, 0U);
+        thread float2 dx_4;
 
-        thread float2 dy_3;
+        thread float2 dy_4;
 
-        float2 _S788 = de_resolve_uv_0(r_31, _S787, &dx_3, &dy_3, kernelContext_81);
+        float2 _S791 = de_resolve_uv_0(r_32, _S790, &dx_4, &dy_4, kernelContext_81);
 
         if(((m_23->textures_1[int(0)].x) & 1073741824U) != 0U)
         {
 
-            texture2d<float, access::sample> _S789 = de_tex2d_0(_S786, kernelContext_81);
+            texture2d<float, access::sample> _S792 = de_tex2d_0(_S789, kernelContext_81);
             thread uint w_8;
 
             thread uint h_29;
 
-            (*((&w_8)) = (_S789).get_width(0)),(*((&h_29)) = (_S789).get_height(0));
+            (*((&w_8)) = (_S792).get_width(0)),(*((&h_29)) = (_S792).get_height(0));
 
-            int3 _S790 = int3(clamp(int2(floor(_S788 * float2(float(w_8), float(h_29)))), int2(int(0)) , int2(int(w_8), int(h_29)) - int2(int(1)) ), int(0));
+            int3 _S793 = int3(clamp(int2(floor(_S791 * float2(float(w_8), float(h_29)))), int2(int(0)) , int2(int(w_8), int(h_29)) - int2(int(1)) ), int(0));
 
-            a_12 = a_11 * ((_S789).read(vec<uint,2>(((_S790)).xy), uint(((_S790)).z))).w;
+            a_12 = a_11 * ((_S792).read(vec<uint,2>(((_S793)).xy), uint(((_S793)).z))).w;
 
         }
         else
         {
 
-            texture2d<float, access::sample> _S791 = de_tex2d_0(_S786, kernelContext_81);
+            texture2d<float, access::sample> _S794 = de_tex2d_0(_S789, kernelContext_81);
 
-            sampler _S792 = de_sampler_0(sampler_6, kernelContext_81);
+            sampler _S795 = de_sampler_0(sampler_6, kernelContext_81);
 
-            a_12 = a_11 * ((_S791).sample((_S792), (_S788), level((0.0f)))).w;
+            a_12 = a_11 * ((_S794).sample((_S795), (_S791), level((0.0f)))).w;
 
         }
 
@@ -7869,91 +7895,91 @@ float3 di_emission_0(const DiSource_0 thread* source_2, float2 uv_6, const DiPar
 
     float3 le_0 = source_2->radiance_0.xyz;
 
-    uint _S793 = source_2->material_0;
+    uint _S796 = source_2->material_0;
     if((source_2->material_0) == 4294967295U)
     {
 
         return le_0;
     }
 
-    DeSceneConstants_0 _S794 = di_scene_0(p_21, kernelContext_82);
+    DeSceneConstants_0 _S797 = di_scene_0(p_21, kernelContext_82);
 
-    thread DeROBuffer_0 _S795 = de_robuffer_0(_S794.materials_1);
+    thread DeROBuffer_0 _S798 = de_robuffer_0(_S797.materials_1);
 
-    DeGpuMaterial_0 _S796 = DeROBuffer_operatorx5Bx5D_get_0(&_S795, _S793, kernelContext_82);
+    DeGpuMaterial_0 _S799 = DeROBuffer_operatorx5Bx5D_get_0(&_S798, _S796, kernelContext_82);
 
-    thread DeROBuffer_0 _S797 = de_robuffer_5(_S794.instances_0);
+    thread DeROBuffer_0 _S800 = de_robuffer_5(_S797.instances_0);
 
-    DeGpuInstance_0 _S798 = DeROBuffer_operatorx5Bx5D_get_5(&_S797, source_2->index_1, kernelContext_82);
+    DeGpuInstance_0 _S801 = DeROBuffer_operatorx5Bx5D_get_5(&_S800, source_2->index_1, kernelContext_82);
 
-    uint _S799 = p_21->layers_1;
+    uint _S802 = p_21->layers_1;
 
-    bool _S800;
+    bool _S803;
 
 
 
     if((p_21->layers_1) != 0U)
     {
 
-        _S800 = ((_S798.layer_mask_0) & _S799) == 0U;
+        _S803 = ((_S801.layer_mask_0) & _S802) == 0U;
 
     }
     else
     {
 
-        _S800 = false;
+        _S803 = false;
 
     }
 
-    if(_S800)
+    if(_S803)
     {
 
         return float3(int3(int(0)) );
     }
 
-    thread DeROBuffer_0 _S801 = de_robuffer_4(_S794.meshes_0);
+    thread DeROBuffer_0 _S804 = de_robuffer_4(_S797.meshes_0);
 
-    DeGpuMesh_0 _S802 = DeROBuffer_operatorx5Bx5D_get_4(&_S801, _S798.mesh_0, kernelContext_82);
+    DeGpuMesh_0 _S805 = DeROBuffer_operatorx5Bx5D_get_4(&_S804, _S801.mesh_0, kernelContext_82);
 
-    uint _S803 = source_2->first_0 * 4U;
+    uint _S806 = source_2->first_0 * 4U;
 
-    thread DeBytes_0 _S804 = de_bytes_0(_S802.indices_0);
+    thread DeBytes_0 _S807 = de_bytes_0(_S805.indices_0);
 
-    uint3 _S805 = DeBytes_load3_0(&_S804, _S803, kernelContext_82);
+    uint3 _S808 = DeBytes_load3_0(&_S807, _S806, kernelContext_82);
     float a_13 = sqrt(uv_6.x);
 
-    float _S806 = 1.0f - a_13;
+    float _S809 = 1.0f - a_13;
 
-    float _S807 = uv_6.y;
+    float _S810 = uv_6.y;
 
-    float _S808 = a_13 * (1.0f - _S807);
+    float _S811 = a_13 * (1.0f - _S810);
 
-    float _S809 = a_13 * _S807;
+    float _S812 = a_13 * _S810;
 
-    float3 bary_3 = float3(_S806, _S808, _S809);
-    float4 _S810 = float4(0.0f) ;
+    float3 bary_3 = float3(_S809, _S811, _S812);
+    float4 _S813 = float4(0.0f) ;
 
-    array<float4, int(3)> _S811 = { { _S810, _S810, _S810 } };
+    array<float4, int(3)> _S814 = { { _S813, _S813, _S813 } };
 
-    array<uint4, int(2)> _S812 = { { uint4(0U) , uint4(0U)  } };
+    array<uint4, int(2)> _S815 = { { uint4(0U) , uint4(0U)  } };
 
-    DeGpuInstance_0 _S813 = { _S811, _S811, _S810, _S810, _S810, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, _S812 };
+    DeGpuInstance_0 _S816 = { _S814, _S814, _S813, _S813, _S813, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, _S815 };
 
-    array<float4, int(2)> _S814 = { { _S810, _S810 } };
+    array<float4, int(2)> _S817 = { { _S813, _S813 } };
 
-    DeGpuMeshLod_0 _S815 = { 0U, 0U, 0U, 0U, 0U, 0U, 0.0f, 0U };
+    DeGpuMeshLod_0 _S818 = { 0U, 0U, 0U, 0U, 0U, 0U, 0.0f, 0U };
 
-    array<DeGpuMeshLod_0, int(8)> _S816 = { { _S815, _S815, _S815, _S815, _S815, _S815, _S815, _S815 } };
+    array<DeGpuMeshLod_0, int(8)> _S819 = { { _S818, _S818, _S818, _S818, _S818, _S818, _S818, _S818 } };
 
-    DeGpuMesh_0 _S817 = { 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, _S810, _S810, _S814, _S810, _S810, _S810, _S812, _S812, _S816 };
+    DeGpuMesh_0 _S820 = { 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, _S813, _S813, _S817, _S813, _S813, _S813, _S815, _S815, _S819 };
 
-    DeVisMeshletInfo_0 _S818 = { 0U, 0U, 0U, 0U, 0U };
+    DeVisMeshletInfo_0 _S821 = { 0U, 0U, 0U, 0U, 0U };
 
-    uint3 _S819 = uint3(0U) ;
+    uint3 _S822 = uint3(0U) ;
 
-    float3 _S820 = float3(0.0f) ;
+    float3 _S823 = float3(0.0f) ;
 
-    array<float3, int(3)> _S821 = { { _S820, _S820, _S820 } };
+    array<float3, int(3)> _S824 = { { _S823, _S823, _S823 } };
 
     thread DeResolvePoint_0 point_1;
 
@@ -7963,54 +7989,54 @@ float3 di_emission_0(const DiSource_0 thread* source_2, float2 uv_6, const DiPar
 
     (&point_1)->triangle_0 = 0U;
 
-    (&point_1)->inst_0 = _S813;
+    (&point_1)->inst_0 = _S816;
 
-    (&point_1)->mesh_2 = _S817;
+    (&point_1)->mesh_2 = _S820;
 
-    (&point_1)->meshlet_0 = _S818;
+    (&point_1)->meshlet_0 = _S821;
 
-    (&point_1)->vertex_1 = _S819;
+    (&point_1)->vertex_1 = _S822;
 
-    (&point_1)->bary_0 = _S820;
+    (&point_1)->bary_0 = _S823;
 
-    (&point_1)->bary_dx_0 = _S820;
+    (&point_1)->bary_dx_0 = _S823;
 
-    (&point_1)->bary_dy_0 = _S820;
+    (&point_1)->bary_dy_0 = _S823;
 
-    (&point_1)->object_pos_0 = _S821;
+    (&point_1)->object_pos_0 = _S824;
 
-    (&point_1)->inst_0 = _S798;
+    (&point_1)->inst_0 = _S801;
 
-    (&point_1)->mesh_2 = _S802;
+    (&point_1)->mesh_2 = _S805;
 
-    (&point_1)->vertex_1 = _S805;
+    (&point_1)->vertex_1 = _S808;
 
     (&point_1)->bary_0 = bary_3;
 
-    uint _S822 = p_21->sampler_4;
+    uint _S825 = p_21->sampler_4;
 
-    thread DeResolvePoint_0 _S823 = point_1;
+    thread DeResolvePoint_0 _S826 = point_1;
 
-    thread DeGpuMaterial_0 _S824 = _S796;
+    thread DeGpuMaterial_0 _S827 = _S799;
 
-    bool _S825 = de_rt_material_opacity_0(&_S823, &_S824, p_21->sampler_4, kernelContext_82);
-    if(!_S825)
+    bool _S828 = de_rt_material_opacity_0(&_S826, &_S827, p_21->sampler_4, kernelContext_82);
+    if(!_S828)
     {
 
         return float3(int3(int(0)) );
     }
 
-    bool unlit_0 = ((_S796.model_1) & 31U) == 1U;
+    bool unlit_0 = ((_S799.model_1) & 31U) == 1U;
 
     float3 le_1;
     if(unlit_0)
     {
 
-        thread DeResolvePoint_0 _S826 = point_1;
+        thread DeResolvePoint_0 _S829 = point_1;
 
-        float4 _S827 = de_resolve_color_0(&_S826, kernelContext_82);
+        float4 _S830 = de_resolve_color_0(&_S829, kernelContext_82);
 
-        le_1 = le_0 * _S827.xyz;
+        le_1 = le_0 * _S830.xyz;
 
     }
     else
@@ -8034,121 +8060,121 @@ float3 di_emission_0(const DiSource_0 thread* source_2, float2 uv_6, const DiPar
 
     }
 
-    thread DeGpuMaterial_0 _S828 = _S796;
+    thread DeGpuMaterial_0 _S831 = _S799;
 
-    uint _S829 = de_material_texture_1(&_S828, slot_1);
+    uint _S832 = de_material_texture_1(&_S831, slot_1);
 
-    if(_S829 != 0U)
+    if(_S832 != 0U)
     {
 
-        thread DeGpuMaterial_0 _S830 = _S796;
+        thread DeGpuMaterial_0 _S833 = _S799;
 
-        uint _S831 = de_material_texcoord_1(&_S830, slot_1);
+        uint _S834 = de_material_texcoord_1(&_S833, slot_1);
 
-        bool _S832 = _S831 == 0U;
+        bool _S835 = _S834 == 0U;
 
         float2 t0_1;
 
-        if(_S832)
+        if(_S835)
         {
 
-            uint _S833 = _S805.x;
+            uint _S836 = _S808.x;
 
-            thread DeGpuMesh_0 _S834 = _S802;
+            thread DeGpuMesh_0 _S837 = _S805;
 
-            float2 _S835 = de_vis_mesh_uv0_0(&_S834, _S833, kernelContext_82);
-
-            t0_1 = _S835;
-
-        }
-        else
-        {
-
-            uint _S836 = _S805.x;
-
-            thread DeGpuMesh_0 _S837 = _S802;
-
-            float2 _S838 = de_vis_mesh_uv1_0(&_S837, _S836, kernelContext_82);
+            float2 _S838 = de_vis_mesh_uv0_0(&_S837, _S836, kernelContext_82);
 
             t0_1 = _S838;
 
         }
-
-        float2 t1_1;
-        if(_S832)
-        {
-
-            uint _S839 = _S805.y;
-
-            thread DeGpuMesh_0 _S840 = _S802;
-
-            float2 _S841 = de_vis_mesh_uv0_0(&_S840, _S839, kernelContext_82);
-
-            t1_1 = _S841;
-
-        }
         else
         {
 
-            uint _S842 = _S805.y;
+            uint _S839 = _S808.x;
 
-            thread DeGpuMesh_0 _S843 = _S802;
+            thread DeGpuMesh_0 _S840 = _S805;
 
-            float2 _S844 = de_vis_mesh_uv1_0(&_S843, _S842, kernelContext_82);
+            float2 _S841 = de_vis_mesh_uv1_0(&_S840, _S839, kernelContext_82);
+
+            t0_1 = _S841;
+
+        }
+
+        float2 t1_1;
+        if(_S835)
+        {
+
+            uint _S842 = _S808.y;
+
+            thread DeGpuMesh_0 _S843 = _S805;
+
+            float2 _S844 = de_vis_mesh_uv0_0(&_S843, _S842, kernelContext_82);
 
             t1_1 = _S844;
 
         }
-
-        float2 t2_1;
-        if(_S832)
-        {
-
-            uint _S845 = _S805.z;
-
-            thread DeGpuMesh_0 _S846 = _S802;
-
-            float2 _S847 = de_vis_mesh_uv0_0(&_S846, _S845, kernelContext_82);
-
-            t2_1 = _S847;
-
-        }
         else
         {
 
-            uint _S848 = _S805.z;
+            uint _S845 = _S808.y;
 
-            thread DeGpuMesh_0 _S849 = _S802;
+            thread DeGpuMesh_0 _S846 = _S805;
 
-            float2 _S850 = de_vis_mesh_uv1_0(&_S849, _S848, kernelContext_82);
+            float2 _S847 = de_vis_mesh_uv1_0(&_S846, _S845, kernelContext_82);
+
+            t1_1 = _S847;
+
+        }
+
+        float2 t2_1;
+        if(_S835)
+        {
+
+            uint _S848 = _S808.z;
+
+            thread DeGpuMesh_0 _S849 = _S805;
+
+            float2 _S850 = de_vis_mesh_uv0_0(&_S849, _S848, kernelContext_82);
 
             t2_1 = _S850;
 
         }
-        float2 at_0 = float2(_S806)  * t0_1 + float2(_S808)  * t1_1 + float2(_S809)  * t2_1;
-        if(((_S796.textures_1[slot_1 >> 2U][slot_1 & 3U]) & 1073741824U) != 0U)
+        else
         {
 
-            texture2d<float, access::sample> _S851 = de_tex2d_0(_S829, kernelContext_82);
+            uint _S851 = _S808.z;
+
+            thread DeGpuMesh_0 _S852 = _S805;
+
+            float2 _S853 = de_vis_mesh_uv1_0(&_S852, _S851, kernelContext_82);
+
+            t2_1 = _S853;
+
+        }
+        float2 at_0 = float2(_S809)  * t0_1 + float2(_S811)  * t1_1 + float2(_S812)  * t2_1;
+        if(((_S799.textures_1[slot_1 >> 2U][slot_1 & 3U]) & 1073741824U) != 0U)
+        {
+
+            texture2d<float, access::sample> _S854 = de_tex2d_0(_S832, kernelContext_82);
             thread uint w_9;
 
             thread uint h_30;
 
-            (*((&w_9)) = (_S851).get_width(0)),(*((&h_30)) = (_S851).get_height(0));
+            (*((&w_9)) = (_S854).get_width(0)),(*((&h_30)) = (_S854).get_height(0));
 
-            int3 _S852 = int3(clamp(int2(floor(at_0 * float2(float(w_9), float(h_30)))), int2(int(0)) , int2(int(w_9), int(h_30)) - int2(int(1)) ), int(0));
+            int3 _S855 = int3(clamp(int2(floor(at_0 * float2(float(w_9), float(h_30)))), int2(int(0)) , int2(int(w_9), int(h_30)) - int2(int(1)) ), int(0));
 
-            le_1 = le_1 * ((_S851).read(vec<uint,2>(((_S852)).xy), uint(((_S852)).z))).xyz;
+            le_1 = le_1 * ((_S854).read(vec<uint,2>(((_S855)).xy), uint(((_S855)).z))).xyz;
 
         }
         else
         {
 
-            texture2d<float, access::sample> _S853 = de_tex2d_0(_S829, kernelContext_82);
+            texture2d<float, access::sample> _S856 = de_tex2d_0(_S832, kernelContext_82);
 
-            sampler _S854 = de_sampler_0(_S822, kernelContext_82);
+            sampler _S857 = de_sampler_0(_S825, kernelContext_82);
 
-            le_1 = le_1 * ((_S853).sample((_S854), (at_0), level((0.0f)))).xyz;
+            le_1 = le_1 * ((_S856).sample((_S857), (at_0), level((0.0f)))).xyz;
 
         }
 
@@ -8162,21 +8188,21 @@ bool de_light_in_view_0(const DeGpuLight_0 thread* light_1, uint excluded_mask_1
 {
     uint mask_0 = (as_type<uint>((light_1->area_0.z)));
 
-    uint _S855;
+    uint _S858;
     if(mask_0 == 0U)
     {
 
-        _S855 = 4294967295U;
+        _S858 = 4294967295U;
 
     }
     else
     {
 
-        _S855 = mask_0;
+        _S858 = mask_0;
 
     }
 
-    return (_S855 & (~excluded_mask_1)) != 0U;
+    return (_S858 & (~excluded_mask_1)) != 0U;
 }
 
 
@@ -8194,17 +8220,17 @@ struct PtLightProposal_0
 PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 position_7, float3 normal_7, uint pixel_6, uint bounce_0, KernelContext_0 thread* kernelContext_83)
 {
 
-    float3 _S856 = float3(0.0f) ;
+    float3 _S859 = float3(0.0f) ;
 
-    float4 _S857 = float4(0.0f) ;
+    float4 _S860 = float4(0.0f) ;
 
-    DeRtRay_0 _S858 = { _S857, _S857 };
+    DeRtRay_0 _S861 = { _S860, _S860 };
 
     thread PtLightProposal_0 o_7;
 
-    (&o_7)->ptlight_wi = _S856;
+    (&o_7)->ptlight_wi = _S859;
 
-    (&o_7)->ptlight_incident = _S856;
+    (&o_7)->ptlight_incident = _S859;
 
     (&o_7)->ptlight_pdf = 0.0f;
 
@@ -8212,31 +8238,31 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
 
     (&o_7)->ptlight_casts_shadows = 0U;
 
-    (&o_7)->ptlight_shadow = _S858;
+    (&o_7)->ptlight_shadow = _S861;
 
     (&o_7)->ptlight_delta = 1U;
 
-    DeRtContext_0 _S859 = pt_query_0(p_22, kernelContext_83);
+    DeRtContext_0 _S862 = pt_query_0(p_22, kernelContext_83);
     uint dimension_3 = 2U + bounce_0 * 12U;
 
-    uint _S860 = p_22->ptp_sampling_table;
+    uint _S863 = p_22->ptp_sampling_table;
 
-    uint _S861 = pixel_6 ^ (p_22->ptp_seed);
+    uint _S864 = pixel_6 ^ (p_22->ptp_seed);
 
-    uint _S862 = p_22->ptp_sample;
+    uint _S865 = p_22->ptp_sample;
 
-    float3 _S863 = pt_random3_0(p_22->ptp_sampling_table, _S861, p_22->ptp_sample, dimension_3, kernelContext_83);
-    float3 _S864 = float3(int3(int(0)) );
+    float3 _S866 = pt_random3_0(p_22->ptp_sampling_table, _S864, p_22->ptp_sample, dimension_3, kernelContext_83);
+    float3 _S867 = float3(int3(int(0)) );
 
-    float3 _S865 = pt_light_categories_0(p_22);
+    float3 _S868 = pt_light_categories_0(p_22);
 
-    float _S866 = _S863.z;
+    float _S869 = _S866.z;
 
-    float _S867 = _S865.x;
+    float _S870 = _S868.x;
 
     uint choice_0;
 
-    if(_S866 < _S867)
+    if(_S869 < _S870)
     {
 
         choice_0 = 0U;
@@ -8245,7 +8271,7 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
     else
     {
 
-        if(_S866 < (_S867 + _S865.y))
+        if(_S869 < (_S870 + _S868.y))
         {
 
             choice_0 = 1U;
@@ -8273,7 +8299,7 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
     {
 
         (&o_7)->ptlight_delta = 0U;
-        float a_14 = _S863.x;
+        float a_14 = _S866.x;
 
         lo_1 = 0U;
 
@@ -8292,11 +8318,11 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
 
             uint mid_0 = (lo_1 + hi_1) / 2U;
 
-            thread DeROBuffer_0 _S868 = de_robuffer_7(p_22->ptp_env_cdf);
+            thread DeROBuffer_0 _S871 = de_robuffer_7(p_22->ptp_env_cdf);
 
-            float2 _S869 = DeROBuffer_operatorx5Bx5D_get_7(&_S868, mid_0, kernelContext_83);
+            float2 _S872 = DeROBuffer_operatorx5Bx5D_get_7(&_S871, mid_0, kernelContext_83);
 
-            if((_S869.x) < a_14)
+            if((_S872.x) < a_14)
             {
 
                 lo_1 = mid_0 + 1U;
@@ -8319,25 +8345,25 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
         else
         {
 
-            uint _S870 = lo_1 - 1U;
+            uint _S873 = lo_1 - 1U;
 
-            thread DeROBuffer_0 _S871 = de_robuffer_7(p_22->ptp_env_cdf);
+            thread DeROBuffer_0 _S874 = de_robuffer_7(p_22->ptp_env_cdf);
 
-            float2 _S872 = DeROBuffer_operatorx5Bx5D_get_7(&_S871, _S870, kernelContext_83);
+            float2 _S875 = DeROBuffer_operatorx5Bx5D_get_7(&_S874, _S873, kernelContext_83);
 
-            density_0 = _S872.x;
+            density_0 = _S875.x;
 
         }
 
-        thread DeROBuffer_0 _S873 = de_robuffer_7(p_22->ptp_env_cdf);
+        thread DeROBuffer_0 _S876 = de_robuffer_7(p_22->ptp_env_cdf);
 
-        float2 _S874 = DeROBuffer_operatorx5Bx5D_get_7(&_S873, lo_1, kernelContext_83);
+        float2 _S877 = DeROBuffer_operatorx5Bx5D_get_7(&_S876, lo_1, kernelContext_83);
 
-        float _S875 = _S874.y;
-        float3 wi_31 = pt_env_direction_0((float2(float(lo_1 % 32U), float(lo_1 / 32U)) + float2(saturate((a_14 - density_0) / max(_S875, 9.99999968265522539e-21f)), _S863.y)) / float2(32.0f, 16.0f));
-        float _S876 = _S875 * 512.0f / 12.56637096405029297f * _S867;
+        float _S878 = _S877.y;
+        float3 wi_31 = pt_env_direction_0((float2(float(lo_1 % 32U), float(lo_1 / 32U)) + float2(saturate((a_14 - density_0) / max(_S878, 9.99999968265522539e-21f)), _S866.y)) / float2(32.0f, 16.0f));
+        float _S879 = _S878 * 512.0f / 12.56637096405029297f * _S870;
 
-        float3 _S877 = pt_environment_0(p_22, wi_31, kernelContext_83);
+        float3 _S880 = pt_environment_0(p_22, wi_31, kernelContext_83);
 
         (&(&o_7)->ptlight_shadow)->ptr_origin = float4(de_rt_offset_0(position_7, normal_7, wi_31), 0.00000999999974738f);
 
@@ -8347,9 +8373,9 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
 
         wi_30 = wi_31;
 
-        incident_1 = _S877;
+        incident_1 = _S880;
 
-        density_0 = _S876;
+        density_0 = _S879;
 
     }
     else
@@ -8371,61 +8397,61 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
         if(casts_0)
         {
 
-            uint _S878 = min(uint(_S863.x * float(p_22->ptp_source_count)), p_22->ptp_source_count - 1U);
+            uint _S881 = min(uint(_S866.x * float(p_22->ptp_source_count)), p_22->ptp_source_count - 1U);
 
-            DeROBuffer_0 _S879 = de_robuffer_8(p_22->ptp_sources);
+            DeROBuffer_0 _S882 = de_robuffer_8(p_22->ptp_sources);
 
-            thread DeROBuffer_0 _S880 = _S879;
+            thread DeROBuffer_0 _S883 = _S882;
 
-            DiSource_0 _S881 = DeROBuffer_operatorx5Bx5D_get_8(&_S880, _S878, kernelContext_83);
-            if((_S863.y) < (_S881.probability_0))
+            DiSource_0 _S884 = DeROBuffer_operatorx5Bx5D_get_8(&_S883, _S881, kernelContext_83);
+            if((_S866.y) < (_S884.probability_0))
             {
 
-                lo_1 = _S878;
+                lo_1 = _S881;
 
             }
             else
             {
 
-                lo_1 = _S881.alias_0;
+                lo_1 = _S884.alias_0;
 
             }
 
-            thread DeROBuffer_0 _S882 = _S879;
+            thread DeROBuffer_0 _S885 = _S882;
 
-            DiSource_0 _S883 = DeROBuffer_operatorx5Bx5D_get_8(&_S882, lo_1, kernelContext_83);
+            DiSource_0 _S886 = DeROBuffer_operatorx5Bx5D_get_8(&_S885, lo_1, kernelContext_83);
 
-            float _S884 = pt_random_0(_S860, _S861, _S862, dimension_3 + 3U, kernelContext_83);
+            float _S887 = pt_random_0(_S863, _S864, _S865, dimension_3 + 3U, kernelContext_83);
 
-            float _S885 = pt_random_0(_S860, _S861, _S862, dimension_3 + 4U, kernelContext_83);
-            float2 uv_7 = float2(_S884, _S885);
-            float density_1 = _S883.pdf_1 * _S865.y;
-            if((_S883.kind_1) == 0U)
+            float _S888 = pt_random_0(_S863, _S864, _S865, dimension_3 + 4U, kernelContext_83);
+            float2 uv_7 = float2(_S887, _S888);
+            float density_1 = _S886.pdf_1 * _S868.y;
+            if((_S886.kind_1) == 0U)
             {
 
-                thread DiSource_0 _S886 = _S883;
+                thread DiSource_0 _S889 = _S886;
 
-                bool _S887 = di_analytic_in_view_0(&_S886, p_22->ptp_excluded_light_mask);
-                if(!_S887)
+                bool _S890 = di_analytic_in_view_0(&_S889, p_22->ptp_excluded_light_mask);
+                if(!_S890)
                 {
 
                     return o_7;
                 }
 
-                thread DeClusterLight_0 _S888 = _S883.light_0;
+                thread DeClusterLight_0 _S891 = _S886.light_0;
 
-                DeRtRay_0 _S889 = de_rt_shadow_ray_0(&_S888, position_7, normal_7, uv_7);
-                (&o_7)->ptlight_shadow = _S889;
+                DeRtRay_0 _S892 = de_rt_shadow_ray_0(&_S891, position_7, normal_7, uv_7);
+                (&o_7)->ptlight_shadow = _S892;
 
                 float3 wi_32 = (&(&o_7)->ptlight_shadow)->ptr_direction.xyz;
 
-                thread DeClusterLight_0 _S890 = _S883.light_0;
+                thread DeClusterLight_0 _S893 = _S886.light_0;
 
-                uint _S891 = de_light_kind_0(&_S890);
-                bool _S892 = ((as_type<uint>((_S883.light_0.axis_0.w))) & 2U) != 0U;
-                bool _S893 = _S891 == 3U;
+                uint _S894 = de_light_kind_0(&_S893);
+                bool _S895 = ((as_type<uint>((_S886.light_0.axis_0.w))) & 2U) != 0U;
+                bool _S896 = _S894 == 3U;
 
-                if(_S893)
+                if(_S896)
                 {
 
                     casts_0 = true;
@@ -8434,7 +8460,7 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
                 else
                 {
 
-                    casts_0 = _S891 == 4U;
+                    casts_0 = _S894 == 4U;
 
                 }
 
@@ -8442,26 +8468,26 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
                 {
 
                     (&o_7)->ptlight_delta = 0U;
-                    if(_S893)
+                    if(_S896)
                     {
 
-                        density_0 = 4.0f * _S883.light_0.shape_0.y * _S883.light_0.shape_0.z;
+                        density_0 = 4.0f * _S886.light_0.shape_0.y * _S886.light_0.shape_0.z;
 
                     }
                     else
                     {
 
-                        float _S894 = _S883.light_0.shape_0.y;
+                        float _S897 = _S886.light_0.shape_0.y;
 
-                        density_0 = 3.14159274101257324f * _S894 * _S894;
+                        density_0 = 3.14159274101257324f * _S897 * _S897;
 
                     }
-                    float _S895 = max(0.0f, dot(_S883.light_0.direction_0.xyz, - wi_32));
+                    float _S898 = max(0.0f, dot(_S886.light_0.direction_0.xyz, - wi_32));
 
-                    if(_S895 > 0.0f)
+                    if(_S898 > 0.0f)
                     {
 
-                        density_0 = density_1 * (&(&o_7)->ptlight_shadow)->ptr_direction.w * (&(&o_7)->ptlight_shadow)->ptr_direction.w / max(density_0 * _S895, 9.99999968265522539e-21f);
+                        density_0 = density_1 * (&(&o_7)->ptlight_shadow)->ptr_direction.w * (&(&o_7)->ptlight_shadow)->ptr_direction.w / max(density_0 * _S898, 9.99999968265522539e-21f);
 
                     }
                     else
@@ -8471,23 +8497,23 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
 
                     }
 
-                    incident_1 = _S883.light_0.color_2.xyz * float3(de_light_window_0((&(&o_7)->ptlight_shadow)->ptr_direction.w, _S883.light_0.position_0.w)) ;
+                    incident_1 = _S886.light_0.color_2.xyz * float3(de_light_window_0((&(&o_7)->ptlight_shadow)->ptr_direction.w, _S886.light_0.position_0.w)) ;
 
                 }
                 else
                 {
 
-                    thread DeClusterLight_0 _S896 = _S883.light_0;
+                    thread DeClusterLight_0 _S899 = _S886.light_0;
 
-                    DeLightHit_0 _S897 = de_light_punctual_0(&_S896, position_7);
+                    DeLightHit_0 _S900 = de_light_punctual_0(&_S899, position_7);
 
-                    incident_1 = _S897.illuminance_0;
+                    incident_1 = _S900.illuminance_0;
 
                     density_0 = density_1;
 
                 }
 
-                casts_0 = _S892;
+                casts_0 = _S895;
 
                 wi_30 = wi_32;
 
@@ -8496,34 +8522,34 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
             {
 
                 (&o_7)->ptlight_delta = 0U;
-                float a_15 = sqrt(_S884);
-                float3 target_1 = _S883.p0_0.xyz * float3((1.0f - a_15))  + _S883.p1_0.xyz * float3((a_15 * (1.0f - _S885)))  + _S883.p2_0.xyz * float3((a_15 * _S885)) ;
+                float a_15 = sqrt(_S887);
+                float3 target_1 = _S886.p0_0.xyz * float3((1.0f - a_15))  + _S886.p1_0.xyz * float3((a_15 * (1.0f - _S888)))  + _S886.p2_0.xyz * float3((a_15 * _S888)) ;
                 float3 delta_4 = target_1 - position_7;
 
                 float distance_4 = length(delta_4);
 
                 float3 wi_33 = delta_4 / float3(max(distance_4, 1.00000000362749373e-15f)) ;
 
-                thread DiSource_0 _S898 = _S883;
+                thread DiSource_0 _S901 = _S886;
 
-                float3 _S899 = pt_source_normal_0(p_22, &_S898, kernelContext_83);
+                float3 _S902 = pt_source_normal_0(p_22, &_S901, kernelContext_83);
 
-                if((_S883.radiance_0.w) > 0.0f)
+                if((_S886.radiance_0.w) > 0.0f)
                 {
 
-                    density_0 = abs(dot(_S899, - wi_33));
+                    density_0 = abs(dot(_S902, - wi_33));
 
                 }
                 else
                 {
 
-                    density_0 = max(0.0f, dot(_S899, - wi_33));
+                    density_0 = max(0.0f, dot(_S902, - wi_33));
 
                 }
                 if(density_0 > 0.0f)
                 {
 
-                    density_0 = density_1 * distance_4 * distance_4 / max(_S883.p0_0.w * density_0, 9.99999968265522539e-21f);
+                    density_0 = density_1 * distance_4 * distance_4 / max(_S886.p0_0.w * density_0, 9.99999968265522539e-21f);
 
                 }
                 else
@@ -8662,19 +8688,19 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
 
                 (&dp_0)->unused26_0 = 0U;
 
-                (&dp_0)->scene_1 = _S859.ptq_scene;
+                (&dp_0)->scene_1 = _S862.ptq_scene;
 
-                (&dp_0)->scene_slot_0 = _S859.ptq_view;
+                (&dp_0)->scene_slot_0 = _S862.ptq_view;
 
-                (&dp_0)->layers_1 = _S859.ptq_layers;
+                (&dp_0)->layers_1 = _S862.ptq_layers;
 
-                (&dp_0)->sampler_4 = _S859.ptq_sampler;
+                (&dp_0)->sampler_4 = _S862.ptq_sampler;
 
-                thread DiSource_0 _S900 = _S883;
+                thread DiSource_0 _S903 = _S886;
 
-                thread DiParams_0 _S901 = dp_0;
+                thread DiParams_0 _S904 = dp_0;
 
-                float3 _S902 = di_emission_0(&_S900, uv_7, &_S901, kernelContext_83);
+                float3 _S905 = di_emission_0(&_S903, uv_7, &_S904, kernelContext_83);
 
 
 
@@ -8689,7 +8715,7 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
 
                 wi_30 = wi_33;
 
-                incident_1 = _S902;
+                incident_1 = _S905;
 
             }
 
@@ -8713,53 +8739,53 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
             if(casts_0)
             {
 
-                thread DeROBuffer_0 _S903 = de_robuffer_6(_S859.ptq_scene);
+                thread DeROBuffer_0 _S906 = de_robuffer_6(_S862.ptq_scene);
 
-                DeSceneConstants_0 _S904 = DeROBuffer_operatorx5Bx5D_get_6(&_S903, _S859.ptq_view, kernelContext_83);
+                DeSceneConstants_0 _S907 = DeROBuffer_operatorx5Bx5D_get_6(&_S906, _S862.ptq_view, kernelContext_83);
 
 
 
-                float _S905 = _S865.z;
+                float _S908 = _S868.z;
 
-                float pick_0 = saturate((_S866 - _S867 - _S865.y) / _S905) * float(p_22->ptp_light_count);
-                uint _S906 = min(uint(pick_0), p_22->ptp_light_count - 1U);
-                DeROBuffer_0 _S907 = de_robuffer_3(p_22->ptp_directional_alias);
+                float pick_0 = saturate((_S869 - _S870 - _S868.y) / _S908) * float(p_22->ptp_light_count);
+                uint _S909 = min(uint(pick_0), p_22->ptp_light_count - 1U);
+                DeROBuffer_0 _S910 = de_robuffer_3(p_22->ptp_directional_alias);
 
-                uint _S908 = p_22->ptp_directional_offset;
+                uint _S911 = p_22->ptp_directional_offset;
 
-                uint _S909 = p_22->ptp_directional_offset + _S906;
+                uint _S912 = p_22->ptp_directional_offset + _S909;
 
-                thread DeROBuffer_0 _S910 = _S907;
-
-                float4 _S911 = DeROBuffer_operatorx5Bx5D_get_3(&_S910, _S909, kernelContext_83);
-                if((fract(pick_0)) < (_S911.x))
-                {
-
-                    lo_1 = _S906;
-
-                }
-                else
-                {
-
-                    lo_1 = (as_type<uint>((_S911.z)));
-
-                }
-                uint _S912 = _S908 + lo_1;
-
-                thread DeROBuffer_0 _S913 = _S907;
+                thread DeROBuffer_0 _S913 = _S910;
 
                 float4 _S914 = DeROBuffer_operatorx5Bx5D_get_3(&_S913, _S912, kernelContext_83);
-
-                float pdf_3 = _S914.y;
-
-                thread DeROBuffer_0 _S915 = de_robuffer_2(_S904.lights_0);
-
-                DeGpuLight_0 _S916 = DeROBuffer_operatorx5Bx5D_get_2(&_S915, lo_1, kernelContext_83);
-
-                if((_S916.kind_0) == 0U)
+                if((fract(pick_0)) < (_S914.x))
                 {
 
-                    casts_0 = ((_S916.flags_1) & 1U) != 0U;
+                    lo_1 = _S909;
+
+                }
+                else
+                {
+
+                    lo_1 = (as_type<uint>((_S914.z)));
+
+                }
+                uint _S915 = _S911 + lo_1;
+
+                thread DeROBuffer_0 _S916 = _S910;
+
+                float4 _S917 = DeROBuffer_operatorx5Bx5D_get_3(&_S916, _S915, kernelContext_83);
+
+                float pdf_3 = _S917.y;
+
+                thread DeROBuffer_0 _S918 = de_robuffer_2(_S907.lights_0);
+
+                DeGpuLight_0 _S919 = DeROBuffer_operatorx5Bx5D_get_2(&_S918, lo_1, kernelContext_83);
+
+                if((_S919.kind_0) == 0U)
+                {
+
+                    casts_0 = ((_S919.flags_1) & 1U) != 0U;
 
                 }
                 else
@@ -8772,11 +8798,11 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
                 if(casts_0)
                 {
 
-                    thread DeGpuLight_0 _S917 = _S916;
+                    thread DeGpuLight_0 _S920 = _S919;
 
-                    bool _S918 = de_light_in_view_0(&_S917, p_22->ptp_excluded_light_mask);
+                    bool _S921 = de_light_in_view_0(&_S920, p_22->ptp_excluded_light_mask);
 
-                    casts_0 = _S918;
+                    casts_0 = _S921;
 
                 }
                 else
@@ -8789,23 +8815,23 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
                 if(casts_0)
                 {
 
-                    float3 wi_34 = normalize(float3(_S916.transform_0[int(0)].z, _S916.transform_0[int(1)].z, _S916.transform_0[int(2)].z));
+                    float3 wi_34 = normalize(float3(_S919.transform_0[int(0)].z, _S919.transform_0[int(1)].z, _S919.transform_0[int(2)].z));
 
-                    float3 _S919 = _S916.color_1.xyz * float3(_S916.color_1.w) ;
-                    float _S920 = pdf_3 * _S905;
+                    float3 _S922 = _S919.color_1.xyz * float3(_S919.color_1.w) ;
+                    float _S923 = pdf_3 * _S908;
 
-                    bool _S921 = ((_S916.flags_1) & 2U) != 0U;
+                    bool _S924 = ((_S919.flags_1) & 2U) != 0U;
                     (&(&o_7)->ptlight_shadow)->ptr_origin = float4(de_rt_offset_0(position_7, normal_7, wi_34), 0.00000999999974738f);
 
                     (&(&o_7)->ptlight_shadow)->ptr_direction = float4(wi_34, 1.0e+06f);
 
-                    casts_0 = _S921;
+                    casts_0 = _S924;
 
                     wi_30 = wi_34;
 
-                    incident_1 = _S919;
+                    incident_1 = _S922;
 
-                    density_0 = _S920;
+                    density_0 = _S923;
 
                 }
                 else
@@ -8813,9 +8839,9 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
 
                     casts_0 = true;
 
-                    wi_30 = _S864;
+                    wi_30 = _S867;
 
-                    incident_1 = _S864;
+                    incident_1 = _S867;
 
                     density_0 = 0.0f;
 
@@ -8827,9 +8853,9 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_22, float3 positi
 
                 casts_0 = true;
 
-                wi_30 = _S864;
+                wi_30 = _S867;
 
-                incident_1 = _S864;
+                incident_1 = _S867;
 
                 density_0 = 0.0f;
 
@@ -8898,29 +8924,29 @@ struct PtStep_0
 PtStep_0 pt_step_0(const PtParams_0 thread* p_23, const DeRtRay_0 thread* ray_5, const DeRtHit_0 thread* hit_4, uint pixel_7, uint bounce_1, float last_pdf_1, float3 previous_3, KernelContext_0 thread* kernelContext_84)
 {
 
-    float3 _S922 = float3(0.0f) ;
+    float3 _S925 = float3(0.0f) ;
 
-    float4 _S923 = float4(0.0f) ;
+    float4 _S926 = float4(0.0f) ;
 
-    DeRtRay_0 _S924 = { _S923, _S923 };
+    DeRtRay_0 _S927 = { _S926, _S926 };
 
-    PtMedium_0 _S925 = { 0U, _S922, 0.0f };
+    PtMedium_0 _S928 = { 0U, _S925, 0.0f };
 
-    array<PtMedium_0, int(4)> _S926 = { { _S925, _S925, _S925, _S925 } };
+    array<PtMedium_0, int(4)> _S929 = { { _S928, _S928, _S928, _S928 } };
 
-    PtMediumStack_0 _S927 = { _S926, 0U, 0U };
+    PtMediumStack_0 _S930 = { _S929, 0U, 0U };
 
     thread PtStep_0 o_8;
 
-    (&o_8)->pts_emitted = _S922;
+    (&o_8)->pts_emitted = _S925;
 
-    (&o_8)->pts_direct = _S922;
+    (&o_8)->pts_direct = _S925;
 
-    (&o_8)->pts_shadow = _S924;
+    (&o_8)->pts_shadow = _S927;
 
-    (&o_8)->pts_next = _S924;
+    (&o_8)->pts_next = _S927;
 
-    (&o_8)->pts_weight = _S922;
+    (&o_8)->pts_weight = _S925;
 
     (&o_8)->pts_pdf = 0.0f;
 
@@ -8932,40 +8958,40 @@ PtStep_0 pt_step_0(const PtParams_0 thread* p_23, const DeRtRay_0 thread* ray_5,
 
     (&o_8)->pts_casts_shadows = 0U;
 
-    (&o_8)->pts_shadow_media = _S927;
+    (&o_8)->pts_shadow_media = _S930;
 
     (&o_8)->pts_stop = 1U;
 
     (&o_8)->pts_consume = 1U;
     uint strategy_1 = (p_23->ptp_flags) & 3U;
 
-    float _S928 = hit_4->pth_t;
+    float _S931 = hit_4->pth_t;
     thread float area_pdf_1;
 
-    float4 _S929 = pt_area_hit_0(p_23, ray_5, hit_4->pth_t, &area_pdf_1, kernelContext_84);
+    float4 _S932 = pt_area_hit_0(p_23, ray_5, hit_4->pth_t, &area_pdf_1, kernelContext_84);
 
-    bool _S930;
+    bool _S933;
 
     float w_10;
-    if((_S929.w) >= 0.0f)
+    if((_S932.w) >= 0.0f)
     {
 
-        float3 _S931 = _S929.xyz;
+        float3 _S934 = _S932.xyz;
 
         if(bounce_1 == 0U)
         {
 
-            _S930 = true;
+            _S933 = true;
 
         }
         else
         {
 
-            _S930 = strategy_1 == 2U;
+            _S933 = strategy_1 == 2U;
 
         }
 
-        if(_S930)
+        if(_S933)
         {
 
             w_10 = 1.0f;
@@ -8989,28 +9015,28 @@ PtStep_0 pt_step_0(const PtParams_0 thread* p_23, const DeRtRay_0 thread* ray_5,
 
         }
 
-        (&o_8)->pts_emitted = _S931 * float3(w_10) ;
+        (&o_8)->pts_emitted = _S934 * float3(w_10) ;
 
         return o_8;
     }
 
-    if(_S928 < 0.0f)
+    if(_S931 < 0.0f)
     {
 
         if(bounce_1 == 0U)
         {
 
-            _S930 = true;
+            _S933 = true;
 
         }
         else
         {
 
-            _S930 = strategy_1 == 2U;
+            _S933 = strategy_1 == 2U;
 
         }
 
-        if(_S930)
+        if(_S933)
         {
 
             w_10 = 1.0f;
@@ -9028,79 +9054,79 @@ PtStep_0 pt_step_0(const PtParams_0 thread* p_23, const DeRtRay_0 thread* ray_5,
             else
             {
 
-                float _S932 = pt_env_pdf_0(p_23, ray_5->ptr_direction.xyz, kernelContext_84);
+                float _S935 = pt_env_pdf_0(p_23, ray_5->ptr_direction.xyz, kernelContext_84);
 
-                float3 _S933 = pt_light_categories_0(p_23);
+                float3 _S936 = pt_light_categories_0(p_23);
 
-                w_10 = pt_power_0(last_pdf_1, _S932 * _S933.x);
+                w_10 = pt_power_0(last_pdf_1, _S935 * _S936.x);
 
             }
 
         }
 
-        float3 _S934 = pt_environment_0(p_23, ray_5->ptr_direction.xyz, kernelContext_84);
+        float3 _S937 = pt_environment_0(p_23, ray_5->ptr_direction.xyz, kernelContext_84);
 
-        (&o_8)->pts_emitted = _S934 * float3(w_10) ;
+        (&o_8)->pts_emitted = _S937 * float3(w_10) ;
 
         return o_8;
     }
 
-    DeRtContext_0 _S935 = pt_query_0(p_23, kernelContext_84);
+    DeRtContext_0 _S938 = pt_query_0(p_23, kernelContext_84);
 
-    float3 _S936 = ray_5->ptr_origin.xyz;
+    float3 _S939 = ray_5->ptr_origin.xyz;
 
-    thread DeRtContext_0 _S937 = _S935;
+    thread DeRtContext_0 _S940 = _S938;
 
-    DeRtSurface_0 _S938 = de_rt_hit_surface_0(&_S937, hit_4, _S936, p_23->ptp_brdf_lut, kernelContext_84);
-    if(!_S938.valid_1)
+    DeRtSurface_0 _S941 = de_rt_hit_surface_0(&_S940, hit_4, _S939, p_23->ptp_brdf_lut, kernelContext_84);
+    if(!_S941.valid_1)
     {
 
         return o_8;
     }
 
-    thread SurfaceData_0 s_43 = _S938.material_1;
+    thread SurfaceData_0 s_43 = _S941.material_1;
 
-    uint _S939 = (&p_23->ptp_media)->ptm_features;
+    uint _S942 = (&p_23->ptp_media)->ptm_features;
     if((((&p_23->ptp_media)->ptm_features) & 2U) != 0U)
     {
 
-        _S930 = (((&s_43)->features_0) & 32U) != 0U;
+        _S933 = (((&s_43)->features_0) & 32U) != 0U;
 
     }
     else
     {
 
-        _S930 = false;
+        _S933 = false;
 
     }
 
-    if(_S930)
+    if(_S933)
     {
 
         (&s_43)->attenuation_color_0 = float3(int3(int(1)) );
 
     }
-    float3 _S940 = ray_5->ptr_direction.xyz;
+    float3 _S943 = ray_5->ptr_direction.xyz;
 
-    float3 position_8 = _S936 + _S940 * float3(_S928) ;
+    float3 position_8 = _S939 + _S943 * float3(_S931) ;
     if(any(((&s_43)->emissive_0) != (float3(0.0f) )))
     {
 
-        bool _S941 = pt_hit_emits_0(p_23, ray_5, hit_4, kernelContext_84);
+        bool _S944 = pt_hit_emits_0(p_23, ray_5, hit_4, kernelContext_84);
 
-        _S930 = _S941;
+        _S933 = _S944;
 
     }
     else
     {
 
-        _S930 = false;
+        _S933 = false;
 
     }
 
     float3 value_2;
 
-    if(_S930)
+    if(_S933)
     {
 
         value_2 = (&s_43)->emissive_0;
@@ -9116,17 +9142,17 @@ PtStep_0 pt_step_0(const PtParams_0 thread* p_23, const DeRtRay_0 thread* ray_5,
     if(bounce_1 == 0U)
     {
 
-        _S930 = true;
+        _S933 = true;
 
     }
     else
     {
 
-        _S930 = strategy_1 == 2U;
+        _S933 = strategy_1 == 2U;
 
     }
 
-    if(_S930)
+    if(_S933)
     {
 
         w_10 = 1.0f;
@@ -9144,9 +9170,9 @@ PtStep_0 pt_step_0(const PtParams_0 thread* p_23, const DeRtRay_0 thread* ray_5,
         else
         {
 
-            float _S942 = pt_emission_pdf_0(p_23, hit_4, previous_3, position_8, kernelContext_84);
+            float _S945 = pt_emission_pdf_0(p_23, hit_4, previous_3, position_8, kernelContext_84);
 
-            w_10 = pt_power_0(last_pdf_1, _S942);
+            w_10 = pt_power_0(last_pdf_1, _S945);
 
         }
 
@@ -9159,21 +9185,21 @@ PtStep_0 pt_step_0(const PtParams_0 thread* p_23, const DeRtRay_0 thread* ray_5,
         return o_8;
     }
 
-    thread SurfaceData_0 _S943 = s_43;
+    thread SurfaceData_0 _S946 = s_43;
 
-    ShadingFrame_0 _S944 = de_surface_frame_0(&_S943);
-    float3 _S945 = - _S940;
+    ShadingFrame_0 _S947 = de_surface_frame_0(&_S946);
+    float3 _S948 = - _S943;
 
-    thread ShadingFrame_0 _S946 = _S944;
+    thread ShadingFrame_0 _S949 = _S947;
 
-    float3 _S947 = ShadingFrame_to_local_0(&_S946, _S945);
+    float3 _S950 = ShadingFrame_to_local_0(&_S949, _S948);
     uint dimension_4 = 2U + bounce_1 * 12U;
 
-    PtLightProposal_0 _S948 = pt_light_sample_0(p_23, position_8, (&s_43)->normal_0, pixel_7, bounce_1, kernelContext_84);
-    (&o_8)->pts_shadow = _S948.ptlight_shadow;
+    PtLightProposal_0 _S951 = pt_light_sample_0(p_23, position_8, (&s_43)->normal_0, pixel_7, bounce_1, kernelContext_84);
+    (&o_8)->pts_shadow = _S951.ptlight_shadow;
 
-    (&o_8)->pts_casts_shadows = _S948.ptlight_casts_shadows;
-    if((_S948.ptlight_delta) != 0U)
+    (&o_8)->pts_casts_shadows = _S951.ptlight_casts_shadows;
+    if((_S951.ptlight_delta) != 0U)
     {
 
         w_10 = 1.0f;
@@ -9182,72 +9208,72 @@ PtStep_0 pt_step_0(const PtParams_0 thread* p_23, const DeRtRay_0 thread* ray_5,
     else
     {
 
-        thread ShadingFrame_0 _S949 = _S944;
+        thread ShadingFrame_0 _S952 = _S947;
 
-        float3 _S950 = ShadingFrame_to_local_0(&_S949, _S948.ptlight_wi);
+        float3 _S953 = ShadingFrame_to_local_0(&_S952, _S951.ptlight_wi);
 
-        thread SurfaceData_0 _S951 = s_43;
+        thread SurfaceData_0 _S954 = s_43;
 
-        float _S952 = StandardModelT_pdf_0(&_S951, _S947, _S950, kernelContext_84);
+        float _S955 = StandardModelT_pdf_0(&_S954, _S950, _S953, kernelContext_84);
 
-        w_10 = pt_power_0(_S948.ptlight_pdf, _S952);
+        w_10 = pt_power_0(_S951.ptlight_pdf, _S955);
 
     }
-    if((_S948.ptlight_pdf) > 0.0f)
+    if((_S951.ptlight_pdf) > 0.0f)
     {
 
-        _S930 = strategy_1 != 2U;
+        _S933 = strategy_1 != 2U;
 
     }
     else
     {
 
-        _S930 = false;
+        _S933 = false;
 
     }
 
-    if(_S930)
+    if(_S933)
     {
 
-        thread ShadingFrame_0 _S953 = _S944;
+        thread ShadingFrame_0 _S956 = _S947;
 
-        float3 _S954 = ShadingFrame_to_local_0(&_S953, _S948.ptlight_wi);
+        float3 _S957 = ShadingFrame_to_local_0(&_S956, _S951.ptlight_wi);
 
-        thread SurfaceData_0 _S955 = s_43;
+        thread SurfaceData_0 _S958 = s_43;
         thread float3 d_11;
 
-        float3 _S956 = StandardModelT_evaluate_split_0(&_S955, _S947, _S954, &d_11, kernelContext_84);
-        if((_S939 & 4U) != 0U)
+        float3 _S959 = StandardModelT_evaluate_split_0(&_S958, _S950, _S957, &d_11, kernelContext_84);
+        if((_S942 & 4U) != 0U)
         {
 
-            float2 _S957 = float2(hit_4->pth_u, hit_4->pth_v);
+            float2 _S960 = float2(hit_4->pth_u, hit_4->pth_v);
 
-            thread DeRtContext_0 _S958 = _S935;
+            thread DeRtContext_0 _S961 = _S938;
 
-            DeResolvePoint_0 _S959 = de_rt_point_0(&_S958, hit_4->pth_instance, hit_4->pth_primitive, _S957, kernelContext_84);
+            DeResolvePoint_0 _S962 = de_rt_point_0(&_S961, hit_4->pth_instance, hit_4->pth_primitive, _S960, kernelContext_84);
 
-            thread DeResolvePoint_0 _S960 = _S959;
+            thread DeResolvePoint_0 _S963 = _S962;
 
-            uint _S961 = de_resolve_material_0(&_S960);
+            uint _S964 = de_resolve_material_0(&_S963);
 
-            thread DeROBuffer_0 _S962 = de_robuffer_6(_S935.ptq_scene);
+            thread DeROBuffer_0 _S965 = de_robuffer_6(_S938.ptq_scene);
 
-            DeSceneConstants_0 _S963 = DeROBuffer_operatorx5Bx5D_get_6(&_S962, _S935.ptq_view, kernelContext_84);
+            DeSceneConstants_0 _S966 = DeROBuffer_operatorx5Bx5D_get_6(&_S965, _S938.ptq_view, kernelContext_84);
 
-            thread DeSceneConstants_0 _S964 = _S963;
+            thread DeSceneConstants_0 _S967 = _S966;
 
-            DeGpuMaterial_0 _S965 = de_resolve_material_of_0(_S961, &_S964, kernelContext_84);
+            DeGpuMaterial_0 _S968 = de_resolve_material_of_0(_S964, &_S967, kernelContext_84);
 
-            if((max(_S965.subsurface_0.x, max(_S965.subsurface_0.y, _S965.subsurface_0.z))) > 9.99999997475242708e-07f)
+            if((max(_S968.subsurface_0.x, max(_S968.subsurface_0.y, _S968.subsurface_0.z))) > 9.99999997475242708e-07f)
             {
 
-                value_2 = _S956 - d_11 * float3(saturate(_S965.extra_0.z)) ;
+                value_2 = _S959 - d_11 * float3(saturate(_S968.extra_0.z)) ;
 
             }
             else
             {
 
-                value_2 = _S956;
+                value_2 = _S959;
 
             }
 
@@ -9255,11 +9281,11 @@ PtStep_0 pt_step_0(const PtParams_0 thread* p_23, const DeRtRay_0 thread* ray_5,
         else
         {
 
-            value_2 = _S956;
+            value_2 = _S959;
 
         }
 
-        float3 _S966 = value_2 * _S948.ptlight_incident;
+        float3 _S969 = value_2 * _S951.ptlight_incident;
 
         if(strategy_1 == 1U)
         {
@@ -9268,46 +9294,46 @@ PtStep_0 pt_step_0(const PtParams_0 thread* p_23, const DeRtRay_0 thread* ray_5,
 
         }
 
-        (&o_8)->pts_direct = _S966 * float3((w_10 / _S948.ptlight_pdf)) ;
+        (&o_8)->pts_direct = _S969 * float3((w_10 / _S951.ptlight_pdf)) ;
 
     }
 
-    float3 _S967 = pt_random3_0(p_23->ptp_sampling_table, pixel_7 ^ (p_23->ptp_seed), p_23->ptp_sample, dimension_4 + 5U, kernelContext_84);
+    float3 _S970 = pt_random3_0(p_23->ptp_sampling_table, pixel_7 ^ (p_23->ptp_seed), p_23->ptp_sample, dimension_4 + 5U, kernelContext_84);
 
-    thread SurfaceData_0 _S968 = s_43;
+    thread SurfaceData_0 _S971 = s_43;
 
-    BsdfSample_0 _S969 = StandardModelT_sample_0(&_S968, _S947, _S967, kernelContext_84);
+    BsdfSample_0 _S972 = StandardModelT_sample_0(&_S971, _S950, _S970, kernelContext_84);
 
-    if(!((_S969.pdf_0) > 0.0f))
+    if(!((_S972.pdf_0) > 0.0f))
     {
 
-        _S930 = true;
+        _S933 = true;
 
     }
     else
     {
 
-        _S930 = !all(isfinite(_S969.weight_0));
+        _S933 = !all(isfinite(_S972.weight_0));
 
     }
 
-    if(_S930)
+    if(_S933)
     {
 
         return o_8;
     }
 
-    (&o_8)->pts_pdf = _S969.pdf_0;
+    (&o_8)->pts_pdf = _S972.pdf_0;
 
-    (&o_8)->pts_weight = _S969.weight_0;
+    (&o_8)->pts_weight = _S972.weight_0;
 
-    (&o_8)->pts_lobe = _S969.lobe_0;
+    (&o_8)->pts_lobe = _S972.lobe_0;
 
-    thread ShadingFrame_0 _S970 = _S944;
+    thread ShadingFrame_0 _S973 = _S947;
 
-    float3 _S971 = ShadingFrame_to_world_0(&_S970, _S969.wi_4);
+    float3 _S974 = ShadingFrame_to_world_0(&_S973, _S972.wi_4);
 
-    float3 wi_35 = normalize(_S971);
+    float3 wi_35 = normalize(_S974);
     (&(&o_8)->pts_next)->ptr_origin = float4(de_rt_offset_0(position_8, (&s_43)->normal_0, wi_35), 0.00000999999974738f);
 
     (&(&o_8)->pts_next)->ptr_direction = float4(wi_35, 1.0e+06f);
@@ -9347,35 +9373,35 @@ struct PtPath_0
 PtPath_0 pt_path_init_0(const PtParams_0 thread* p_24, uint pixel_8, KernelContext_0 thread* kernelContext_85)
 {
 
-    float4 _S972 = float4(0.0f) ;
+    float4 _S975 = float4(0.0f) ;
 
-    DeRtRay_0 _S973 = { _S972, _S972 };
+    DeRtRay_0 _S976 = { _S975, _S975 };
 
-    float3 _S974 = float3(0.0f) ;
+    float3 _S977 = float3(0.0f) ;
 
-    PtMedium_0 _S975 = { 0U, _S974, 0.0f };
+    PtMedium_0 _S978 = { 0U, _S977, 0.0f };
 
-    array<PtMedium_0, int(4)> _S976 = { { _S975, _S975, _S975, _S975 } };
+    array<PtMedium_0, int(4)> _S979 = { { _S978, _S978, _S978, _S978 } };
 
-    PtMediumStack_0 _S977 = { _S976, 0U, 0U };
+    PtMediumStack_0 _S980 = { _S979, 0U, 0U };
 
-    PtSssState_0 _S978 = { 0U, 0U, 0U, _S974, _S974 };
+    PtSssState_0 _S981 = { 0U, 0U, 0U, _S977, _S977 };
 
     thread PtPath_0 path_0;
 
-    (&path_0)->ptpath_ray = _S973;
+    (&path_0)->ptpath_ray = _S976;
 
-    (&path_0)->ptpath_media = _S977;
+    (&path_0)->ptpath_media = _S980;
 
-    (&path_0)->ptpath_sss = _S978;
+    (&path_0)->ptpath_sss = _S981;
 
-    (&path_0)->ptpath_throughput = _S974;
+    (&path_0)->ptpath_throughput = _S977;
 
-    (&path_0)->ptpath_radiance = _S974;
+    (&path_0)->ptpath_radiance = _S977;
 
-    (&path_0)->ptpath_previous = _S974;
+    (&path_0)->ptpath_previous = _S977;
 
-    (&path_0)->ptpath_position = _S974;
+    (&path_0)->ptpath_position = _S977;
 
     (&path_0)->ptpath_pdf = 0.0f;
 
@@ -9385,9 +9411,9 @@ PtPath_0 pt_path_init_0(const PtParams_0 thread* p_24, uint pixel_8, KernelConte
 
     (&path_0)->ptpath_finished = 0U;
 
-    DeRtRay_0 _S979 = pt_camera_0(p_24, pixel_8, kernelContext_85);
+    DeRtRay_0 _S982 = pt_camera_0(p_24, pixel_8, kernelContext_85);
 
-    (&path_0)->ptpath_ray = _S979;
+    (&path_0)->ptpath_ray = _S982;
 
     (&path_0)->ptpath_throughput = float3(int3(int(1)) );
 
@@ -9400,22 +9426,22 @@ PtPath_0 pt_path_init_0(const PtParams_0 thread* p_24, uint pixel_8, KernelConte
 float3 de_volume_sigma_a_0(float3 attenuation_color_1, float attenuation_distance_1)
 {
 
-    bool _S980;
+    bool _S983;
 
     if(!(attenuation_distance_1 > 0.0f))
     {
 
-        _S980 = true;
+        _S983 = true;
 
     }
     else
     {
 
-        _S980 = attenuation_distance_1 >= 1.00000001504746622e+30f;
+        _S983 = attenuation_distance_1 >= 1.00000001504746622e+30f;
 
     }
 
-    if(_S980)
+    if(_S983)
     {
 
         return float3(0.0f, 0.0f, 0.0f);
@@ -9439,14 +9465,14 @@ float3 volume_transmittance_0(float3 attenuation_color_3, float attenuation_dist
 float3 pt_medium_transmittance_0(const PtMediumStack_0 thread* stack_0, float distance_8)
 {
 
-    uint _S981 = stack_0->depth_2;
+    uint _S984 = stack_0->depth_2;
     if((stack_0->depth_2) == 0U)
     {
 
         return float3(int3(int(1)) );
     }
 
-    return volume_transmittance_0((&stack_0->entries_0[_S981 - 1U])->color_4, (&stack_0->entries_0[_S981 - 1U])->distance_5, distance_8);
+    return volume_transmittance_0((&stack_0->entries_0[_S984 - 1U])->color_4, (&stack_0->entries_0[_S984 - 1U])->distance_5, distance_8);
 }
 
 
@@ -9459,10 +9485,10 @@ float2 pt_fog_interval_0(const PtFog_0 thread* fog_1, float3 origin_1, float3 di
         return float2(0.0f, limit_0);
     }
 
-    float4 _S982 = float4(origin_1, 1.0f);
+    float4 _S985 = float4(origin_1, 1.0f);
 
-    float3 _S983 = float3(dot(fog_1->inverse_0[int(0)], _S982), dot(fog_1->inverse_0[int(1)], _S982), dot(fog_1->inverse_0[int(2)], _S982));
-    float3 _S984 = float3(dot(fog_1->inverse_0[int(0)].xyz, direction_3), dot(fog_1->inverse_0[int(1)].xyz, direction_3), dot(fog_1->inverse_0[int(2)].xyz, direction_3));
+    float3 _S986 = float3(dot(fog_1->inverse_0[int(0)], _S985), dot(fog_1->inverse_0[int(1)], _S985), dot(fog_1->inverse_0[int(2)], _S985));
+    float3 _S987 = float3(dot(fog_1->inverse_0[int(0)].xyz, direction_3), dot(fog_1->inverse_0[int(1)].xyz, direction_3), dot(fog_1->inverse_0[int(2)].xyz, direction_3));
 
     float near_0 = 0.0f;
 
@@ -9482,12 +9508,12 @@ float2 pt_fog_interval_0(const PtFog_0 thread* fog_1, float3 origin_1, float3 di
             break;
         }
 
-        uint _S985 = a_16;
+        uint _S988 = a_16;
 
-        if((abs(_S984[a_16])) < 9.999999960041972e-13f)
+        if((abs(_S987[a_16])) < 9.999999960041972e-13f)
         {
 
-            if((abs(_S983[a_16])) > fog_1->extent_density_0[a_16])
+            if((abs(_S986[a_16])) > fog_1->extent_density_0[a_16])
             {
 
                 return float2(int2(int(0)) );
@@ -9497,15 +9523,15 @@ float2 pt_fog_interval_0(const PtFog_0 thread* fog_1, float3 origin_1, float3 di
         else
         {
 
-            float p_25 = (- fog_1->extent_density_0[a_16] - _S983[a_16]) / _S984[_S985];
+            float p_25 = (- fog_1->extent_density_0[a_16] - _S986[a_16]) / _S987[_S988];
 
-            float q_4 = (fog_1->extent_density_0[a_16] - _S983[a_16]) / _S984[_S985];
+            float q_4 = (fog_1->extent_density_0[a_16] - _S986[a_16]) / _S987[_S988];
 
-            float _S986 = min(far_0, max(p_25, q_4));
+            float _S989 = min(far_0, max(p_25, q_4));
 
             near_0 = max(near_0, min(p_25, q_4));
 
-            far_0 = _S986;
+            far_0 = _S989;
 
         }
 
@@ -9516,49 +9542,13 @@ float2 pt_fog_interval_0(const PtFog_0 thread* fog_1, float3 origin_1, float3 di
     return float2(near_0, max(near_0, far_0));
 }
 
-
-float pt_fog_transmittance_0(uint buffer_1, uint count_1, float3 origin_2, float3 direction_4, float distance_9, KernelContext_0 thread* kernelContext_86)
+bool pt_fog_heterogeneous_0(const PtFog_0 thread* fog_2)
 {
 
-    uint i_22 = 0U;
-
-    float optical_0 = 0.0f;
-    for(;;)
-    {
-
-        if(i_22 < count_1)
-        {
-        }
-        else
-        {
-
-            break;
-        }
-
-        thread DeROBuffer_0 _S987 = de_robuffer_1(buffer_1);
-
-        PtFog_0 _S988 = DeROBuffer_operatorx5Bx5D_get_1(&_S987, i_22, kernelContext_86);
-
-        thread PtFog_0 _S989 = _S988;
-
-        float2 _S990 = pt_fog_interval_0(&_S989, origin_2, direction_4, distance_9);
-
-        float optical_1 = optical_0 + (_S990.y - _S990.x) * max(_S988.extent_density_0.w, 0.0f);
-
-        i_22 = i_22 + 1U;
-
-        optical_0 = optical_1;
-
-    }
-    return exp(- optical_0);
-}
-
-
-float3 pt_path_endpoint_0(const PtParams_0 thread* p_26, const PtPath_0 thread* path_1, const DeRtHit_0 thread* hit_5, KernelContext_0 thread* kernelContext_87)
-{
+    float4 _S990 = fog_2->params_1;
 
     bool _S991;
-    if(((&path_1->ptpath_sss)->ptsss_active) != 0U)
+    if((fog_2->params_1.y) > 0.0f)
     {
 
         _S991 = true;
@@ -9567,37 +9557,243 @@ float3 pt_path_endpoint_0(const PtParams_0 thread* p_26, const PtPath_0 thread* 
     else
     {
 
-        _S991 = ((p_26->ptp_flags) & 3U) == 1U;
+        if((fog_2->extent_density_0.x) < 0.0f)
+        {
+
+            _S991 = (_S990.x) != 0.0f;
+
+        }
+        else
+        {
+
+            _S991 = (_S990.z) > 0.0f;
+
+        }
 
     }
 
-    if(_S991)
+    return _S991;
+}
+
+
+float pt_fog_hash_0(float3 p_26)
+{
+
+    float3 _S992 = fract(p_26 * float3(0.31830990314483643f)  + float3(0.10000000149011612f) ) * float3(17.0f) ;
+
+    float _S993 = _S992.x;
+
+    float _S994 = _S992.y;
+
+    float _S995 = _S992.z;
+
+    return fract(_S993 * _S994 * _S995 * (_S993 + _S994 + _S995));
+}
+
+
+float pt_fog_noise_0(float3 x_18)
+{
+
+    float3 i_22 = floor(x_18);
+
+    float3 f_10 = fract(x_18);
+
+    float3 f_11 = f_10 * f_10 * (float3(3.0f)  - float3(2.0f)  * f_10);
+    float _S996 = f_11.x;
+
+    float _S997 = f_11.y;
+
+    return mix(mix(mix(pt_fog_hash_0(i_22), pt_fog_hash_0(i_22 + float3(1.0f, 0.0f, 0.0f)), _S996), mix(pt_fog_hash_0(i_22 + float3(0.0f, 1.0f, 0.0f)), pt_fog_hash_0(i_22 + float3(1.0f, 1.0f, 0.0f)), _S996), _S997), mix(mix(pt_fog_hash_0(i_22 + float3(0.0f, 0.0f, 1.0f)), pt_fog_hash_0(i_22 + float3(1.0f, 0.0f, 1.0f)), _S996), mix(pt_fog_hash_0(i_22 + float3(0.0f, 1.0f, 1.0f)), pt_fog_hash_0(i_22 + float3(1.0f, 1.0f, 1.0f)), _S996), _S997), f_11.z);
+}
+
+float pt_fog_density_0(const PtFog_0 thread* fog_3, float3 p_27)
+{
+
+    float4 _S998 = float4(p_27, 1.0f);
+
+    float3 q_5 = float3(dot(fog_3->inverse_0[int(0)], _S998), dot(fog_3->inverse_0[int(1)], _S998), dot(fog_3->inverse_0[int(2)], _S998));
+
+    float4 _S999 = fog_3->extent_density_0;
+    float _S1000 = max(fog_3->extent_density_0.w, 0.0f);
+
+    float d_12;
+    if((fog_3->extent_density_0.x) < 0.0f)
     {
 
-        return float3(int3(int(0)) );
-    }
-
-    float _S992 = hit_5->pth_t;
-    thread float area_pdf_2;
-
-    float4 _S993 = pt_area_hit_0(p_26, &path_1->ptpath_ray, hit_5->pth_t, &area_pdf_2, kernelContext_87);
-    float _S994 = _S993.w;
-
-    float distance_10;
-
-    if(_S994 >= 0.0f)
-    {
-
-        distance_10 = _S994;
+        d_12 = _S1000 * exp(- clamp(fog_3->params_1.x * (p_27.z - fog_3->params_1.w), -8.0f, 80.0f));
 
     }
     else
     {
 
-        if(_S992 >= 0.0f)
+        float3 e_5 = _S999.xyz - abs(q_5);
+
+        float _S1001 = min(e_5.x, min(e_5.y, e_5.z));
+        if(_S1001 < 0.0f)
         {
 
-            distance_10 = _S992;
+            return 0.0f;
+        }
+
+        float _S1002 = fog_3->params_1.z;
+
+        if(_S1002 > 0.0f)
+        {
+
+            d_12 = _S1000 * smoothstep(0.0f, 1.0f, _S1001 / _S1002);
+
+        }
+        else
+        {
+
+            d_12 = _S1000;
+
+        }
+
+    }
+
+
+    float _S1003 = fog_3->params_1.y;
+
+    if(_S1003 > 0.0f)
+    {
+
+        d_12 = d_12 * mix(1.0f, 2.0f * pt_fog_noise_0(q_5 * float3(0.5f) ), _S1003);
+
+    }
+    return d_12;
+}
+
+
+float pt_fog_optical_depth_0(const PtFog_0 thread* fog_4, float3 origin_2, float3 direction_4, float t0_2, float t1_2)
+{
+
+    bool _S1004 = pt_fog_heterogeneous_0(fog_4);
+    if(!_S1004)
+    {
+
+        return (t1_2 - t0_2) * max(fog_4->extent_density_0.w, 0.0f);
+    }
+
+    float h_31 = (t1_2 - t0_2) / 64.0f;
+
+    uint k_6 = 0U;
+
+    float sum_0 = 0.0f;
+    for(;;)
+    {
+
+        if(k_6 < 64U)
+        {
+        }
+        else
+        {
+
+            break;
+        }
+
+        float _S1005 = pt_fog_density_0(fog_4, origin_2 + direction_4 * float3((t0_2 + (float(k_6) + 0.5f) * h_31)) );
+
+        float sum_1 = sum_0 + _S1005;
+
+        k_6 = k_6 + 1U;
+
+        sum_0 = sum_1;
+
+    }
+    return sum_0 * h_31;
+}
+
+
+float pt_fog_transmittance_0(uint buffer_1, uint count_1, float3 origin_3, float3 direction_5, float distance_9, KernelContext_0 thread* kernelContext_86)
+{
+
+    uint i_23 = 0U;
+
+    float optical_0 = 0.0f;
+    for(;;)
+    {
+
+        if(i_23 < count_1)
+        {
+        }
+        else
+        {
+
+            break;
+        }
+
+        thread DeROBuffer_0 _S1006 = de_robuffer_1(buffer_1);
+
+        PtFog_0 _S1007 = DeROBuffer_operatorx5Bx5D_get_1(&_S1006, i_23, kernelContext_86);
+
+        thread PtFog_0 _S1008 = _S1007;
+
+        float2 _S1009 = pt_fog_interval_0(&_S1008, origin_3, direction_5, distance_9);
+
+        float _S1010 = _S1009.x;
+
+        float _S1011 = _S1009.y;
+
+        thread PtFog_0 _S1012 = _S1007;
+
+        float _S1013 = pt_fog_optical_depth_0(&_S1012, origin_3, direction_5, _S1010, _S1011);
+
+        float optical_1 = optical_0 + _S1013;
+
+        i_23 = i_23 + 1U;
+
+        optical_0 = optical_1;
+
+    }
+    return exp(- optical_0);
+}
+
+
+float3 pt_path_endpoint_0(const PtParams_0 thread* p_28, const PtPath_0 thread* path_1, const DeRtHit_0 thread* hit_5, KernelContext_0 thread* kernelContext_87)
+{
+
+    bool _S1014;
+    if(((&path_1->ptpath_sss)->ptsss_active) != 0U)
+    {
+
+        _S1014 = true;
+
+    }
+    else
+    {
+
+        _S1014 = ((p_28->ptp_flags) & 3U) == 1U;
+
+    }
+
+    if(_S1014)
+    {
+
+        return float3(int3(int(0)) );
+    }
+
+    float _S1015 = hit_5->pth_t;
+    thread float area_pdf_2;
+
+    float4 _S1016 = pt_area_hit_0(p_28, &path_1->ptpath_ray, hit_5->pth_t, &area_pdf_2, kernelContext_87);
+    float _S1017 = _S1016.w;
+
+    float distance_10;
+
+    if(_S1017 >= 0.0f)
+    {
+
+        distance_10 = _S1017;
+
+    }
+    else
+    {
+
+        if(_S1015 >= 0.0f)
+        {
+
+            distance_10 = _S1015;
 
         }
         else
@@ -9609,15 +9805,15 @@ float3 pt_path_endpoint_0(const PtParams_0 thread* p_26, const PtPath_0 thread* 
 
     }
 
-    float3 _S995 = pt_medium_transmittance_0(&path_1->ptpath_media, distance_10);
+    float3 _S1018 = pt_medium_transmittance_0(&path_1->ptpath_media, distance_10);
 
-    float _S996 = pt_fog_transmittance_0((&p_26->ptp_media)->ptm_fog, (&p_26->ptp_media)->ptm_count, (&path_1->ptpath_ray)->ptr_origin.xyz, (&path_1->ptpath_ray)->ptr_direction.xyz, distance_10, kernelContext_87);
+    float _S1019 = pt_fog_transmittance_0((&p_28->ptp_media)->ptm_fog, (&p_28->ptp_media)->ptm_count, (&path_1->ptpath_ray)->ptr_origin.xyz, (&path_1->ptpath_ray)->ptr_direction.xyz, distance_10, kernelContext_87);
 
-    float3 _S997 = path_1->ptpath_throughput * (_S995 * float3(_S996) );
+    float3 _S1020 = path_1->ptpath_throughput * (_S1018 * float3(_S1019) );
 
-    float3 _S998 = pt_endpoint_0(p_26, &path_1->ptpath_ray, hit_5, path_1->ptpath_pdf, path_1->ptpath_previous, kernelContext_87);
+    float3 _S1021 = pt_endpoint_0(p_28, &path_1->ptpath_ray, hit_5, path_1->ptpath_pdf, path_1->ptpath_previous, kernelContext_87);
 
-    return _S997 * _S998;
+    return _S1020 * _S1021;
 }
 
 
@@ -9632,36 +9828,36 @@ struct PtSssFlight_0
 PtSssFlight_0 pt_sss_flight_0(const PtSssState_0 thread* state_0, float boundary_0, float2 u_12)
 {
 
-    float3 _S999 = state_0->ptsss_sigma_s;
+    float3 _S1022 = state_0->ptsss_sigma_s;
     float3 sigma_0 = state_0->ptsss_sigma_s + state_0->ptsss_sigma_a;
-    float d_12 = - log(max(1.0f - u_12.y, 9.99999968265522539e-21f)) / max(sigma_0[min(uint(u_12.x * 3.0f), 2U)], 9.99999968265522539e-21f);
-    thread PtSssFlight_0 f_10;
+    float d_13 = - log(max(1.0f - u_12.y, 9.99999968265522539e-21f)) / max(sigma_0[min(uint(u_12.x * 3.0f), 2U)], 9.99999968265522539e-21f);
+    thread PtSssFlight_0 f_12;
 
-    (&f_10)->distance_11 = min(d_12, boundary_0);
+    (&f_12)->distance_11 = min(d_13, boundary_0);
 
-    int _S1000;
+    int _S1023;
 
-    if(d_12 < boundary_0)
+    if(d_13 < boundary_0)
     {
 
-        _S1000 = int(1);
+        _S1023 = int(1);
 
     }
     else
     {
 
-        _S1000 = int(0);
+        _S1023 = int(0);
 
     }
 
-    uint _S1001 = uint(_S1000);
+    uint _S1024 = uint(_S1023);
 
-    (&f_10)->scattered_0 = _S1001;
-    float3 tr_0 = exp(- sigma_0 * float3((&f_10)->distance_11) );
+    (&f_12)->scattered_0 = _S1024;
+    float3 tr_0 = exp(- sigma_0 * float3((&f_12)->distance_11) );
 
     float pdf_6;
 
-    if(_S1001 != 0U)
+    if(_S1024 != 0U)
     {
 
         pdf_6 = dot(sigma_0 * tr_0, float3(0.3333333432674408f) );
@@ -9674,58 +9870,58 @@ PtSssFlight_0 pt_sss_flight_0(const PtSssState_0 thread* state_0, float boundary
 
     }
 
-    float3 _S1002;
+    float3 _S1025;
     if(pdf_6 > 0.0f)
     {
 
-        if(((&f_10)->scattered_0) != 0U)
+        if(((&f_12)->scattered_0) != 0U)
         {
 
-            _S1002 = _S999;
+            _S1025 = _S1022;
 
         }
         else
         {
 
-            _S1002 = float3(int3(int(1)) );
+            _S1025 = float3(int3(int(1)) );
 
         }
 
-        _S1002 = tr_0 * _S1002 / float3(pdf_6) ;
+        _S1025 = tr_0 * _S1025 / float3(pdf_6) ;
 
     }
     else
     {
 
-        _S1002 = float3(int3(int(0)) );
+        _S1025 = float3(int3(int(0)) );
 
     }
 
-    (&f_10)->weight_2 = _S1002;
+    (&f_12)->weight_2 = _S1025;
 
-    return f_10;
+    return f_12;
 }
 
 
 float pt_hg_0(float cosine_2, float g_1)
 {
 
-    float _S1003 = clamp(g_1, -0.99000000953674316f, 0.99000000953674316f);
+    float _S1026 = clamp(g_1, -0.99000000953674316f, 0.99000000953674316f);
 
-    float _S1004 = _S1003 * _S1003;
+    float _S1027 = _S1026 * _S1026;
 
-    float _S1005 = max(1.0f + _S1004 - 2.0f * _S1003 * cosine_2, 9.999999960041972e-13f);
-    return (1.0f - _S1004) / (12.56637096405029297f * _S1005 * sqrt(_S1005));
+    float _S1028 = max(1.0f + _S1027 - 2.0f * _S1026 * cosine_2, 9.999999960041972e-13f);
+    return (1.0f - _S1027) / (12.56637096405029297f * _S1028 * sqrt(_S1028));
 }
 
 
-float3 pt_hg_sample_0(float3 direction_5, float g_2, float2 u_13)
+float3 pt_hg_sample_0(float3 direction_6, float g_2, float2 u_13)
 {
 
-    float _S1006 = clamp(g_2, -0.99000000953674316f, 0.99000000953674316f);
+    float _S1029 = clamp(g_2, -0.99000000953674316f, 0.99000000953674316f);
 
     float cosine_3;
-    if((abs(_S1006)) < 0.00100000004749745f)
+    if((abs(_S1029)) < 0.00100000004749745f)
     {
 
         cosine_3 = 1.0f - 2.0f * u_13.x;
@@ -9734,49 +9930,49 @@ float3 pt_hg_sample_0(float3 direction_5, float g_2, float2 u_13)
     else
     {
 
-        float _S1007 = _S1006 * _S1006;
+        float _S1030 = _S1029 * _S1029;
 
-        float _S1008 = 2.0f * _S1006;
+        float _S1031 = 2.0f * _S1029;
 
-        float s_44 = (1.0f - _S1007) / (1.0f - _S1006 + _S1008 * u_13.x);
+        float s_44 = (1.0f - _S1030) / (1.0f - _S1029 + _S1031 * u_13.x);
 
-        cosine_3 = clamp((1.0f + _S1007 - s_44 * s_44) / _S1008, -1.0f, 1.0f);
+        cosine_3 = clamp((1.0f + _S1030 - s_44 * s_44) / _S1031, -1.0f, 1.0f);
 
     }
 
     float phi_5 = 6.28318548202514648f * u_13.y;
 
-    float3 x_18 = de_rt_tangent_0(direction_5);
-    return normalize(direction_5 * float3(cosine_3)  + (x_18 * float3(cos(phi_5))  + cross(direction_5, x_18) * float3(sin(phi_5)) ) * float3(sqrt(max(0.0f, 1.0f - cosine_3 * cosine_3))) );
+    float3 x_19 = de_rt_tangent_0(direction_6);
+    return normalize(direction_6 * float3(cosine_3)  + (x_19 * float3(cos(phi_5))  + cross(direction_6, x_19) * float3(sin(phi_5)) ) * float3(sqrt(max(0.0f, 1.0f - cosine_3 * cosine_3))) );
 }
 
 
-PtStep_0 pt_phase_step_0(const PtParams_0 thread* p_27, const PtPath_0 thread* path_2, float3 position_10, float g_3, uint pixel_9, KernelContext_0 thread* kernelContext_88)
+PtStep_0 pt_phase_step_0(const PtParams_0 thread* p_29, const PtPath_0 thread* path_2, float3 position_10, float g_3, uint pixel_9, KernelContext_0 thread* kernelContext_88)
 {
 
-    float3 _S1009 = float3(0.0f) ;
+    float3 _S1032 = float3(0.0f) ;
 
-    float4 _S1010 = float4(0.0f) ;
+    float4 _S1033 = float4(0.0f) ;
 
-    DeRtRay_0 _S1011 = { _S1010, _S1010 };
+    DeRtRay_0 _S1034 = { _S1033, _S1033 };
 
-    PtMedium_0 _S1012 = { 0U, _S1009, 0.0f };
+    PtMedium_0 _S1035 = { 0U, _S1032, 0.0f };
 
-    array<PtMedium_0, int(4)> _S1013 = { { _S1012, _S1012, _S1012, _S1012 } };
+    array<PtMedium_0, int(4)> _S1036 = { { _S1035, _S1035, _S1035, _S1035 } };
 
-    PtMediumStack_0 _S1014 = { _S1013, 0U, 0U };
+    PtMediumStack_0 _S1037 = { _S1036, 0U, 0U };
 
     thread PtStep_0 out_0;
 
-    (&out_0)->pts_emitted = _S1009;
+    (&out_0)->pts_emitted = _S1032;
 
-    (&out_0)->pts_direct = _S1009;
+    (&out_0)->pts_direct = _S1032;
 
-    (&out_0)->pts_shadow = _S1011;
+    (&out_0)->pts_shadow = _S1034;
 
-    (&out_0)->pts_next = _S1011;
+    (&out_0)->pts_next = _S1034;
 
-    (&out_0)->pts_weight = _S1009;
+    (&out_0)->pts_weight = _S1032;
 
     (&out_0)->pts_pdf = 0.0f;
 
@@ -9788,24 +9984,24 @@ PtStep_0 pt_phase_step_0(const PtParams_0 thread* p_27, const PtPath_0 thread* p
 
     (&out_0)->pts_casts_shadows = 0U;
 
-    (&out_0)->pts_shadow_media = _S1014;
+    (&out_0)->pts_shadow_media = _S1037;
 
     (&out_0)->pts_consume = 1U;
 
     (&out_0)->pts_weight = float3(int3(int(1)) );
 
     (&out_0)->pts_shadow_media = path_2->ptpath_media;
-    float3 _S1015 = (&path_2->ptpath_ray)->ptr_direction.xyz;
+    float3 _S1038 = (&path_2->ptpath_ray)->ptr_direction.xyz;
 
-    uint _S1016 = path_2->ptpath_event;
+    uint _S1039 = path_2->ptpath_event;
 
-    PtLightProposal_0 _S1017 = pt_light_sample_0(p_27, position_10, - _S1015, pixel_9, path_2->ptpath_bounce + path_2->ptpath_event * 17U, kernelContext_88);
-    float phase_1 = pt_hg_0(dot(_S1015, _S1017.ptlight_wi), g_3);
+    PtLightProposal_0 _S1040 = pt_light_sample_0(p_29, position_10, - _S1038, pixel_9, path_2->ptpath_bounce + path_2->ptpath_event * 17U, kernelContext_88);
+    float phase_1 = pt_hg_0(dot(_S1038, _S1040.ptlight_wi), g_3);
 
-    uint strategy_2 = (p_27->ptp_flags) & 3U;
+    uint strategy_2 = (p_29->ptp_flags) & 3U;
 
     float mis_0;
-    if((_S1017.ptlight_delta) != 0U)
+    if((_S1040.ptlight_delta) != 0U)
     {
 
         mis_0 = 1.0f;
@@ -9814,28 +10010,28 @@ PtStep_0 pt_phase_step_0(const PtParams_0 thread* p_27, const PtPath_0 thread* p
     else
     {
 
-        mis_0 = pt_power_0(_S1017.ptlight_pdf, phase_1);
+        mis_0 = pt_power_0(_S1040.ptlight_pdf, phase_1);
 
     }
 
-    bool _S1018;
-    if((_S1017.ptlight_pdf) > 0.0f)
+    bool _S1041;
+    if((_S1040.ptlight_pdf) > 0.0f)
     {
 
-        _S1018 = strategy_2 != 2U;
+        _S1041 = strategy_2 != 2U;
 
     }
     else
     {
 
-        _S1018 = false;
+        _S1041 = false;
 
     }
 
-    if(_S1018)
+    if(_S1041)
     {
 
-        float3 _S1019 = _S1017.ptlight_incident * float3(phase_1) ;
+        float3 _S1042 = _S1040.ptlight_incident * float3(phase_1) ;
 
         if(strategy_2 == 1U)
         {
@@ -9844,55 +10040,98 @@ PtStep_0 pt_phase_step_0(const PtParams_0 thread* p_27, const PtPath_0 thread* p
 
         }
 
-        (&out_0)->pts_direct = _S1019 * float3((mis_0 / _S1017.ptlight_pdf)) ;
+        (&out_0)->pts_direct = _S1042 * float3((mis_0 / _S1040.ptlight_pdf)) ;
 
     }
-    (&out_0)->pts_shadow = _S1017.ptlight_shadow;
+    (&out_0)->pts_shadow = _S1040.ptlight_shadow;
 
-    (&out_0)->pts_casts_shadows = _S1017.ptlight_casts_shadows;
+    (&out_0)->pts_casts_shadows = _S1040.ptlight_casts_shadows;
 
-    uint _S1020 = p_27->ptp_sampling_table;
+    uint _S1043 = p_29->ptp_sampling_table;
 
-    uint _S1021 = pixel_9 ^ (p_27->ptp_seed);
+    uint _S1044 = pixel_9 ^ (p_29->ptp_seed);
 
-    uint _S1022 = p_27->ptp_sample;
+    uint _S1045 = p_29->ptp_sample;
 
-    uint _S1023 = _S1016 * 5U;
+    uint _S1046 = _S1039 * 5U;
 
-    float _S1024 = pt_random_0(p_27->ptp_sampling_table, _S1021, p_27->ptp_sample, 4096U + _S1023, kernelContext_88);
+    float _S1047 = pt_random_0(p_29->ptp_sampling_table, _S1044, p_29->ptp_sample, 4096U + _S1046, kernelContext_88);
 
-    float _S1025 = pt_random_0(_S1020, _S1021, _S1022, 4097U + _S1023, kernelContext_88);
-    float3 direction_6 = pt_hg_sample_0(_S1015, g_3, float2(_S1024, _S1025));
+    float _S1048 = pt_random_0(_S1043, _S1044, _S1045, 4097U + _S1046, kernelContext_88);
+    float3 direction_7 = pt_hg_sample_0(_S1038, g_3, float2(_S1047, _S1048));
 
-    (&out_0)->pts_pdf = pt_hg_0(dot(_S1015, direction_6), g_3);
-    (&(&out_0)->pts_next)->ptr_origin = float4(position_10 + direction_6 * float3(0.00000999999974738f) , 0.00000999999974738f);
+    (&out_0)->pts_pdf = pt_hg_0(dot(_S1038, direction_7), g_3);
+    (&(&out_0)->pts_next)->ptr_origin = float4(position_10 + direction_7 * float3(0.00000999999974738f) , 0.00000999999974738f);
 
-    (&(&out_0)->pts_next)->ptr_direction = float4(direction_6, 1.0e+06f);
+    (&(&out_0)->pts_next)->ptr_direction = float4(direction_7, 1.0e+06f);
 
     return out_0;
 }
 
 
-float3 pt_geometric_normal_0(const DeRtContext_0 thread* q_5, const DeRtHit_0 thread* hit_6, KernelContext_0 thread* kernelContext_89)
+float3 pt_geometric_normal_0(const DeRtContext_0 thread* q_6, const DeRtHit_0 thread* hit_6, KernelContext_0 thread* kernelContext_89)
 {
 
-    DeResolvePoint_0 _S1026 = de_rt_point_0(q_5, hit_6->pth_instance, hit_6->pth_primitive, float2(hit_6->pth_u, hit_6->pth_v), kernelContext_89);
+    DeResolvePoint_0 _S1049 = de_rt_point_0(q_6, hit_6->pth_instance, hit_6->pth_primitive, float2(hit_6->pth_u, hit_6->pth_v), kernelContext_89);
 
-    thread array<float4, int(3)> _S1027 = _S1026.inst_0.transform_1;
+    thread array<float4, int(3)> _S1050 = _S1049.inst_0.transform_1;
 
-    float3 _S1028 = de_vis_transform_point_0(&_S1027, _S1026.object_pos_0[int(0)]);
+    float3 _S1051 = de_vis_transform_point_0(&_S1050, _S1049.object_pos_0[int(0)]);
 
-    thread array<float4, int(3)> _S1029 = _S1026.inst_0.transform_1;
+    thread array<float4, int(3)> _S1052 = _S1049.inst_0.transform_1;
 
-    float3 _S1030 = de_vis_transform_point_0(&_S1029, _S1026.object_pos_0[int(1)]);
+    float3 _S1053 = de_vis_transform_point_0(&_S1052, _S1049.object_pos_0[int(1)]);
 
-    thread array<float4, int(3)> _S1031 = _S1026.inst_0.transform_1;
+    thread array<float4, int(3)> _S1054 = _S1049.inst_0.transform_1;
 
-    float3 _S1032 = de_vis_transform_point_0(&_S1031, _S1026.object_pos_0[int(2)]);
+    float3 _S1055 = de_vis_transform_point_0(&_S1054, _S1049.object_pos_0[int(2)]);
 
 
 
-    return normalize(cross(_S1030 - _S1028, _S1032 - _S1028));
+    return normalize(cross(_S1053 - _S1051, _S1055 - _S1051));
+}
+
+
+float pt_fog_majorant_0(const PtFog_0 thread* fog_5, float3 origin_4, float3 direction_8, float t0_3, float t1_3)
+{
+
+    float _S1056 = max(fog_5->extent_density_0.w, 0.0f);
+
+    bool _S1057;
+    if((fog_5->extent_density_0.x) < 0.0f)
+    {
+
+        _S1057 = (fog_5->params_1.x) != 0.0f;
+
+    }
+    else
+    {
+
+        _S1057 = false;
+
+    }
+
+    float m_24;
+
+    if(_S1057)
+    {
+
+        float _S1058 = origin_4.z;
+
+        float _S1059 = direction_8.z;
+
+        m_24 = _S1056 * exp(- clamp(fog_5->params_1.x * (min(_S1058 + _S1059 * t0_3, _S1058 + _S1059 * t1_3) - fog_5->params_1.w), -8.0f, 80.0f));
+
+    }
+    else
+    {
+
+        m_24 = _S1056;
+
+    }
+
+
+    return m_24 * (1.0f + max(fog_5->params_1.y, 0.0f));
 }
 
 
@@ -9905,29 +10144,31 @@ struct PtFogEvent_0
 };
 
 
-PtFogEvent_0 pt_fog_event_0(uint sampling_table_1, uint buffer_2, uint count_2, float3 origin_3, float3 direction_7, float limit_1, uint pixel_10, uint sample_4, uint dimension_5, KernelContext_0 thread* kernelContext_90)
+PtFogEvent_0 pt_fog_event_0(uint sampling_table_1, uint buffer_2, uint count_2, float3 origin_5, float3 direction_9, float limit_1, uint pixel_10, uint sample_4, uint dimension_5, KernelContext_0 thread* kernelContext_90)
 {
 
-    float3 _S1033 = float3(0.0f) ;
+    float3 _S1060 = float3(0.0f) ;
 
-    thread PtFogEvent_0 e_5;
+    thread PtFogEvent_0 e_6;
 
-    (&e_5)->distance_12 = 0.0f;
+    (&e_6)->distance_12 = 0.0f;
 
-    (&e_5)->albedo_2 = _S1033;
+    (&e_6)->albedo_2 = _S1060;
 
-    (&e_5)->g_4 = 0.0f;
+    (&e_6)->g_4 = 0.0f;
 
-    (&e_5)->scattered_1 = 0U;
+    (&e_6)->scattered_1 = 0U;
 
-    (&e_5)->distance_12 = limit_1;
+    (&e_6)->distance_12 = limit_1;
 
-    uint i_23 = 0U;
+    uint i_24 = 0U;
+
+
 
     for(;;)
     {
 
-        if(i_23 < count_2)
+        if(i_24 < count_2)
         {
         }
         else
@@ -9936,73 +10177,216 @@ PtFogEvent_0 pt_fog_event_0(uint sampling_table_1, uint buffer_2, uint count_2, 
             break;
         }
 
-        thread DeROBuffer_0 _S1034 = de_robuffer_1(buffer_2);
+        thread DeROBuffer_0 _S1061 = de_robuffer_1(buffer_2);
 
-        PtFog_0 _S1035 = DeROBuffer_operatorx5Bx5D_get_1(&_S1034, i_23, kernelContext_90);
+        PtFog_0 _S1062 = DeROBuffer_operatorx5Bx5D_get_1(&_S1061, i_24, kernelContext_90);
 
-        float _S1036 = max(_S1035.extent_density_0.w, 0.0f);
+        float _S1063 = max(_S1062.extent_density_0.w, 0.0f);
 
-        if(!(_S1036 > 0.0f))
+        if(!(_S1063 > 0.0f))
         {
 
-            i_23 = i_23 + 1U;
+            i_24 = i_24 + 1U;
 
             continue;
         }
 
-        thread PtFog_0 _S1037 = _S1035;
+        thread PtFog_0 _S1064 = _S1062;
 
-        float2 _S1038 = pt_fog_interval_0(&_S1037, origin_3, direction_7, limit_1);
+        float2 _S1065 = pt_fog_interval_0(&_S1064, origin_5, direction_9, limit_1);
 
-        float _S1039 = pt_random_0(sampling_table_1, pixel_10, sample_4, dimension_5 + i_23, kernelContext_90);
+        float _S1066 = pt_random_0(sampling_table_1, pixel_10, sample_4, dimension_5 + i_24, kernelContext_90);
 
-        float d_13 = _S1038.x - log(max(1.0f - _S1039, 9.99999968265522539e-21f)) / _S1036;
+        float _S1067 = _S1065.x;
 
-        bool _S1040;
-        if(d_13 < (_S1038.y))
+        float _S1068 = _S1067 - log(max(1.0f - _S1066, 9.99999968265522539e-21f)) / _S1063;
+
+        thread PtFog_0 _S1069 = _S1062;
+
+        bool _S1070 = pt_fog_heterogeneous_0(&_S1069);
+
+        bool _S1071;
+
+        float d_14;
+        if(_S1070)
         {
 
-            _S1040 = d_13 < ((&e_5)->distance_12);
+            float _S1072 = _S1065.y;
+
+            float _S1073 = min(_S1072, (&e_6)->distance_12);
+
+            thread PtFog_0 _S1074 = _S1062;
+
+            float _S1075 = pt_fog_majorant_0(&_S1074, origin_5, direction_9, _S1067, _S1073);
+
+            if(_S1075 > 0.0f)
+            {
+
+                _S1071 = _S1072 > _S1067;
+
+            }
+            else
+            {
+
+                _S1071 = false;
+
+            }
+
+            bool hit_7;
+
+            float d_15;
+
+            if(_S1071)
+            {
+
+                uint k_7 = 0U;
+
+                d_14 = _S1067;
+                for(;;)
+                {
+
+                    if(k_7 < 256U)
+                    {
+                    }
+                    else
+                    {
+
+                        hit_7 = false;
+
+                        d_15 = d_14;
+
+                        break;
+                    }
+
+                    uint dim_0 = dimension_5 * 65536U + i_24 * 1024U + 2U * k_7 + 1024U;
+
+                    float _S1076 = pt_random_0(sampling_table_1, pixel_10, sample_4, dim_0, kernelContext_90);
+                    float d_16 = d_14 - log(max(1.0f - _S1076, 9.99999968265522539e-21f)) / _S1075;
+                    if(d_16 >= _S1072)
+                    {
+
+                        hit_7 = true;
+
+                    }
+                    else
+                    {
+
+                        hit_7 = d_16 >= ((&e_6)->distance_12);
+
+                    }
+
+                    if(hit_7)
+                    {
+
+                        hit_7 = false;
+
+                        d_15 = d_16;
+
+                        break;
+                    }
+
+                    float _S1077 = pt_random_0(sampling_table_1, pixel_10, sample_4, dim_0 + 1U, kernelContext_90);
+                    float _S1078 = _S1077 * _S1075;
+
+                    float3 _S1079 = origin_5 + direction_9 * float3(d_16) ;
+
+                    thread PtFog_0 _S1080 = _S1062;
+
+                    float _S1081 = pt_fog_density_0(&_S1080, _S1079);
+
+                    if(_S1078 < _S1081)
+                    {
+
+                        hit_7 = true;
+
+                        d_15 = d_16;
+
+                        break;
+                    }
+
+                    k_7 = k_7 + 1U;
+
+                    d_14 = d_16;
+
+                }
+
+                d_14 = d_15;
+
+            }
+            else
+            {
+
+                hit_7 = false;
+
+                d_14 = _S1067;
+
+            }
+
+            if(!hit_7)
+            {
+
+                d_15 = limit_1 + 1.0f;
+
+            }
+            else
+            {
+
+                d_15 = d_14;
+
+            }
+
+            d_14 = d_15;
 
         }
         else
         {
 
-            _S1040 = false;
+            d_14 = _S1068;
 
         }
 
-        if(_S1040)
+        if(d_14 < (_S1065.y))
         {
 
-            (&e_5)->distance_12 = d_13;
+            _S1071 = d_14 < ((&e_6)->distance_12);
 
-            (&e_5)->albedo_2 = saturate(_S1035.albedo_g_0.xyz);
+        }
+        else
+        {
 
-            (&e_5)->g_4 = _S1035.albedo_g_0.w;
-
-            (&e_5)->scattered_1 = 1U;
+            _S1071 = false;
 
         }
 
-        i_23 = i_23 + 1U;
+        if(_S1071)
+        {
+
+            (&e_6)->distance_12 = d_14;
+
+            (&e_6)->albedo_2 = saturate(_S1062.albedo_g_0.xyz);
+
+            (&e_6)->g_4 = _S1062.albedo_g_0.w;
+
+            (&e_6)->scattered_1 = 1U;
+
+        }
+
+        i_24 = i_24 + 1U;
 
     }
 
-
-
-    return e_5;
+    return e_6;
 }
 
 
 void pt_medium_exit_0(PtMediumStack_0 thread* stack_1, uint instance_4)
 {
 
-    uint i_24 = 0U;
+    uint i_25 = 0U;
     for(;;)
     {
 
-        if(i_24 < (stack_1->depth_2))
+        if(i_25 < (stack_1->depth_2))
         {
         }
         else
@@ -10011,10 +10395,10 @@ void pt_medium_exit_0(PtMediumStack_0 thread* stack_1, uint instance_4)
             break;
         }
 
-        if(((&stack_1->entries_0[i_24])->instance_2) == instance_4)
+        if(((&stack_1->entries_0[i_25])->instance_2) == instance_4)
         {
 
-            uint j_0 = i_24 + 1U;
+            uint j_0 = i_25 + 1U;
             for(;;)
             {
 
@@ -10038,7 +10422,7 @@ void pt_medium_exit_0(PtMediumStack_0 thread* stack_1, uint instance_4)
             return;
         }
 
-        i_24 = i_24 + 1U;
+        i_25 = i_25 + 1U;
 
     }
 
@@ -10050,11 +10434,11 @@ void pt_medium_exit_0(PtMediumStack_0 thread* stack_1, uint instance_4)
 void pt_medium_exit_1(PtMediumStack_0 thread* stack_2, uint instance_5)
 {
 
-    uint i_25 = 0U;
+    uint i_26 = 0U;
     for(;;)
     {
 
-        if(i_25 < (stack_2->depth_2))
+        if(i_26 < (stack_2->depth_2))
         {
         }
         else
@@ -10063,10 +10447,10 @@ void pt_medium_exit_1(PtMediumStack_0 thread* stack_2, uint instance_5)
             break;
         }
 
-        if(((&stack_2->entries_0[i_25])->instance_2) == instance_5)
+        if(((&stack_2->entries_0[i_26])->instance_2) == instance_5)
         {
 
-            uint j_1 = i_25 + 1U;
+            uint j_1 = i_26 + 1U;
             for(;;)
             {
 
@@ -10090,7 +10474,7 @@ void pt_medium_exit_1(PtMediumStack_0 thread* stack_2, uint instance_5)
             return;
         }
 
-        i_25 = i_25 + 1U;
+        i_26 = i_26 + 1U;
 
     }
 
@@ -10102,11 +10486,11 @@ void pt_medium_exit_1(PtMediumStack_0 thread* stack_2, uint instance_5)
 bool pt_medium_contains_0(const PtMediumStack_0 thread* stack_3, uint instance_6)
 {
 
-    uint i_26 = 0U;
+    uint i_27 = 0U;
     for(;;)
     {
 
-        if(i_26 < (stack_3->depth_2))
+        if(i_27 < (stack_3->depth_2))
         {
         }
         else
@@ -10115,13 +10499,13 @@ bool pt_medium_contains_0(const PtMediumStack_0 thread* stack_3, uint instance_6
             break;
         }
 
-        if(((&stack_3->entries_0[i_26])->instance_2) == instance_6)
+        if(((&stack_3->entries_0[i_27])->instance_2) == instance_6)
         {
 
             return true;
         }
 
-        i_26 = i_26 + 1U;
+        i_27 = i_27 + 1U;
 
     }
     return false;
@@ -10139,11 +10523,11 @@ void pt_medium_enter_0(PtMediumStack_0 thread* stack_4, const PtMedium_0 thread*
         return;
     }
 
-    uint _S1041 = stack_4->depth_2;
+    uint _S1082 = stack_4->depth_2;
 
     stack_4->depth_2 = stack_4->depth_2 + 1U;
 
-    stack_4->entries_0[_S1041] = *medium_0;
+    stack_4->entries_0[_S1082] = *medium_0;
     return;
 }
 
@@ -10159,11 +10543,11 @@ void pt_medium_enter_1(PtMediumStack_0 thread* stack_5, const PtMedium_0 thread*
         return;
     }
 
-    uint _S1042 = stack_5->depth_2;
+    uint _S1083 = stack_5->depth_2;
 
     stack_5->depth_2 = stack_5->depth_2 + 1U;
 
-    stack_5->entries_0[_S1042] = *medium_1;
+    stack_5->entries_0[_S1083] = *medium_1;
     return;
 }
 
@@ -10180,10 +10564,10 @@ void pt_medium_boundary_0(PtMediumStack_0 thread* stack_6, const PtMedium_0 thre
     else
     {
 
-        thread PtMediumStack_0 _S1043 = *stack_6;
+        thread PtMediumStack_0 _S1084 = *stack_6;
 
-        bool _S1044 = pt_medium_contains_0(&_S1043, medium_2->instance_2);
-        if(!_S1044)
+        bool _S1085 = pt_medium_contains_0(&_S1084, medium_2->instance_2);
+        if(!_S1085)
         {
 
             pt_medium_enter_1(stack_6, medium_2);
@@ -10234,40 +10618,40 @@ struct PtSssCoefficients_0
 PtSssCoefficients_0 pt_sss_coefficients_0(float3 radius_0, float3 albedo_6)
 {
 
-    float3 _S1045 = clamp(albedo_6, float3(int3(int(0)) ), float3(0.99999898672103882f) );
+    float3 _S1086 = clamp(albedo_6, float3(int3(int(0)) ), float3(0.99999898672103882f) );
 
-    float3 _S1046 = float3(1.0f) ;
+    float3 _S1087 = float3(1.0f) ;
 
 
-    float3 a_18 = _S1046 - pow((_S1046 - _S1045) / (_S1046 + _S1045), float3(int3(int(2)) ));
-    float3 _S1047 = _S1046 - a_18;
+    float3 a_18 = _S1087 - pow((_S1087 - _S1086) / (_S1087 + _S1086), float3(int3(int(2)) ));
+    float3 _S1088 = _S1087 - a_18;
 
-    float3 sigma_t_0 = _S1046 / (max(de_burley_d3_0(radius_0, _S1045), float3(9.99999993922529029e-09f) ) * sqrt(max(float3(3.0f)  * _S1047, float3(9.999999960041972e-13f) )));
+    float3 sigma_t_0 = _S1087 / (max(de_burley_d3_0(radius_0, _S1086), float3(9.99999993922529029e-09f) ) * sqrt(max(float3(3.0f)  * _S1088, float3(9.999999960041972e-13f) )));
     thread PtSssCoefficients_0 c_14;
 
     (&c_14)->sigma_s_1 = sigma_t_0 * a_18;
 
-    (&c_14)->sigma_a_1 = sigma_t_0 * _S1047;
+    (&c_14)->sigma_a_1 = sigma_t_0 * _S1088;
 
     return c_14;
 }
 
 
-PtStep_0 pt_path_event_0(const PtParams_0 thread* p_28, PtPath_0 thread* path_3, const DeRtHit_0 thread* hit_7, uint pixel_11, KernelContext_0 thread* kernelContext_91)
+PtStep_0 pt_path_event_0(const PtParams_0 thread* p_30, PtPath_0 thread* path_3, const DeRtHit_0 thread* hit_8, uint pixel_11, KernelContext_0 thread* kernelContext_91)
 {
 
     path_3->ptpath_event = path_3->ptpath_event + 1U;
 
-    float _S1048 = hit_7->pth_t;
+    float _S1089 = hit_8->pth_t;
 
-    bool _S1049 = (hit_7->pth_t) >= 0.0f;
+    bool _S1090 = (hit_8->pth_t) >= 0.0f;
 
     float limit_2;
 
-    if(_S1049)
+    if(_S1090)
     {
 
-        limit_2 = _S1048;
+        limit_2 = _S1089;
 
     }
     else
@@ -10280,45 +10664,45 @@ PtStep_0 pt_path_event_0(const PtParams_0 thread* p_28, PtPath_0 thread* path_3,
     if(((&path_3->ptpath_sss)->ptsss_active) == 0U)
     {
 
-        thread DeRtRay_0 _S1050 = path_3->ptpath_ray;
+        thread DeRtRay_0 _S1091 = path_3->ptpath_ray;
 
         thread float area_pdf_3;
 
-        float4 _S1051 = pt_area_hit_0(p_28, &_S1050, _S1048, &area_pdf_3, kernelContext_91);
+        float4 _S1092 = pt_area_hit_0(p_30, &_S1091, _S1089, &area_pdf_3, kernelContext_91);
 
-        float _S1052 = _S1051.w;
+        float _S1093 = _S1092.w;
 
-        if(_S1052 >= 0.0f)
+        if(_S1093 >= 0.0f)
         {
 
-            limit_2 = min(limit_2, _S1052);
+            limit_2 = min(limit_2, _S1093);
 
         }
 
     }
-    float3 _S1053 = float3(0.0f) ;
+    float3 _S1094 = float3(0.0f) ;
 
-    float4 _S1054 = float4(0.0f) ;
+    float4 _S1095 = float4(0.0f) ;
 
-    DeRtRay_0 _S1055 = { _S1054, _S1054 };
+    DeRtRay_0 _S1096 = { _S1095, _S1095 };
 
-    PtMedium_0 _S1056 = { 0U, _S1053, 0.0f };
+    PtMedium_0 _S1097 = { 0U, _S1094, 0.0f };
 
-    array<PtMedium_0, int(4)> _S1057 = { { _S1056, _S1056, _S1056, _S1056 } };
+    array<PtMedium_0, int(4)> _S1098 = { { _S1097, _S1097, _S1097, _S1097 } };
 
-    PtMediumStack_0 _S1058 = { _S1057, 0U, 0U };
+    PtMediumStack_0 _S1099 = { _S1098, 0U, 0U };
 
     thread PtStep_0 step_0;
 
-    (&step_0)->pts_emitted = _S1053;
+    (&step_0)->pts_emitted = _S1094;
 
-    (&step_0)->pts_direct = _S1053;
+    (&step_0)->pts_direct = _S1094;
 
-    (&step_0)->pts_shadow = _S1055;
+    (&step_0)->pts_shadow = _S1096;
 
-    (&step_0)->pts_next = _S1055;
+    (&step_0)->pts_next = _S1096;
 
-    (&step_0)->pts_weight = _S1053;
+    (&step_0)->pts_weight = _S1094;
 
     (&step_0)->pts_pdf = 0.0f;
 
@@ -10330,7 +10714,7 @@ PtStep_0 pt_path_event_0(const PtParams_0 thread* p_28, PtPath_0 thread* path_3,
 
     (&step_0)->pts_casts_shadows = 0U;
 
-    (&step_0)->pts_shadow_media = _S1058;
+    (&step_0)->pts_shadow_media = _S1099;
 
     (&step_0)->pts_stop = 1U;
 
@@ -10338,10 +10722,10 @@ PtStep_0 pt_path_event_0(const PtParams_0 thread* p_28, PtPath_0 thread* path_3,
     if(((&path_3->ptpath_sss)->ptsss_active) != 0U)
     {
 
-        if(_S1049)
+        if(_S1090)
         {
 
-            volume_2 = (hit_7->pth_instance) != ((&path_3->ptpath_sss)->ptsss_instance);
+            volume_2 = (hit_8->pth_instance) != ((&path_3->ptpath_sss)->ptsss_instance);
 
         }
         else
@@ -10357,96 +10741,96 @@ PtStep_0 pt_path_event_0(const PtParams_0 thread* p_28, PtPath_0 thread* path_3,
             return step_0;
         }
 
-        uint _S1059 = p_28->ptp_sampling_table;
-        uint _S1060 = pixel_11 ^ (p_28->ptp_seed);
+        uint _S1100 = p_30->ptp_sampling_table;
+        uint _S1101 = pixel_11 ^ (p_30->ptp_seed);
 
-        uint _S1061 = p_28->ptp_sample;
+        uint _S1102 = p_30->ptp_sample;
 
-        float _S1062 = pt_random_0(p_28->ptp_sampling_table, _S1060, p_28->ptp_sample, 8192U + path_3->ptpath_event * 7U, kernelContext_91);
+        float _S1103 = pt_random_0(p_30->ptp_sampling_table, _S1101, p_30->ptp_sample, 8192U + path_3->ptpath_event * 7U, kernelContext_91);
 
-        float _S1063 = pt_random_0(_S1059, _S1060, _S1061, 8193U + path_3->ptpath_event * 7U, kernelContext_91);
+        float _S1104 = pt_random_0(_S1100, _S1101, _S1102, 8193U + path_3->ptpath_event * 7U, kernelContext_91);
 
-        float2 u_14 = float2(_S1062, _S1063);
+        float2 u_14 = float2(_S1103, _S1104);
 
-        thread PtSssState_0 _S1064 = path_3->ptpath_sss;
+        thread PtSssState_0 _S1105 = path_3->ptpath_sss;
 
-        PtSssFlight_0 _S1065 = pt_sss_flight_0(&_S1064, limit_2, u_14);
-        path_3->ptpath_throughput = path_3->ptpath_throughput * _S1065.weight_2;
-        path_3->ptpath_position = (&path_3->ptpath_ray)->ptr_origin.xyz + (&path_3->ptpath_ray)->ptr_direction.xyz * float3(_S1065.distance_11) ;
-        if((_S1065.scattered_0) != 0U)
+        PtSssFlight_0 _S1106 = pt_sss_flight_0(&_S1105, limit_2, u_14);
+        path_3->ptpath_throughput = path_3->ptpath_throughput * _S1106.weight_2;
+        path_3->ptpath_position = (&path_3->ptpath_ray)->ptr_origin.xyz + (&path_3->ptpath_ray)->ptr_direction.xyz * float3(_S1106.distance_11) ;
+        if((_S1106.scattered_0) != 0U)
         {
 
-            uint _S1066 = (&path_3->ptpath_sss)->ptsss_steps + 1U;
+            uint _S1107 = (&path_3->ptpath_sss)->ptsss_steps + 1U;
 
-            (&path_3->ptpath_sss)->ptsss_steps = _S1066;
+            (&path_3->ptpath_sss)->ptsss_steps = _S1107;
 
-            if(_S1066 >= ((&p_28->ptp_media)->ptm_max_steps))
+            if(_S1107 >= ((&p_30->ptp_media)->ptm_max_steps))
             {
 
                 return step_0;
             }
 
-            thread PtPath_0 _S1067 = *path_3;
+            thread PtPath_0 _S1108 = *path_3;
 
-            PtStep_0 _S1068 = pt_phase_step_0(p_28, &_S1067, path_3->ptpath_position, 0.0f, pixel_11, kernelContext_91);
-            step_0 = _S1068;
+            PtStep_0 _S1109 = pt_phase_step_0(p_30, &_S1108, path_3->ptpath_position, 0.0f, pixel_11, kernelContext_91);
+            step_0 = _S1109;
 
             (&step_0)->pts_consume = 0U;
 
             return step_0;
         }
-        if(_S1048 < 0.0f)
+        if(_S1089 < 0.0f)
         {
 
             return step_0;
         }
 
-        DeRtContext_0 _S1069 = pt_query_0(p_28, kernelContext_91);
+        DeRtContext_0 _S1110 = pt_query_0(p_30, kernelContext_91);
 
-        float3 _S1070 = (&path_3->ptpath_ray)->ptr_origin.xyz;
+        float3 _S1111 = (&path_3->ptpath_ray)->ptr_origin.xyz;
 
-        thread DeRtContext_0 _S1071 = _S1069;
+        thread DeRtContext_0 _S1112 = _S1110;
 
-        DeRtSurface_0 _S1072 = de_rt_hit_surface_0(&_S1071, hit_7, _S1070, p_28->ptp_brdf_lut, kernelContext_91);
-        thread SurfaceData_0 exit_0 = _S1072.material_1;
+        DeRtSurface_0 _S1113 = de_rt_hit_surface_0(&_S1112, hit_8, _S1111, p_30->ptp_brdf_lut, kernelContext_91);
+        thread SurfaceData_0 exit_0 = _S1113.material_1;
 
-        thread DeRtContext_0 _S1073 = _S1069;
+        thread DeRtContext_0 _S1114 = _S1110;
 
-        float3 _S1074 = pt_geometric_normal_0(&_S1073, hit_7, kernelContext_91);
+        float3 _S1115 = pt_geometric_normal_0(&_S1114, hit_8, kernelContext_91);
 
-        (&exit_0)->normal_0 = _S1074;
+        (&exit_0)->normal_0 = _S1115;
 
-        (&exit_0)->clearcoat_normal_0 = _S1074;
+        (&exit_0)->clearcoat_normal_0 = _S1115;
         (&exit_0)->features_0 = ((&exit_0)->features_0) | 48U;
 
         (&exit_0)->transmission_0 = 1.0f;
 
         (&exit_0)->thickness_0 = 1.0f;
 
-        float3 _S1075 = float3(int3(int(1)) );
+        float3 _S1116 = float3(int3(int(1)) );
 
-        (&exit_0)->attenuation_color_0 = _S1075;
+        (&exit_0)->attenuation_color_0 = _S1116;
 
-        thread SurfaceData_0 _S1076 = exit_0;
+        thread SurfaceData_0 _S1117 = exit_0;
 
-        ShadingFrame_0 _S1077 = de_surface_frame_0(&_S1076);
+        ShadingFrame_0 _S1118 = de_surface_frame_0(&_S1117);
         thread BsdfSample_0 next_1;
 
-        thread SurfaceData_0 _S1078 = exit_0;
+        thread SurfaceData_0 _S1119 = exit_0;
 
-        bool _S1079 = de_transmission_refracts_0(&_S1078);
-        if(!_S1079)
+        bool _S1120 = de_transmission_refracts_0(&_S1119);
+        if(!_S1120)
         {
 
-            float3 _S1080 = (&path_3->ptpath_ray)->ptr_direction.xyz;
+            float3 _S1121 = (&path_3->ptpath_ray)->ptr_direction.xyz;
 
-            thread ShadingFrame_0 _S1081 = _S1077;
+            thread ShadingFrame_0 _S1122 = _S1118;
 
-            float3 _S1082 = ShadingFrame_to_local_0(&_S1081, _S1080);
+            float3 _S1123 = ShadingFrame_to_local_0(&_S1122, _S1121);
 
-            (&next_1)->wi_4 = _S1082;
+            (&next_1)->wi_4 = _S1123;
 
-            (&next_1)->weight_0 = _S1075;
+            (&next_1)->weight_0 = _S1116;
 
             (&next_1)->pdf_0 = 1.0f;
 
@@ -10456,19 +10840,19 @@ PtStep_0 pt_path_event_0(const PtParams_0 thread* p_28, PtPath_0 thread* path_3,
         else
         {
 
-            float3 _S1083 = - (&path_3->ptpath_ray)->ptr_direction.xyz;
+            float3 _S1124 = - (&path_3->ptpath_ray)->ptr_direction.xyz;
 
-            thread ShadingFrame_0 _S1084 = _S1077;
+            thread ShadingFrame_0 _S1125 = _S1118;
 
-            float3 _S1085 = ShadingFrame_to_local_0(&_S1084, _S1083);
+            float3 _S1126 = ShadingFrame_to_local_0(&_S1125, _S1124);
 
-            float3 _S1086 = pt_random3_0(_S1059, _S1060, _S1061, 16384U + path_3->ptpath_event * 3U, kernelContext_91);
+            float3 _S1127 = pt_random3_0(_S1100, _S1101, _S1102, 16384U + path_3->ptpath_event * 3U, kernelContext_91);
 
-            thread SurfaceData_0 _S1087 = exit_0;
+            thread SurfaceData_0 _S1128 = exit_0;
 
-            BsdfSample_0 _S1088 = StandardModelT_sample_0(&_S1087, _S1085, _S1086, kernelContext_91);
+            BsdfSample_0 _S1129 = StandardModelT_sample_0(&_S1128, _S1126, _S1127, kernelContext_91);
 
-            next_1 = _S1088;
+            next_1 = _S1129;
 
         }
 
@@ -10478,97 +10862,97 @@ PtStep_0 pt_path_event_0(const PtParams_0 thread* p_28, PtPath_0 thread* path_3,
             return step_0;
         }
 
-        thread ShadingFrame_0 _S1089 = _S1077;
+        thread ShadingFrame_0 _S1130 = _S1118;
 
-        float3 _S1090 = ShadingFrame_to_world_0(&_S1089, (&next_1)->wi_4);
+        float3 _S1131 = ShadingFrame_to_world_0(&_S1130, (&next_1)->wi_4);
 
-        float3 wi_36 = normalize(_S1090);
+        float3 wi_36 = normalize(_S1131);
         (&step_0)->pts_stop = 0U;
 
         (&step_0)->pts_weight = (&next_1)->weight_0;
 
         (&step_0)->pts_pdf = (&next_1)->pdf_0;
 
-        uint _S1091;
+        uint _S1132;
 
-        if((dot(wi_36, _S1074)) > 0.0f)
+        if((dot(wi_36, _S1115)) > 0.0f)
         {
 
-            _S1091 = 1U;
+            _S1132 = 1U;
 
         }
         else
         {
 
-            _S1091 = 0U;
+            _S1132 = 0U;
 
         }
 
-        (&step_0)->pts_consume = _S1091;
-        if(_S1091 != 0U)
+        (&step_0)->pts_consume = _S1132;
+        if(_S1132 != 0U)
         {
 
             (&path_3->ptpath_sss)->ptsss_active = 0U;
 
         }
-        (&(&step_0)->pts_next)->ptr_origin = float4(de_rt_offset_0(path_3->ptpath_position, _S1074, wi_36), 0.00000999999974738f);
+        (&(&step_0)->pts_next)->ptr_origin = float4(de_rt_offset_0(path_3->ptpath_position, _S1115, wi_36), 0.00000999999974738f);
 
         (&(&step_0)->pts_next)->ptr_direction = float4(wi_36, 1.0e+06f);
 
         return step_0;
     }
 
-    uint _S1092 = p_28->ptp_sampling_table;
+    uint _S1133 = p_30->ptp_sampling_table;
 
-    uint _S1093 = pixel_11 ^ (p_28->ptp_seed);
+    uint _S1134 = pixel_11 ^ (p_30->ptp_seed);
 
-    uint _S1094 = p_28->ptp_sample;
+    uint _S1135 = p_30->ptp_sample;
 
-    PtFogEvent_0 _S1095 = pt_fog_event_0(p_28->ptp_sampling_table, (&p_28->ptp_media)->ptm_fog, (&p_28->ptp_media)->ptm_count, (&path_3->ptpath_ray)->ptr_origin.xyz, (&path_3->ptpath_ray)->ptr_direction.xyz, limit_2, _S1093, p_28->ptp_sample, 32768U + path_3->ptpath_event * 37U, kernelContext_91);
+    PtFogEvent_0 _S1136 = pt_fog_event_0(p_30->ptp_sampling_table, (&p_30->ptp_media)->ptm_fog, (&p_30->ptp_media)->ptm_count, (&path_3->ptpath_ray)->ptr_origin.xyz, (&path_3->ptpath_ray)->ptr_direction.xyz, limit_2, _S1134, p_30->ptp_sample, 32768U + path_3->ptpath_event * 37U, kernelContext_91);
 
-    thread PtMediumStack_0 _S1096 = path_3->ptpath_media;
+    thread PtMediumStack_0 _S1137 = path_3->ptpath_media;
 
-    float3 _S1097 = pt_medium_transmittance_0(&_S1096, _S1095.distance_12);
-    path_3->ptpath_throughput = path_3->ptpath_throughput * _S1097;
-    path_3->ptpath_position = (&path_3->ptpath_ray)->ptr_origin.xyz + (&path_3->ptpath_ray)->ptr_direction.xyz * float3(_S1095.distance_12) ;
-    if((_S1095.scattered_1) != 0U)
+    float3 _S1138 = pt_medium_transmittance_0(&_S1137, _S1136.distance_12);
+    path_3->ptpath_throughput = path_3->ptpath_throughput * _S1138;
+    path_3->ptpath_position = (&path_3->ptpath_ray)->ptr_origin.xyz + (&path_3->ptpath_ray)->ptr_direction.xyz * float3(_S1136.distance_12) ;
+    if((_S1136.scattered_1) != 0U)
     {
 
-        path_3->ptpath_throughput = path_3->ptpath_throughput * _S1095.albedo_2;
+        path_3->ptpath_throughput = path_3->ptpath_throughput * _S1136.albedo_2;
 
-        thread PtPath_0 _S1098 = *path_3;
+        thread PtPath_0 _S1139 = *path_3;
 
-        PtStep_0 _S1099 = pt_phase_step_0(p_28, &_S1098, path_3->ptpath_position, _S1095.g_4, pixel_11, kernelContext_91);
+        PtStep_0 _S1140 = pt_phase_step_0(p_30, &_S1139, path_3->ptpath_position, _S1136.g_4, pixel_11, kernelContext_91);
 
-        return _S1099;
+        return _S1140;
     }
 
-    thread DeRtRay_0 _S1100 = path_3->ptpath_ray;
+    thread DeRtRay_0 _S1141 = path_3->ptpath_ray;
 
-    PtStep_0 _S1101 = pt_step_0(p_28, &_S1100, hit_7, pixel_11, path_3->ptpath_bounce, path_3->ptpath_pdf, path_3->ptpath_previous, kernelContext_91);
-    step_0 = _S1101;
+    PtStep_0 _S1142 = pt_step_0(p_30, &_S1141, hit_8, pixel_11, path_3->ptpath_bounce, path_3->ptpath_pdf, path_3->ptpath_previous, kernelContext_91);
+    step_0 = _S1142;
     (&step_0)->pts_shadow_media = path_3->ptpath_media;
-    if(_S1048 < 0.0f)
+    if(_S1089 < 0.0f)
     {
 
         return step_0;
     }
 
-    DeRtContext_0 _S1102 = pt_query_0(p_28, kernelContext_91);
-    float3 _S1103 = (&path_3->ptpath_ray)->ptr_origin.xyz;
+    DeRtContext_0 _S1143 = pt_query_0(p_30, kernelContext_91);
+    float3 _S1144 = (&path_3->ptpath_ray)->ptr_origin.xyz;
 
-    thread DeRtContext_0 _S1104 = _S1102;
+    thread DeRtContext_0 _S1145 = _S1143;
 
-    DeRtSurface_0 _S1105 = de_rt_hit_surface_0(&_S1104, hit_7, _S1103, p_28->ptp_brdf_lut, kernelContext_91);
+    DeRtSurface_0 _S1146 = de_rt_hit_surface_0(&_S1145, hit_8, _S1144, p_30->ptp_brdf_lut, kernelContext_91);
 
-    thread DeRtContext_0 _S1106 = _S1102;
+    thread DeRtContext_0 _S1147 = _S1143;
 
-    float3 _S1107 = pt_geometric_normal_0(&_S1106, hit_7, kernelContext_91);
+    float3 _S1148 = pt_geometric_normal_0(&_S1147, hit_8, kernelContext_91);
 
-    if(((_S1105.material_1.features_0) & 32U) != 0U)
+    if(((_S1146.material_1.features_0) & 32U) != 0U)
     {
 
-        volume_2 = (_S1105.material_1.thickness_0) > 0.0f;
+        volume_2 = (_S1146.material_1.thickness_0) > 0.0f;
 
     }
     else
@@ -10580,18 +10964,18 @@ PtStep_0 pt_path_event_0(const PtParams_0 thread* p_28, PtPath_0 thread* path_3,
     if(volume_2)
     {
 
-        thread PtMedium_0 m_24;
+        thread PtMedium_0 m_25;
 
-        (&m_24)->instance_2 = hit_7->pth_instance;
+        (&m_25)->instance_2 = hit_8->pth_instance;
 
-        (&m_24)->color_4 = _S1105.material_1.attenuation_color_0;
+        (&m_25)->color_4 = _S1146.material_1.attenuation_color_0;
 
-        (&m_24)->distance_5 = _S1105.material_1.attenuation_distance_0;
-        bool _S1108 = (dot((&(&step_0)->pts_shadow)->ptr_direction.xyz, _S1107)) < 0.0f;
+        (&m_25)->distance_5 = _S1146.material_1.attenuation_distance_0;
+        bool _S1149 = (dot((&(&step_0)->pts_shadow)->ptr_direction.xyz, _S1148)) < 0.0f;
 
-        thread PtMedium_0 _S1109 = m_24;
+        thread PtMedium_0 _S1150 = m_25;
 
-        pt_medium_boundary_0(&(&step_0)->pts_shadow_media, &_S1109, _S1108);
+        pt_medium_boundary_0(&(&step_0)->pts_shadow_media, &_S1150, _S1149);
 
     }
 
@@ -10607,7 +10991,7 @@ PtStep_0 pt_path_event_0(const PtParams_0 thread* p_28, PtPath_0 thread* path_3,
         if(((&path_3->ptpath_media)->depth_2) == 0U)
         {
 
-            volume_2 = (dot((&path_3->ptpath_ray)->ptr_direction.xyz, _S1107)) > 0.0f;
+            volume_2 = (dot((&path_3->ptpath_ray)->ptr_direction.xyz, _S1148)) > 0.0f;
 
         }
         else
@@ -10620,14 +11004,14 @@ PtStep_0 pt_path_event_0(const PtParams_0 thread* p_28, PtPath_0 thread* path_3,
         if(volume_2)
         {
 
-            path_3->ptpath_throughput = path_3->ptpath_throughput * volume_transmittance_0(_S1105.material_1.attenuation_color_0, _S1105.material_1.attenuation_distance_0, _S1048);
+            path_3->ptpath_throughput = path_3->ptpath_throughput * volume_transmittance_0(_S1146.material_1.attenuation_color_0, _S1146.material_1.attenuation_distance_0, _S1089);
 
         }
 
         if((((&step_0)->pts_lobe) & 4U) != 0U)
         {
 
-            volume_2 = (dot((&path_3->ptpath_ray)->ptr_direction.xyz, _S1107) * dot((&(&step_0)->pts_next)->ptr_direction.xyz, _S1107)) > 0.0f;
+            volume_2 = (dot((&path_3->ptpath_ray)->ptr_direction.xyz, _S1148) * dot((&(&step_0)->pts_next)->ptr_direction.xyz, _S1148)) > 0.0f;
 
         }
         else
@@ -10640,26 +11024,26 @@ PtStep_0 pt_path_event_0(const PtParams_0 thread* p_28, PtPath_0 thread* path_3,
         if(volume_2)
         {
 
-            if((dot((&path_3->ptpath_ray)->ptr_direction.xyz, _S1107)) < 0.0f)
+            if((dot((&path_3->ptpath_ray)->ptr_direction.xyz, _S1148)) < 0.0f)
             {
 
-                thread PtMedium_0 m_25;
+                thread PtMedium_0 m_26;
 
-                (&m_25)->instance_2 = hit_7->pth_instance;
+                (&m_26)->instance_2 = hit_8->pth_instance;
 
-                (&m_25)->color_4 = _S1105.material_1.attenuation_color_0;
+                (&m_26)->color_4 = _S1146.material_1.attenuation_color_0;
 
-                (&m_25)->distance_5 = _S1105.material_1.attenuation_distance_0;
+                (&m_26)->distance_5 = _S1146.material_1.attenuation_distance_0;
 
-                thread PtMedium_0 _S1110 = m_25;
+                thread PtMedium_0 _S1151 = m_26;
 
-                pt_medium_enter_1(&path_3->ptpath_media, &_S1110);
+                pt_medium_enter_1(&path_3->ptpath_media, &_S1151);
 
             }
             else
             {
 
-                pt_medium_exit_1(&path_3->ptpath_media, hit_7->pth_instance);
+                pt_medium_exit_1(&path_3->ptpath_media, hit_8->pth_instance);
 
             }
 
@@ -10667,7 +11051,7 @@ PtStep_0 pt_path_event_0(const PtParams_0 thread* p_28, PtPath_0 thread* path_3,
 
     }
 
-    if(((_S1105.material_1.features_0) & 128U) != 0U)
+    if(((_S1146.material_1.features_0) & 128U) != 0U)
     {
 
         volume_2 = (((&step_0)->pts_lobe) & 1U) != 0U;
@@ -10683,34 +11067,34 @@ PtStep_0 pt_path_event_0(const PtParams_0 thread* p_28, PtPath_0 thread* path_3,
     if(volume_2)
     {
 
-        uint _S1111 = hit_7->pth_instance;
-        float2 _S1112 = float2(hit_7->pth_u, hit_7->pth_v);
+        uint _S1152 = hit_8->pth_instance;
+        float2 _S1153 = float2(hit_8->pth_u, hit_8->pth_v);
 
-        thread DeRtContext_0 _S1113 = _S1102;
+        thread DeRtContext_0 _S1154 = _S1143;
 
-        DeResolvePoint_0 _S1114 = de_rt_point_0(&_S1113, hit_7->pth_instance, hit_7->pth_primitive, _S1112, kernelContext_91);
+        DeResolvePoint_0 _S1155 = de_rt_point_0(&_S1154, hit_8->pth_instance, hit_8->pth_primitive, _S1153, kernelContext_91);
 
-        thread DeROBuffer_0 _S1115 = de_robuffer_6(_S1102.ptq_scene);
+        thread DeROBuffer_0 _S1156 = de_robuffer_6(_S1143.ptq_scene);
 
-        DeSceneConstants_0 _S1116 = DeROBuffer_operatorx5Bx5D_get_6(&_S1115, _S1102.ptq_view, kernelContext_91);
+        DeSceneConstants_0 _S1157 = DeROBuffer_operatorx5Bx5D_get_6(&_S1156, _S1143.ptq_view, kernelContext_91);
 
-        thread DeResolvePoint_0 _S1117 = _S1114;
+        thread DeResolvePoint_0 _S1158 = _S1155;
 
-        uint _S1118 = de_resolve_material_0(&_S1117);
+        uint _S1159 = de_resolve_material_0(&_S1158);
 
-        thread DeSceneConstants_0 _S1119 = _S1116;
+        thread DeSceneConstants_0 _S1160 = _S1157;
 
-        DeGpuMaterial_0 _S1120 = de_resolve_material_of_0(_S1118, &_S1119, kernelContext_91);
-        float amount_0 = saturate(_S1120.extra_0.z);
+        DeGpuMaterial_0 _S1161 = de_resolve_material_of_0(_S1159, &_S1160, kernelContext_91);
+        float amount_0 = saturate(_S1161.extra_0.z);
 
-        float3 radius_1 = max(_S1120.subsurface_0.xyz, float3(int3(int(0)) ));
+        float3 radius_1 = max(_S1161.subsurface_0.xyz, float3(int3(int(0)) ));
         uint3 dimensions_0 = pt_sss_entry_dimensions_0(path_3->ptpath_event);
         if((max(radius_1.x, max(radius_1.y, radius_1.z))) > 9.99999997475242708e-07f)
         {
 
-            float _S1121 = pt_random_0(_S1092, _S1093, _S1094, dimensions_0.x, kernelContext_91);
+            float _S1162 = pt_random_0(_S1133, _S1134, _S1135, dimensions_0.x, kernelContext_91);
 
-            volume_2 = _S1121 < amount_0;
+            volume_2 = _S1162 < amount_0;
 
         }
         else
@@ -10723,33 +11107,33 @@ PtStep_0 pt_path_event_0(const PtParams_0 thread* p_28, PtPath_0 thread* path_3,
         if(volume_2)
         {
 
-            PtSssCoefficients_0 c_15 = pt_sss_coefficients_0(radius_1, _S1105.material_1.base_color_0);
+            PtSssCoefficients_0 c_15 = pt_sss_coefficients_0(radius_1, _S1146.material_1.base_color_0);
 
             (&path_3->ptpath_sss)->ptsss_active = 1U;
 
-            (&path_3->ptpath_sss)->ptsss_instance = _S1111;
+            (&path_3->ptpath_sss)->ptsss_instance = _S1152;
 
             (&path_3->ptpath_sss)->ptsss_steps = 0U;
 
             (&path_3->ptpath_sss)->ptsss_sigma_s = c_15.sigma_s_1;
 
             (&path_3->ptpath_sss)->ptsss_sigma_a = c_15.sigma_a_1;
-            ShadingFrame_0 inward_0 = de_frame_from_normal_0(- _S1107);
+            ShadingFrame_0 inward_0 = de_frame_from_normal_0(- _S1148);
 
-            float _S1122 = pt_random_0(_S1092, _S1093, _S1094, dimensions_0.y, kernelContext_91);
+            float _S1163 = pt_random_0(_S1133, _S1134, _S1135, dimensions_0.y, kernelContext_91);
 
-            float _S1123 = pt_random_0(_S1092, _S1093, _S1094, dimensions_0.z, kernelContext_91);
+            float _S1164 = pt_random_0(_S1133, _S1134, _S1135, dimensions_0.z, kernelContext_91);
 
-            float3 _S1124 = de_sample_cosine_hemisphere_0(float2(_S1122, _S1123));
+            float3 _S1165 = de_sample_cosine_hemisphere_0(float2(_S1163, _S1164));
 
-            thread ShadingFrame_0 _S1125 = inward_0;
+            thread ShadingFrame_0 _S1166 = inward_0;
 
-            float3 _S1126 = ShadingFrame_to_world_0(&_S1125, _S1124);
-            (&(&step_0)->pts_next)->ptr_origin = float4(path_3->ptpath_position - _S1107 * float3(0.00000999999974738f) , 0.00000999999974738f);
+            float3 _S1167 = ShadingFrame_to_world_0(&_S1166, _S1165);
+            (&(&step_0)->pts_next)->ptr_origin = float4(path_3->ptpath_position - _S1148 * float3(0.00000999999974738f) , 0.00000999999974738f);
 
-            (&(&step_0)->pts_next)->ptr_direction = float4(_S1126, 1.0e+06f);
+            (&(&step_0)->pts_next)->ptr_direction = float4(_S1167, 1.0e+06f);
 
-            (&step_0)->pts_weight = (&step_0)->pts_weight / max(_S1105.material_1.base_color_0, float3(9.99999997475242708e-07f) );
+            (&step_0)->pts_weight = (&step_0)->pts_weight / max(_S1146.material_1.base_color_0, float3(9.99999997475242708e-07f) );
 
         }
 
@@ -10768,22 +11152,22 @@ struct PtShadow_0
 };
 
 
-PtShadow_0 pt_shadow_start_0(const PtParams_0 thread* p_29, const PtMediumStack_0 thread* media_3, const DeRtRay_0 thread* ray_7, KernelContext_0 thread* kernelContext_92)
+PtShadow_0 pt_shadow_start_0(const PtParams_0 thread* p_31, const PtMediumStack_0 thread* media_3, const DeRtRay_0 thread* ray_7, KernelContext_0 thread* kernelContext_92)
 {
 
-    float3 _S1127 = float3(0.0f) ;
+    float3 _S1168 = float3(0.0f) ;
 
-    PtMedium_0 _S1128 = { 0U, _S1127, 0.0f };
+    PtMedium_0 _S1169 = { 0U, _S1168, 0.0f };
 
-    array<PtMedium_0, int(4)> _S1129 = { { _S1128, _S1128, _S1128, _S1128 } };
+    array<PtMedium_0, int(4)> _S1170 = { { _S1169, _S1169, _S1169, _S1169 } };
 
-    PtMediumStack_0 _S1130 = { _S1129, 0U, 0U };
+    PtMediumStack_0 _S1171 = { _S1170, 0U, 0U };
 
     thread PtShadow_0 shadow_2;
 
-    (&shadow_2)->ptshadow_media = _S1130;
+    (&shadow_2)->ptshadow_media = _S1171;
 
-    (&shadow_2)->ptshadow_value = _S1127;
+    (&shadow_2)->ptshadow_value = _S1168;
 
     (&shadow_2)->ptshadow_cursor = 0.0f;
 
@@ -10793,45 +11177,45 @@ PtShadow_0 pt_shadow_start_0(const PtParams_0 thread* p_29, const PtMediumStack_
 
     (&shadow_2)->ptshadow_media = *media_3;
 
-    float _S1131 = pt_fog_transmittance_0((&p_29->ptp_media)->ptm_fog, (&p_29->ptp_media)->ptm_count, ray_7->ptr_origin.xyz, ray_7->ptr_direction.xyz, ray_7->ptr_direction.w, kernelContext_92);
-    (&shadow_2)->ptshadow_value = float3(_S1131) ;
+    float _S1172 = pt_fog_transmittance_0((&p_31->ptp_media)->ptm_fog, (&p_31->ptp_media)->ptm_count, ray_7->ptr_origin.xyz, ray_7->ptr_direction.xyz, ray_7->ptr_direction.w, kernelContext_92);
+    (&shadow_2)->ptshadow_value = float3(_S1172) ;
     return shadow_2;
 }
 
 
-void pt_shadow_hit_0(const PtParams_0 thread* p_30, PtShadow_0 thread* shadow_3, DeRtRay_0 thread* ray_8, const DeRtHit_0 thread* hit_8, uint casts_1, KernelContext_0 thread* kernelContext_93)
+void pt_shadow_hit_0(const PtParams_0 thread* p_32, PtShadow_0 thread* shadow_3, DeRtRay_0 thread* ray_8, const DeRtHit_0 thread* hit_9, uint casts_1, KernelContext_0 thread* kernelContext_93)
 {
 
-    float _S1132 = hit_8->pth_t;
-    if((hit_8->pth_t) < 0.0f)
+    float _S1173 = hit_9->pth_t;
+    if((hit_9->pth_t) < 0.0f)
     {
 
-        float _S1133 = max(0.0f, ray_8->ptr_direction.w - shadow_3->ptshadow_cursor);
+        float _S1174 = max(0.0f, ray_8->ptr_direction.w - shadow_3->ptshadow_cursor);
 
-        thread PtMediumStack_0 _S1134 = shadow_3->ptshadow_media;
+        thread PtMediumStack_0 _S1175 = shadow_3->ptshadow_media;
 
-        float3 _S1135 = pt_medium_transmittance_0(&_S1134, _S1133);
+        float3 _S1176 = pt_medium_transmittance_0(&_S1175, _S1174);
 
-        shadow_3->ptshadow_value = shadow_3->ptshadow_value * _S1135;
+        shadow_3->ptshadow_value = shadow_3->ptshadow_value * _S1176;
         shadow_3->ptshadow_finished = 1U;
 
         return;
     }
 
-    DeRtContext_0 _S1136 = pt_query_0(p_30, kernelContext_93);
+    DeRtContext_0 _S1177 = pt_query_0(p_32, kernelContext_93);
 
-    uint _S1137 = hit_8->pth_instance;
+    uint _S1178 = hit_9->pth_instance;
 
-    float2 _S1138 = float2(hit_8->pth_u, hit_8->pth_v);
+    float2 _S1179 = float2(hit_9->pth_u, hit_9->pth_v);
 
-    thread DeRtContext_0 _S1139 = _S1136;
+    thread DeRtContext_0 _S1180 = _S1177;
 
-    DeResolvePoint_0 _S1140 = de_rt_point_0(&_S1139, hit_8->pth_instance, hit_8->pth_primitive, _S1138, kernelContext_93);
+    DeResolvePoint_0 _S1181 = de_rt_point_0(&_S1180, hit_9->pth_instance, hit_9->pth_primitive, _S1179, kernelContext_93);
 
     bool volume_3;
 
 
-    if(!_S1140.valid_0)
+    if(!_S1181.valid_0)
     {
 
         volume_3 = true;
@@ -10843,7 +11227,7 @@ void pt_shadow_hit_0(const PtParams_0 thread* p_30, PtShadow_0 thread* shadow_3,
         if(casts_1 != 0U)
         {
 
-            volume_3 = ((_S1140.inst_0.flags_3) & 2U) != 0U;
+            volume_3 = ((_S1181.inst_0.flags_3) & 2U) != 0U;
 
         }
         else
@@ -10864,12 +11248,12 @@ void pt_shadow_hit_0(const PtParams_0 thread* p_30, PtShadow_0 thread* shadow_3,
 
         return;
     }
-    float3 _S1141 = ray_8->ptr_origin.xyz;
+    float3 _S1182 = ray_8->ptr_origin.xyz;
 
-    thread DeRtContext_0 _S1142 = _S1136;
+    thread DeRtContext_0 _S1183 = _S1177;
 
-    DeRtSurface_0 _S1143 = de_rt_hit_surface_0(&_S1142, hit_8, _S1141, p_30->ptp_brdf_lut, kernelContext_93);
-    if(!_S1143.valid_1)
+    DeRtSurface_0 _S1184 = de_rt_hit_surface_0(&_S1183, hit_9, _S1182, p_32->ptp_brdf_lut, kernelContext_93);
+    if(!_S1184.valid_1)
     {
 
         shadow_3->ptshadow_value = float3(int3(int(0)) );
@@ -10878,10 +11262,10 @@ void pt_shadow_hit_0(const PtParams_0 thread* p_30, PtShadow_0 thread* shadow_3,
 
         return;
     }
-    if(((_S1143.material_1.features_0) & 32U) != 0U)
+    if(((_S1184.material_1.features_0) & 32U) != 0U)
     {
 
-        volume_3 = (_S1143.material_1.thickness_0) > 0.0f;
+        volume_3 = (_S1184.material_1.thickness_0) > 0.0f;
 
     }
     else
@@ -10895,13 +11279,13 @@ void pt_shadow_hit_0(const PtParams_0 thread* p_30, PtShadow_0 thread* shadow_3,
     if(volume_3)
     {
 
-        float3 _S1144 = ray_8->ptr_direction.xyz;
+        float3 _S1185 = ray_8->ptr_direction.xyz;
 
-        thread DeRtContext_0 _S1145 = _S1136;
+        thread DeRtContext_0 _S1186 = _S1177;
 
-        float3 _S1146 = pt_geometric_normal_0(&_S1145, hit_8, kernelContext_93);
+        float3 _S1187 = pt_geometric_normal_0(&_S1186, hit_9, kernelContext_93);
 
-        entering_1 = (dot(_S1144, _S1146)) < 0.0f;
+        entering_1 = (dot(_S1185, _S1187)) < 0.0f;
 
     }
     else
@@ -10910,64 +11294,64 @@ void pt_shadow_hit_0(const PtParams_0 thread* p_30, PtShadow_0 thread* shadow_3,
         entering_1 = false;
 
     }
-    thread PtMedium_0 m_26;
+    thread PtMedium_0 m_27;
 
-    (&m_26)->instance_2 = _S1137;
+    (&m_27)->instance_2 = _S1178;
 
-    (&m_26)->color_4 = _S1143.material_1.attenuation_color_0;
+    (&m_27)->color_4 = _S1184.material_1.attenuation_color_0;
 
-    (&m_26)->distance_5 = _S1143.material_1.attenuation_distance_0;
-    float _S1147 = max(0.0f, _S1132 - shadow_3->ptshadow_cursor);
+    (&m_27)->distance_5 = _S1184.material_1.attenuation_distance_0;
+    float _S1188 = max(0.0f, _S1173 - shadow_3->ptshadow_cursor);
 
-    thread PtMediumStack_0 _S1148 = shadow_3->ptshadow_media;
+    thread PtMediumStack_0 _S1189 = shadow_3->ptshadow_media;
 
-    float3 _S1149 = pt_medium_transmittance_0(&_S1148, _S1147);
-    shadow_3->ptshadow_value = shadow_3->ptshadow_value * _S1149;
+    float3 _S1190 = pt_medium_transmittance_0(&_S1189, _S1188);
+    shadow_3->ptshadow_value = shadow_3->ptshadow_value * _S1190;
     if(((&shadow_3->ptshadow_media)->depth_2) == 0U)
     {
 
-        shadow_3->ptshadow_unowned = shadow_3->ptshadow_unowned + _S1147;
+        shadow_3->ptshadow_unowned = shadow_3->ptshadow_unowned + _S1188;
 
     }
 
-    bool _S1150;
+    bool _S1191;
 
 
 
     if(volume_3)
     {
 
-        _S1150 = !entering_1;
+        _S1191 = !entering_1;
 
     }
     else
     {
 
-        _S1150 = false;
+        _S1191 = false;
 
     }
 
-    if(_S1150)
+    if(_S1191)
     {
 
-        thread PtMediumStack_0 _S1151 = shadow_3->ptshadow_media;
+        thread PtMediumStack_0 _S1192 = shadow_3->ptshadow_media;
 
-        bool _S1152 = pt_medium_contains_0(&_S1151, _S1137);
+        bool _S1193 = pt_medium_contains_0(&_S1192, _S1178);
 
-        _S1150 = !_S1152;
+        _S1191 = !_S1193;
 
     }
     else
     {
 
-        _S1150 = false;
+        _S1191 = false;
 
     }
 
-    if(_S1150)
+    if(_S1191)
     {
 
-        shadow_3->ptshadow_value = shadow_3->ptshadow_value * volume_transmittance_0((&m_26)->color_4, (&m_26)->distance_5, shadow_3->ptshadow_unowned);
+        shadow_3->ptshadow_value = shadow_3->ptshadow_value * volume_transmittance_0((&m_27)->color_4, (&m_27)->distance_5, shadow_3->ptshadow_unowned);
         shadow_3->ptshadow_unowned = 0.0f;
 
     }
@@ -10975,25 +11359,25 @@ void pt_shadow_hit_0(const PtParams_0 thread* p_30, PtShadow_0 thread* shadow_3,
     if(volume_3)
     {
 
-        thread PtMedium_0 _S1153 = m_26;
+        thread PtMedium_0 _S1194 = m_27;
 
-        pt_medium_boundary_0(&shadow_3->ptshadow_media, &_S1153, entering_1);
+        pt_medium_boundary_0(&shadow_3->ptshadow_media, &_S1194, entering_1);
 
     }
-    shadow_3->ptshadow_cursor = _S1132;
+    shadow_3->ptshadow_cursor = _S1173;
 
 
-    ray_8->ptr_origin.w = (as_type<float>(((as_type<uint>((_S1132))) + 1U)));
+    ray_8->ptr_origin.w = (as_type<float>(((as_type<uint>((_S1173))) + 1U)));
     if(!((ray_8->ptr_origin.w) < (ray_8->ptr_direction.w)))
     {
 
-        float _S1154 = max(0.0f, ray_8->ptr_direction.w - shadow_3->ptshadow_cursor);
+        float _S1195 = max(0.0f, ray_8->ptr_direction.w - shadow_3->ptshadow_cursor);
 
-        thread PtMediumStack_0 _S1155 = shadow_3->ptshadow_media;
+        thread PtMediumStack_0 _S1196 = shadow_3->ptshadow_media;
 
-        float3 _S1156 = pt_medium_transmittance_0(&_S1155, _S1154);
+        float3 _S1197 = pt_medium_transmittance_0(&_S1196, _S1195);
 
-        shadow_3->ptshadow_value = shadow_3->ptshadow_value * _S1156;
+        shadow_3->ptshadow_value = shadow_3->ptshadow_value * _S1197;
         shadow_3->ptshadow_finished = 1U;
 
     }
@@ -11004,7 +11388,7 @@ void pt_shadow_hit_0(const PtParams_0 thread* p_30, PtShadow_0 thread* shadow_3,
 }
 
 
-void pt_path_finish_0(const PtParams_0 thread* p_31, PtPath_0 thread* path_4, const PtStep_0 thread* step_1, float3 visibility_0, uint pixel_12, KernelContext_0 thread* kernelContext_94)
+void pt_path_finish_0(const PtParams_0 thread* p_33, PtPath_0 thread* path_4, const PtStep_0 thread* step_1, float3 visibility_0, uint pixel_12, KernelContext_0 thread* kernelContext_94)
 {
 
     path_4->ptpath_radiance = path_4->ptpath_radiance + path_4->ptpath_throughput * (step_1->pts_emitted + step_1->pts_direct * visibility_0);
@@ -11016,25 +11400,25 @@ void pt_path_finish_0(const PtParams_0 thread* p_31, PtPath_0 thread* path_4, co
         return;
     }
 
-    float3 _S1157 = path_4->ptpath_throughput * step_1->pts_weight;
+    float3 _S1198 = path_4->ptpath_throughput * step_1->pts_weight;
 
-    path_4->ptpath_throughput = _S1157;
+    path_4->ptpath_throughput = _S1198;
 
-    bool _S1158;
-    if(!all(isfinite(_S1157)))
+    bool _S1199;
+    if(!all(isfinite(_S1198)))
     {
 
-        _S1158 = true;
+        _S1199 = true;
 
     }
     else
     {
 
-        _S1158 = !any((path_4->ptpath_throughput) > (float3(0.0f) ));
+        _S1199 = !any((path_4->ptpath_throughput) > (float3(0.0f) ));
 
     }
 
-    if(_S1158)
+    if(_S1199)
     {
 
         path_4->ptpath_finished = 1U;
@@ -11042,27 +11426,27 @@ void pt_path_finish_0(const PtParams_0 thread* p_31, PtPath_0 thread* path_4, co
         return;
     }
 
-    uint _S1159 = step_1->pts_consume;
+    uint _S1200 = step_1->pts_consume;
     if((step_1->pts_consume) != 0U)
     {
 
-        _S1158 = (path_4->ptpath_bounce) >= 3U;
+        _S1199 = (path_4->ptpath_bounce) >= 3U;
 
     }
     else
     {
 
-        _S1158 = false;
+        _S1199 = false;
 
     }
 
-    if(_S1158)
+    if(_S1199)
     {
 
         float survival_0 = clamp(max(path_4->ptpath_throughput.x, max(path_4->ptpath_throughput.y, path_4->ptpath_throughput.z)), 0.05000000074505806f, 0.94999998807907104f);
 
-        float _S1160 = pt_random_0(p_31->ptp_sampling_table, pixel_12 ^ (p_31->ptp_seed), p_31->ptp_sample, 2U + path_4->ptpath_bounce * 12U + 8U, kernelContext_94);
-        if(_S1160 >= survival_0)
+        float _S1201 = pt_random_0(p_33->ptp_sampling_table, pixel_12 ^ (p_33->ptp_seed), p_33->ptp_sample, 2U + path_4->ptpath_bounce * 12U + 8U, kernelContext_94);
+        if(_S1201 >= survival_0)
         {
 
             path_4->ptpath_finished = 1U;
@@ -11080,10 +11464,10 @@ void pt_path_finish_0(const PtParams_0 thread* p_31, PtPath_0 thread* path_4, co
 
     path_4->ptpath_pdf = step_1->pts_pdf;
 
-    uint _S1161 = path_4->ptpath_bounce + _S1159;
+    uint _S1202 = path_4->ptpath_bounce + _S1200;
 
-    path_4->ptpath_bounce = _S1161;
-    if(_S1161 >= (p_31->ptp_max_bounces))
+    path_4->ptpath_bounce = _S1202;
+    if(_S1202 >= (p_33->ptp_max_bounces))
     {
 
         path_4->ptpath_finished = 2U;
@@ -11097,22 +11481,22 @@ uint DeRWBytes_atomic_add_0(const DeRWBytes_0 thread* this_23, uint offset_5, ui
 {
 
 
-    uint _S1162 = atomic_fetch_add_explicit((atomic<uint> device*)kernelContext_95->de_heap_0->buffers_0[this_23->index_2] + (offset_5 >> 2U), v_20, memory_order_relaxed);
+    uint _S1203 = atomic_fetch_add_explicit((atomic<uint> device*)kernelContext_95->de_heap_0->buffers_0[this_23->index_2] + (offset_5 >> 2U), v_20, memory_order_relaxed);
 
-    return _S1162;
+    return _S1203;
 }
 
 
-void pt_path_diagnostics_0(const PtParams_0 thread* p_32, const PtPath_0 thread* path_5, KernelContext_0 thread* kernelContext_96)
+void pt_path_diagnostics_0(const PtParams_0 thread* p_34, const PtPath_0 thread* path_5, KernelContext_0 thread* kernelContext_96)
 {
 
-    uint _S1163 = (&path_5->ptpath_media)->overflow_0;
+    uint _S1204 = (&path_5->ptpath_media)->overflow_0;
     if(((&path_5->ptpath_media)->overflow_0) != 0U)
     {
 
-        thread DeRWBytes_0 _S1164 = de_rwbytes_0((&p_32->ptp_media)->ptm_stats);
+        thread DeRWBytes_0 _S1205 = de_rwbytes_0((&p_34->ptp_media)->ptm_stats);
 
-        uint _S1165 = DeRWBytes_atomic_add_0(&_S1164, (&p_32->ptp_media)->ptm_stats_offset, _S1163, kernelContext_96);
+        uint _S1206 = DeRWBytes_atomic_add_0(&_S1205, (&p_34->ptp_media)->ptm_stats_offset, _S1204, kernelContext_96);
 
     }
     return;
@@ -11131,23 +11515,23 @@ float3 pt_sample_moments_0(float3 previous_5, float3 previous_mean_0, float3 val
 uint2 pt_stack_probe_0()
 {
 
-    PtMedium_0 _S1166 = { 0U, float3(0.0f) , 0.0f };
+    PtMedium_0 _S1207 = { 0U, float3(0.0f) , 0.0f };
 
-    array<PtMedium_0, int(4)> _S1167 = { { _S1166, _S1166, _S1166, _S1166 } };
+    array<PtMedium_0, int(4)> _S1208 = { { _S1207, _S1207, _S1207, _S1207 } };
 
     thread PtMediumStack_0 stack_7;
 
-    (&stack_7)->entries_0 = _S1167;
+    (&stack_7)->entries_0 = _S1208;
 
     (&stack_7)->depth_2 = 0U;
 
     (&stack_7)->overflow_0 = 0U;
 
-    uint i_27 = 0U;
+    uint i_28 = 0U;
     for(;;)
     {
 
-        if(i_27 < 5U)
+        if(i_28 < 5U)
         {
         }
         else
@@ -11156,19 +11540,19 @@ uint2 pt_stack_probe_0()
             break;
         }
 
-        thread PtMedium_0 m_27;
+        thread PtMedium_0 m_28;
 
-        (&m_27)->instance_2 = i_27;
+        (&m_28)->instance_2 = i_28;
 
-        (&m_27)->color_4 = float3(0.5f) ;
+        (&m_28)->color_4 = float3(0.5f) ;
 
-        (&m_27)->distance_5 = 1.0f;
+        (&m_28)->distance_5 = 1.0f;
 
-        thread PtMedium_0 _S1168 = m_27;
+        thread PtMedium_0 _S1209 = m_28;
 
-        pt_medium_enter_0(&stack_7, &_S1168);
+        pt_medium_enter_0(&stack_7, &_S1209);
 
-        i_27 = i_27 + 1U;
+        i_28 = i_28 + 1U;
 
     }
     uint depth_3 = (&stack_7)->depth_2;
@@ -11184,110 +11568,110 @@ uint2 pt_stack_probe_0()
 }
 
 
-bool de_rt_opacity_0(const DeRtContext_0 thread* q_6, uint instance_7, uint primitive_2, float2 bary_4, KernelContext_0 thread* kernelContext_97)
+bool de_rt_opacity_0(const DeRtContext_0 thread* q_7, uint instance_7, uint primitive_2, float2 bary_4, KernelContext_0 thread* kernelContext_97)
 {
 
-    DeResolvePoint_0 _S1169 = de_rt_point_0(q_6, instance_7, primitive_2, bary_4, kernelContext_97);
+    DeResolvePoint_0 _S1210 = de_rt_point_0(q_7, instance_7, primitive_2, bary_4, kernelContext_97);
 
-    if(!_S1169.valid_0)
+    if(!_S1210.valid_0)
     {
 
         return false;
     }
 
-    if(((_S1169.inst_0.flags_3) & 4U) == 0U)
+    if(((_S1210.inst_0.flags_3) & 4U) == 0U)
     {
 
         return false;
     }
 
-    uint _S1170 = q_6->ptq_flags;
+    uint _S1211 = q_7->ptq_flags;
 
-    bool _S1171;
-    if(((q_6->ptq_flags) & 4U) != 0U)
+    bool _S1212;
+    if(((q_7->ptq_flags) & 4U) != 0U)
     {
 
-        _S1171 = ((_S1169.inst_0.flags_3) & 32U) != 0U;
+        _S1212 = ((_S1210.inst_0.flags_3) & 32U) != 0U;
 
     }
     else
     {
 
-        _S1171 = false;
+        _S1212 = false;
 
     }
 
-    if(_S1171)
+    if(_S1212)
     {
 
         return false;
     }
 
-    uint _S1172 = q_6->ptq_layers;
-    if((q_6->ptq_layers) != 0U)
+    uint _S1213 = q_7->ptq_layers;
+    if((q_7->ptq_layers) != 0U)
     {
 
-        _S1171 = ((_S1169.inst_0.layer_mask_0) & _S1172) == 0U;
+        _S1212 = ((_S1210.inst_0.layer_mask_0) & _S1213) == 0U;
 
     }
     else
     {
 
-        _S1171 = false;
+        _S1212 = false;
 
     }
 
-    if(_S1171)
+    if(_S1212)
     {
 
         return false;
     }
 
-    if((_S1170 & 1U) != 0U)
+    if((_S1211 & 1U) != 0U)
     {
 
-        _S1171 = ((_S1169.inst_0.flags_3) & 2U) == 0U;
+        _S1212 = ((_S1210.inst_0.flags_3) & 2U) == 0U;
 
     }
     else
     {
 
-        _S1171 = false;
+        _S1212 = false;
 
     }
 
-    if(_S1171)
+    if(_S1212)
     {
 
         return false;
     }
 
-    thread DeROBuffer_0 _S1173 = de_robuffer_6(q_6->ptq_scene);
+    thread DeROBuffer_0 _S1214 = de_robuffer_6(q_7->ptq_scene);
 
-    DeSceneConstants_0 _S1174 = DeROBuffer_operatorx5Bx5D_get_6(&_S1173, q_6->ptq_view, kernelContext_97);
+    DeSceneConstants_0 _S1215 = DeROBuffer_operatorx5Bx5D_get_6(&_S1214, q_7->ptq_view, kernelContext_97);
 
-    thread DeResolvePoint_0 _S1175 = _S1169;
+    thread DeResolvePoint_0 _S1216 = _S1210;
 
-    uint _S1176 = de_resolve_material_0(&_S1175);
+    uint _S1217 = de_resolve_material_0(&_S1216);
 
 
-    if(_S1176 >= (_S1174.material_count_0))
+    if(_S1217 >= (_S1215.material_count_0))
     {
 
         return true;
     }
 
-    thread DeROBuffer_0 _S1177 = de_robuffer_0(_S1174.materials_1);
+    thread DeROBuffer_0 _S1218 = de_robuffer_0(_S1215.materials_1);
 
-    DeGpuMaterial_0 _S1178 = DeROBuffer_operatorx5Bx5D_get_0(&_S1177, _S1176, kernelContext_97);
+    DeGpuMaterial_0 _S1219 = DeROBuffer_operatorx5Bx5D_get_0(&_S1218, _S1217, kernelContext_97);
 
-    thread DeResolvePoint_0 _S1179 = _S1169;
+    thread DeResolvePoint_0 _S1220 = _S1210;
 
-    thread DeGpuMaterial_0 _S1180 = _S1178;
+    thread DeGpuMaterial_0 _S1221 = _S1219;
 
-    bool _S1181 = de_rt_material_opacity_0(&_S1179, &_S1180, q_6->ptq_sampler, kernelContext_97);
+    bool _S1222 = de_rt_material_opacity_0(&_S1220, &_S1221, q_7->ptq_sampler, kernelContext_97);
 
-    return _S1181;
+    return _S1222;
 }
 
 
@@ -11301,10 +11685,10 @@ uint device* DeRWBytes_words_0(const DeRWBytes_0 thread* this_24, KernelContext_
 void DeRWBytes_store_0(const DeRWBytes_0 thread* this_25, uint offset_6, uint v_21, KernelContext_0 thread* kernelContext_99)
 {
 
-    uint device* _S1182 = DeRWBytes_words_0(this_25, kernelContext_99);
+    uint device* _S1223 = DeRWBytes_words_0(this_25, kernelContext_99);
 
 
-    *(_S1182 + (offset_6 >> 2U)) = v_21;
+    *(_S1223 + (offset_6 >> 2U)) = v_21;
 
 
 
@@ -11321,148 +11705,148 @@ void DeRWBytes_store_0(const DeRWBytes_0 thread* this_25, uint offset_6, uint v_
 
     (&kernelContext_100)->entryPointParams_0 = entryPointParams_1;
 
-    PtParams_0 _S1183 = pt_load_0(entryPointParams_1->pc_0.params_0, entryPointParams_1->pc_0.entry_0, &kernelContext_100);
+    PtParams_0 _S1224 = pt_load_0(entryPointParams_1->pc_0.params_0, entryPointParams_1->pc_0.entry_0, &kernelContext_100);
 
-    thread PtParams_0 _S1184 = _S1183;
+    thread PtParams_0 _S1225 = _S1224;
 
-    DeRtRay_0 _S1185 = pt_camera_0(&_S1184, entryPointParams_1->pc_0.pixel_0, &kernelContext_100);
+    DeRtRay_0 _S1226 = pt_camera_0(&_S1225, entryPointParams_1->pc_0.pixel_0, &kernelContext_100);
 
-    thread DeRtHit_0 h_31;
+    thread DeRtHit_0 h_32;
 
-    (&h_31)->pth_t = 0.0f;
+    (&h_32)->pth_t = 0.0f;
 
-    (&h_31)->pth_instance = 0U;
+    (&h_32)->pth_instance = 0U;
 
-    (&h_31)->pth_primitive = 0U;
+    (&h_32)->pth_primitive = 0U;
 
-    (&h_31)->pth_u = 0.0f;
+    (&h_32)->pth_u = 0.0f;
 
-    (&h_31)->pth_v = 0.0f;
+    (&h_32)->pth_v = 0.0f;
 
-    (&h_31)->pth_lod = 0U;
+    (&h_32)->pth_lod = 0U;
 
-    (&h_31)->pth_reserved0 = 0U;
+    (&h_32)->pth_reserved0 = 0U;
 
-    (&h_31)->pth_reserved1 = 0U;
+    (&h_32)->pth_reserved1 = 0U;
 
-    (&h_31)->pth_t = 1.0f;
+    (&h_32)->pth_t = 1.0f;
 
-    (&h_31)->pth_instance = entryPointParams_1->pc_0.pixel_0;
+    (&h_32)->pth_instance = entryPointParams_1->pc_0.pixel_0;
 
-    thread PtParams_0 _S1186 = _S1183;
+    thread PtParams_0 _S1227 = _S1224;
 
-    thread DeRtRay_0 _S1187 = _S1185;
+    thread DeRtRay_0 _S1228 = _S1226;
 
-    thread DeRtHit_0 _S1188 = h_31;
+    thread DeRtHit_0 _S1229 = h_32;
 
-    pt_store_aov_0(&_S1186, &_S1187, &_S1188, entryPointParams_1->pc_0.pixel_0, &kernelContext_100);
+    pt_store_aov_0(&_S1227, &_S1228, &_S1229, entryPointParams_1->pc_0.pixel_0, &kernelContext_100);
 
-    float3 _S1189 = _S1185.ptr_origin.xyz;
+    float3 _S1230 = _S1226.ptr_origin.xyz;
 
-    thread PtParams_0 _S1190 = _S1183;
+    thread PtParams_0 _S1231 = _S1224;
 
-    thread DeRtRay_0 _S1191 = _S1185;
+    thread DeRtRay_0 _S1232 = _S1226;
 
-    thread DeRtHit_0 _S1192 = h_31;
+    thread DeRtHit_0 _S1233 = h_32;
 
-    float3 _S1193 = pt_endpoint_0(&_S1190, &_S1191, &_S1192, 1.0f, _S1189, &kernelContext_100);
+    float3 _S1234 = pt_endpoint_0(&_S1231, &_S1232, &_S1233, 1.0f, _S1230, &kernelContext_100);
 
-    thread PtParams_0 _S1194 = _S1183;
+    thread PtParams_0 _S1235 = _S1224;
 
-    thread DeRtRay_0 _S1195 = _S1185;
+    thread DeRtRay_0 _S1236 = _S1226;
 
-    thread DeRtHit_0 _S1196 = h_31;
+    thread DeRtHit_0 _S1237 = h_32;
 
-    PtStep_0 _S1197 = pt_step_0(&_S1194, &_S1195, &_S1196, entryPointParams_1->pc_0.pixel_0, entryPointParams_1->pc_0.entry_0, 1.0f, _S1189, &kernelContext_100);
+    PtStep_0 _S1238 = pt_step_0(&_S1235, &_S1236, &_S1237, entryPointParams_1->pc_0.pixel_0, entryPointParams_1->pc_0.entry_0, 1.0f, _S1230, &kernelContext_100);
 
-    thread PtParams_0 _S1198 = _S1183;
+    thread PtParams_0 _S1239 = _S1224;
 
-    PtPath_0 _S1199 = pt_path_init_0(&_S1198, entryPointParams_1->pc_0.pixel_0, &kernelContext_100);
+    PtPath_0 _S1240 = pt_path_init_0(&_S1239, entryPointParams_1->pc_0.pixel_0, &kernelContext_100);
 
-    thread PtPath_0 path_6 = _S1199;
+    thread PtPath_0 path_6 = _S1240;
 
-    thread PtParams_0 _S1200 = _S1183;
+    thread PtParams_0 _S1241 = _S1224;
 
-    thread PtPath_0 _S1201 = _S1199;
+    thread PtPath_0 _S1242 = _S1240;
 
-    thread DeRtHit_0 _S1202 = h_31;
+    thread DeRtHit_0 _S1243 = h_32;
 
-    float3 _S1203 = pt_path_endpoint_0(&_S1200, &_S1201, &_S1202, &kernelContext_100);
-    float3 endpoint_0 = _S1193 + _S1203;
+    float3 _S1244 = pt_path_endpoint_0(&_S1241, &_S1242, &_S1243, &kernelContext_100);
+    float3 endpoint_0 = _S1234 + _S1244;
 
-    thread PtParams_0 _S1204 = _S1183;
+    thread PtParams_0 _S1245 = _S1224;
 
-    thread DeRtHit_0 _S1205 = h_31;
+    thread DeRtHit_0 _S1246 = h_32;
 
-    PtStep_0 _S1206 = pt_path_event_0(&_S1204, &path_6, &_S1205, entryPointParams_1->pc_0.pixel_0, &kernelContext_100);
-    thread PtStep_0 event_2 = _S1206;
+    PtStep_0 _S1247 = pt_path_event_0(&_S1245, &path_6, &_S1246, entryPointParams_1->pc_0.pixel_0, &kernelContext_100);
+    thread PtStep_0 event_2 = _S1247;
 
-    thread PtParams_0 _S1207 = _S1183;
+    thread PtParams_0 _S1248 = _S1224;
 
-    thread PtMediumStack_0 _S1208 = (&path_6)->ptpath_media;
+    thread PtMediumStack_0 _S1249 = (&path_6)->ptpath_media;
 
-    thread DeRtRay_0 _S1209 = (&event_2)->pts_shadow;
+    thread DeRtRay_0 _S1250 = (&event_2)->pts_shadow;
 
-    PtShadow_0 _S1210 = pt_shadow_start_0(&_S1207, &_S1208, &_S1209, &kernelContext_100);
-    thread PtShadow_0 shadow_4 = _S1210;
+    PtShadow_0 _S1251 = pt_shadow_start_0(&_S1248, &_S1249, &_S1250, &kernelContext_100);
+    thread PtShadow_0 shadow_4 = _S1251;
 
-    thread PtParams_0 _S1211 = _S1183;
+    thread PtParams_0 _S1252 = _S1224;
 
-    thread DeRtHit_0 _S1212 = h_31;
+    thread DeRtHit_0 _S1253 = h_32;
 
-    pt_shadow_hit_0(&_S1211, &shadow_4, &(&event_2)->pts_shadow, &_S1212, 0U, &kernelContext_100);
+    pt_shadow_hit_0(&_S1252, &shadow_4, &(&event_2)->pts_shadow, &_S1253, 0U, &kernelContext_100);
 
-    thread PtParams_0 _S1213 = _S1183;
+    thread PtParams_0 _S1254 = _S1224;
 
-    thread PtStep_0 _S1214 = event_2;
+    thread PtStep_0 _S1255 = event_2;
 
-    pt_path_finish_0(&_S1213, &path_6, &_S1214, (&shadow_4)->ptshadow_value, entryPointParams_1->pc_0.pixel_0, &kernelContext_100);
+    pt_path_finish_0(&_S1254, &path_6, &_S1255, (&shadow_4)->ptshadow_value, entryPointParams_1->pc_0.pixel_0, &kernelContext_100);
 
-    thread PtParams_0 _S1215 = _S1183;
+    thread PtParams_0 _S1256 = _S1224;
 
-    thread PtPath_0 _S1216 = path_6;
+    thread PtPath_0 _S1257 = path_6;
 
-    pt_path_diagnostics_0(&_S1215, &_S1216, &kernelContext_100);
+    pt_path_diagnostics_0(&_S1256, &_S1257, &kernelContext_100);
 
 
 
-    float3 _S1217 = float3(int3(int(0)) );
+    float3 _S1258 = float3(int3(int(0)) );
 
-    float3 moments_0 = pt_sample_moments_0(_S1217, _S1217, (&path_6)->ptpath_radiance, _S1183.ptp_sample);
+    float3 moments_0 = pt_sample_moments_0(_S1258, _S1258, (&path_6)->ptpath_radiance, _S1224.ptp_sample);
     uint2 safety_0 = pt_stack_probe_0();
 
-    thread PtParams_0 _S1218 = _S1183;
+    thread PtParams_0 _S1259 = _S1224;
 
-    DeRtContext_0 _S1219 = pt_query_0(&_S1218, &kernelContext_100);
-    float2 _S1220 = float2(int2(int(0)) );
+    DeRtContext_0 _S1260 = pt_query_0(&_S1259, &kernelContext_100);
+    float2 _S1261 = float2(int2(int(0)) );
 
-    thread DeRtContext_0 _S1221 = _S1219;
+    thread DeRtContext_0 _S1262 = _S1260;
 
-    bool _S1222 = de_rt_opacity_0(&_S1221, entryPointParams_1->pc_0.pixel_0, (&h_31)->pth_primitive, _S1220, &kernelContext_100);
-    DeRWBytes_0 _S1223 = de_rwbytes_0(entryPointParams_1->pc_0.output_0);
+    bool _S1263 = de_rt_opacity_0(&_S1262, entryPointParams_1->pc_0.pixel_0, (&h_32)->pth_primitive, _S1261, &kernelContext_100);
+    DeRWBytes_0 _S1264 = de_rwbytes_0(entryPointParams_1->pc_0.output_0);
 
-    uint _S1224 = (as_type<uint>((_S1197.pts_emitted.x + _S1197.pts_direct.x + _S1197.pts_weight.x + (&path_6)->ptpath_radiance.x)));
+    uint _S1265 = (as_type<uint>((_S1238.pts_emitted.x + _S1238.pts_direct.x + _S1238.pts_weight.x + (&path_6)->ptpath_radiance.x)));
 
-    int _S1225;
+    int _S1266;
 
-    if(_S1222)
+    if(_S1263)
     {
 
-        _S1225 = int(1);
+        _S1266 = int(1);
 
     }
     else
     {
 
-        _S1225 = int(0);
+        _S1266 = int(0);
 
     }
 
-    uint _S1226 = _S1224 + uint(_S1225) + safety_0.x + safety_0.y + (as_type<uint>((moments_0.x + endpoint_0.x)));
+    uint _S1267 = _S1265 + uint(_S1266) + safety_0.x + safety_0.y + (as_type<uint>((moments_0.x + endpoint_0.x)));
 
-    thread DeRWBytes_0 _S1227 = _S1223;
+    thread DeRWBytes_0 _S1268 = _S1264;
 
-    DeRWBytes_store_0(&_S1227, 0U, _S1226, &kernelContext_100);
+    DeRWBytes_store_0(&_S1268, 0U, _S1267, &kernelContext_100);
     return;
 }
 

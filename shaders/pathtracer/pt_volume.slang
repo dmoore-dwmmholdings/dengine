@@ -40,7 +40,9 @@ public float3 pt_hg_sample(float3 direction,float g,float2 u) {
     return normalize(direction*cosine+(x*cos(phi)+y*sin(phi))*sqrt(max(0.0,1-cosine*cosine)));
 }
 // An inverse affine maps rays into the authored fog-box coordinates. A negative extent is global.
-public struct PtFog {public float4 inverse[3];public float4 extent_density;public float4 albedo_g;};
+// params = (height_falloff 1/m, noise 0..1, edge_fade m, entity z); DENG-848 mirrors the froxel
+// density (froxel_inject_media.slang, fog_volume_density) so the reference matches the raster fog.
+public struct PtFog {public float4 inverse[3];public float4 extent_density;public float4 albedo_g;public float4 params;};
 public float2 pt_fog_interval(PtFog fog,float3 origin,float3 direction,float limit) {
     if(fog.extent_density.x<0)return float2(0,limit);
     float3 o=float3(dot(fog.inverse[0],float4(origin,1)),dot(fog.inverse[1],float4(origin,1)),dot(fog.inverse[2],float4(origin,1)));
@@ -50,17 +52,68 @@ public float2 pt_fog_interval(PtFog fog,float3 origin,float3 direction,float lim
         else{float p=(-fog.extent_density[a]-o[a])/d[a],q=(fog.extent_density[a]-o[a])/d[a];near=max(near,min(p,q));far=min(far,max(p,q));}}
     return float2(near,max(near,far));
 }
+// Homogeneous: constant density inside the interval (the pre-DENG-848 path, unchanged).
+public bool pt_fog_heterogeneous(PtFog fog) {
+    return fog.params.y>0||(fog.extent_density.x<0?fog.params.x!=0:fog.params.z>0);
+}
+float pt_fog_hash(float3 p) {p=frac(p*0.3183099+0.1);p*=17.0;return frac(p.x*p.y*p.z*(p.x+p.y+p.z));}
+// Value noise in [0, 1] (fog_noise of froxel_inject_media.slang).
+float pt_fog_noise(float3 x) {
+    float3 i=floor(x),f=frac(x);f=f*f*(3.0-2.0*f);
+    float a=lerp(lerp(pt_fog_hash(i),pt_fog_hash(i+float3(1,0,0)),f.x),lerp(pt_fog_hash(i+float3(0,1,0)),pt_fog_hash(i+float3(1,1,0)),f.x),f.y);
+    float b=lerp(lerp(pt_fog_hash(i+float3(0,0,1)),pt_fog_hash(i+float3(1,0,1)),f.x),lerp(pt_fog_hash(i+float3(0,1,1)),pt_fog_hash(i+float3(1,1,1)),f.x),f.y);
+    return lerp(a,b,f.z);
+}
+// The density (1/m) of one fog at world point p; matches fog_volume_density of the raster fog.
+public float pt_fog_density(PtFog fog,float3 p) {
+    float3 q=float3(dot(fog.inverse[0],float4(p,1)),dot(fog.inverse[1],float4(p,1)),dot(fog.inverse[2],float4(p,1)));
+    float d=max(fog.extent_density.w,0.0);
+    if(fog.extent_density.x<0)d*=exp(-clamp(fog.params.x*(p.z-fog.params.w),-8.0,80.0));
+    else{float3 e=fog.extent_density.xyz-abs(q);float inside=min(e.x,min(e.y,e.z));
+        if(inside<0)return 0;if(fog.params.z>0)d*=smoothstep(0.0,1.0,inside/fog.params.z);}
+    if(fog.params.y>0)d*=lerp(1.0,2.0*pt_fog_noise(q*0.5),fog.params.y);
+    return d;
+}
+// An upper bound of pt_fog_density on the ray segment [t0,t1] (inside the fog's interval): the
+// height factor is monotone along the ray (falloff >= 0), the face fade is <= 1 and the noise
+// factor lerp(1,2n,k) is <= 1+k.
+public float pt_fog_majorant(PtFog fog,float3 origin,float3 direction,float t0,float t1) {
+    float m=max(fog.extent_density.w,0.0);
+    if(fog.extent_density.x<0&&fog.params.x!=0){
+        float z=min(origin.z+direction.z*t0,origin.z+direction.z*t1);
+        m*=exp(-clamp(fog.params.x*(z-fog.params.w),-8.0,80.0));}
+    return m*(1.0+max(fog.params.y,0.0));
+}
+// Optical depth over [t0,t1]: exact for a homogeneous fog, a 64-point midpoint rule otherwise.
+public float pt_fog_optical_depth(PtFog fog,float3 origin,float3 direction,float t0,float t1) {
+    if(!pt_fog_heterogeneous(fog))return (t1-t0)*max(fog.extent_density.w,0.0);
+    const uint n=64;float h=(t1-t0)/float(n),sum=0;
+    for(uint k=0;k<n;++k)sum+=pt_fog_density(fog,origin+direction*(t0+(float(k)+0.5)*h));
+    return sum*h;
+}
 public float pt_fog_transmittance(uint buffer,uint count,float3 origin,float3 direction,float distance) {
-    float optical=0;for(uint i=0;i<count;++i){PtFog fog=de_robuffer<PtFog>(buffer)[i];float2 t=pt_fog_interval(fog,origin,direction,distance);optical+=(t.y-t.x)*max(fog.extent_density.w,0.0);}
+    float optical=0;for(uint i=0;i<count;++i){PtFog fog=de_robuffer<PtFog>(buffer)[i];float2 t=pt_fog_interval(fog,origin,direction,distance);optical+=pt_fog_optical_depth(fog,origin,direction,t.x,t.y);}
     return exp(-optical);
 }
 public struct PtFogEvent {public float distance;public float3 albedo;public float g;public uint scattered;};
 public PtFogEvent pt_fog_event(uint sampling_table,uint buffer,uint count,float3 origin,float3 direction,float limit,uint pixel,uint sample,uint dimension) {
     PtFogEvent e=(PtFogEvent)0;e.distance=limit;
-    // Independent exponential races exactly sample the sum of overlapping homogeneous regions.
+    // Independent races exactly sample the sum of overlapping regions. A homogeneous region is one
+    // exponential race; a heterogeneous one is delta tracking against its majorant (null
+    // collisions are accepted with probability 1 - density/majorant).
     for(uint i=0;i<count;++i){PtFog fog=de_robuffer<PtFog>(buffer)[i];float density=max(fog.extent_density.w,0.0);if(!(density>0))continue;
         float2 interval=pt_fog_interval(fog,origin,direction,limit);float u=pt_random(sampling_table,pixel,sample,dimension+i);
         float d=interval.x-log(max(1-u,1e-20))/density;
+        if(pt_fog_heterogeneous(fog)){
+            float majorant=pt_fog_majorant(fog,origin,direction,interval.x,min(interval.y,e.distance));
+            d=interval.x;bool hit=false;
+            if(majorant>0&&interval.y>interval.x)
+                for(uint k=0;k<256;++k){
+                    uint dim=dimension*65536u+i*1024u+2u*k+1024u;
+                    d-=log(max(1-pt_random(sampling_table,pixel,sample,dim),1e-20))/majorant;
+                    if(d>=interval.y||d>=e.distance)break;
+                    if(pt_random(sampling_table,pixel,sample,dim+1u)*majorant<pt_fog_density(fog,origin+direction*d)){hit=true;break;}}
+            if(!hit)d=limit+1;}
         if(d<interval.y&&d<e.distance){e.distance=d;e.albedo=saturate(fog.albedo_g.rgb);e.g=fog.albedo_g.w;e.scattered=1;}}
     return e;
 }
