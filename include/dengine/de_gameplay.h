@@ -155,6 +155,60 @@ DE_API de_dvec3 de_nav2d_to_world(de_plane_2d plane, de_vec2 p, f64 depth);
 /** World point to plane: drops the out-of-plane axis (y for SIDE_XZ, z for TOP_XY). */
 DE_API de_vec2 de_nav2d_from_world(de_plane_2d plane, de_dvec3 p);
 
+/* ---- DENG-832: the DeNavGrid2D system ----
+ * DeNavGrid2D is the authored 2D walkability grid (DIDE world.nav, DENG-582). The system
+ * `nav2d.grid` (PreUpdate, main thread, exclusive) keeps one de_nav2d_grid per entity that has
+ * DeNavGrid2D: it builds the grid when the component is added, builds it again when the
+ * component changes (DE_CHANGED: a write, de_entity_mark_changed, a snapshot restore), and frees
+ * it on the first run after the entity loses the component or is despawned. A build allocates
+ * only for a new entity; an unchanged grid costs a lookup per run and allocates nothing.
+ * The grid origin is the entity's world position (DeGlobalTransform, else DeTransform, else 0)
+ * on the system's plane, read on every run; rotation and scale are ignored. Cells with area 255
+ * are blocked; every other area is walkable. A grid with width or height outside 1..64 or a
+ * cell_size that is not > 0 builds no grid (de_nav2d_grid_get returns false). */
+
+/** Cells of DeNavGrid2D (64 x 64). */
+#define DE_NAV_GRID2D_CELLS 4096u
+/** DeNavGrid2D cell value of a blocked cell. */
+#define DE_NAV_GRID2D_BLOCKED 255u
+
+/** A 2D walkability grid: cells[y * width + x] is the area of a cell, 255 = blocked. */
+typedef struct DeNavGrid2D {
+    u32 width, height; /* 1 to 64 */
+    f32 cell_size;     /* m */
+    u8 cells[DE_NAV_GRID2D_CELLS];
+} DeNavGrid2D;
+
+/** de_nav2d_grid_attach() parameters; `(de_nav2d_grid_system_desc){0}` is valid. */
+typedef struct de_nav2d_grid_system_desc {
+    de_plane_2d plane;          /**< plane of the grid origins (0 = DE_PLANE_SIDE_XZ) */
+    const de_allocator *alloc;  /**< system state; NULL = de_heap_allocator() */
+} de_nav2d_grid_system_desc;
+
+/**
+ * Registers the nav authoring components (DeNavGrid2D, DeNavLink, DeNavModifier), the resource
+ * `DeNavGrid2DSystemRef` and the system `nav2d.grid` in `w`. Attaching the same world again does
+ * nothing. The state is freed with the world or by de_nav2d_grid_detach. Main thread, outside
+ * schedules. Find the component with de_component_find(w, "DeNavGrid2D").
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (NULL `w`), DE_ERR_OUT_OF_MEMORY or the registration's
+ *         error.
+ */
+DE_API de_result de_nav2d_grid_attach(de_world *w, const de_nav2d_grid_system_desc *desc);
+/** Removes the system and the resource and frees every grid. Entities stay. */
+DE_API void de_nav2d_grid_detach(de_world *w);
+/** Runs the work of `nav2d.grid` now. Outside a system every grid counts as changed, so each one
+ *  is built again. For tools and tests. Main thread, outside schedules. */
+DE_API void de_nav2d_grid_flush(de_world *w);
+/**
+ * The built grid of `e`, for de_nav2d_find_path. `out->walkable` points into the system's state:
+ * valid until the next run of `nav2d.grid`, de_nav2d_grid_flush or de_nav2d_grid_detach. Read it
+ * from any system after PreUpdate, or outside schedules. `revision` (may be NULL) gets a number
+ * that grows each time the grid of `e` is built, so a caller can tell when to plan again.
+ * @return false (and `*out` zeroed) when `w` has no grid system, `e` has no built grid, or the
+ *         component is not a valid grid.
+ */
+DE_API bool de_nav2d_grid_get(de_world *w, de_entity e, de_nav2d_grid *out, u32 *revision);
+
 /* ===================== Tilemaps (LDtk / Tiled / Aseprite tilesets) ===================== */
 typedef struct DeTilemap {
     de_tilemap map;

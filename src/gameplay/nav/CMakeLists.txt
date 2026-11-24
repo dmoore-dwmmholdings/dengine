@@ -4,6 +4,7 @@
 # type (nav_asset.c). Queries and deterministic mode (nav_query.c), off-mesh links and dynamic
 # obstacles (nav_obstacles.c) are DENG-77; crowds (DENG-78) come later.
 # 2D grid A* / JPS and the 2D polygon navmesh (nav2d_*.c) are DENG-79: pure C, no Recast.
+# The DeNavGrid2D system `nav2d.grid` (nav2d_grid_system.c) is DENG-832.
 de_add_module(
     NAME nav
     LAYER gameplay
@@ -19,6 +20,7 @@ de_add_module(
         nav2d_internal.h
         nav2d_grid.c
         nav2d_mesh.c
+        nav2d_grid_system.c
     DEPS ecs asset
     OPTIONAL_DEPS physics
     OPTIONAL_OPTION DE_WITH_NAV
