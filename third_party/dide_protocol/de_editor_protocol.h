@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.26"
-#define DE_EP_SCHEMA_HASH "5e3a10dacd5d4be2"
+#define DE_EP_PROTOCOL_VERSION "1.27"
+#define DE_EP_SCHEMA_HASH "b875aa2ebdb0ba54"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -124,6 +124,13 @@ typedef enum de_ep_nav_bake_state {
 } de_ep_nav_bake_state;
 const char *de_ep_nav_bake_state_name(de_ep_nav_bake_state v);
 bool de_ep_nav_bake_state_parse(de_ep_str s, de_ep_nav_bake_state *out);
+
+typedef enum de_ep_nav_plane2d {
+    DE_EP_NAV_PLANE2D_SIDE_XZ,
+    DE_EP_NAV_PLANE2D_TOP_XY,
+} de_ep_nav_plane2d;
+const char *de_ep_nav_plane2d_name(de_ep_nav_plane2d v);
+bool de_ep_nav_plane2d_parse(de_ep_str s, de_ep_nav_plane2d *out);
 
 typedef enum de_ep_nav_tile_state {
     DE_EP_NAV_TILE_STATE_UNBAKED,
@@ -332,6 +339,8 @@ typedef struct de_ep_nav_configure_params de_ep_nav_configure_params;
 typedef struct de_ep_nav_info de_ep_nav_info;
 typedef struct de_ep_nav_overlay_params de_ep_nav_overlay_params;
 typedef struct de_ep_nav_path de_ep_nav_path;
+typedef struct de_ep_nav_path2d de_ep_nav_path2d;
+typedef struct de_ep_nav_test_path2d_params de_ep_nav_test_path2d_params;
 typedef struct de_ep_nav_test_path_params de_ep_nav_test_path_params;
 typedef struct de_ep_nav_tile de_ep_nav_tile;
 typedef struct de_ep_nav_tile_key de_ep_nav_tile_key;
@@ -1838,7 +1847,9 @@ struct de_ep_nav_overlay_params {
     bool tiles; /* tile borders, coloured by NavTileState */
     bool links; /* off-mesh links as arcs, with an arrow head on one-way links */
     bool has_path;
-    de_ep_list_f64 path; /* a polyline to draw (the test path), 3 values per point */
+    de_ep_list_f64 path; /* a polyline to draw (the test path, navmesh or 2D grid), 3 values per point */
+    bool has_grids;
+    bool grids; /* 1.27: DeNavGrid2D cells: walkable cells by area colour, blocked cells dark; absent: false */
 };
 
 struct de_ep_nav_info {
@@ -1858,6 +1869,8 @@ struct de_ep_nav_info {
     bool has_bake;
     uint32_t bake; /* the running bake, if any */
     de_ep_nav_overlay_params overlay;
+    bool has_plane2d;
+    de_ep_nav_plane2d plane2d; /* 1.27: the 2D plane DeNavGrid2D grids lie on (de_plane_2d of the nav2d.grid system); absent: the engine has no 2D grid paths */
 };
 
 struct de_ep_nav_path {
@@ -1868,6 +1881,21 @@ struct de_ep_nav_path {
     bool partial; /* to cannot be reached: the path ends at the reachable point nearest to it */
     de_ep_list_u64 links; /* the link entities the path uses, in order */
     uint64_t revision; /* the NavInfo.revision the path was found on */
+};
+
+struct de_ep_nav_path2d {
+    de_ep_list_f64 points; /* the turning points as cell centres, 3 values each in world space, from the start cell to the goal cell (one point when both are the same cell); the off-plane coordinate is the grid entity's */
+    double length; /* m along points */
+    uint64_t revision; /* the grid's build revision (de_nav2d_grid_get); it grows each time the grid is built again */
+};
+
+/* de_nav2d_find_path on the built grid of a DeNavGrid2D entity: 8 neighbours, octile costs, no corner cutting. not_found when from or to is outside the grid or on a blocked cell (area 255), or the two are not connected (the message says which); invalid_params for an entity without a valid grid (no DeNavGrid2D, width or height outside 1..64, cell_size not > 0) or a bad point. */
+struct de_ep_nav_test_path2d_params {
+    uint64_t grid; /* the entity with DeNavGrid2D */
+    de_ep_list_f64 from; /* [x, y, z] world; the engine projects it onto NavInfo.plane2d */
+    de_ep_list_f64 to; /* [x, y, z] world */
+    bool has_jps;
+    bool jps; /* Jump Point Search (same cost, fewer expanded cells); absent: true */
 };
 
 /* de_nav_find_path on one agent type's navmesh. not_found when no navmesh is near from or to (the message says which), invalid_params for an unknown agent or a bad point. */
@@ -3271,6 +3299,10 @@ void de_ep_write_nav_overlay_params(mpack_writer_t *w, const de_ep_nav_overlay_p
 void de_ep_read_nav_overlay_params(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_overlay_params *out);
 void de_ep_write_nav_path(mpack_writer_t *w, const de_ep_nav_path *v);
 void de_ep_read_nav_path(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_path *out);
+void de_ep_write_nav_path2d(mpack_writer_t *w, const de_ep_nav_path2d *v);
+void de_ep_read_nav_path2d(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_path2d *out);
+void de_ep_write_nav_test_path2d_params(mpack_writer_t *w, const de_ep_nav_test_path2d_params *v);
+void de_ep_read_nav_test_path2d_params(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_test_path2d_params *out);
 void de_ep_write_nav_test_path_params(mpack_writer_t *w, const de_ep_nav_test_path_params *v);
 void de_ep_read_nav_test_path_params(mpack_reader_t *r, de_ep_arena *a, de_ep_nav_test_path_params *out);
 void de_ep_write_nav_tile(mpack_writer_t *w, const de_ep_nav_tile *v);
@@ -3638,6 +3670,7 @@ typedef enum de_ep_method {
     DE_EP_METHOD_NAV_INFO,
     DE_EP_METHOD_NAV_OVERLAY,
     DE_EP_METHOD_NAV_TEST_PATH,
+    DE_EP_METHOD_NAV_TEST_PATH2D,
     DE_EP_METHOD_NAV_TILE_MESH,
     DE_EP_METHOD_NAV_TILES,
     DE_EP_METHOD_NET_CHECKSUMS,
@@ -3890,6 +3923,8 @@ bool de_ep_read_params_nav_overlay(const de_ep_request *req, de_ep_arena *a, de_
 void de_ep_write_response_nav_overlay(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_nav_test_path(const de_ep_request *req, de_ep_arena *a, de_ep_nav_test_path_params *out);
 void de_ep_write_response_nav_test_path(mpack_writer_t *w, uint64_t id, const de_ep_nav_path *result);
+bool de_ep_read_params_nav_test_path2d(const de_ep_request *req, de_ep_arena *a, de_ep_nav_test_path2d_params *out);
+void de_ep_write_response_nav_test_path2d(mpack_writer_t *w, uint64_t id, const de_ep_nav_path2d *result);
 bool de_ep_read_params_nav_tile_mesh(const de_ep_request *req, de_ep_arena *a, de_ep_nav_tile_mesh_params *out);
 void de_ep_write_response_nav_tile_mesh(mpack_writer_t *w, uint64_t id, const de_ep_nav_tile_mesh *result);
 bool de_ep_read_params_nav_tiles(const de_ep_request *req, de_ep_arena *a, de_ep_nav_tiles_params *out);

@@ -245,7 +245,7 @@ TEST(editor_material_graph, hello_reports_server_protocol) {
     EXPECT_TRUE(str_is(r.server_protocol, DE_EP_PROTOCOL_VERSION));
     EXPECT_TRUE(r.has_schema);
     EXPECT_TRUE(str_is(r.schema, DE_EP_SCHEMA_HASH));
-    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.26"); /* pinned dide 8ba115b0 (DENG-831) */
+    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.27"); /* pinned dide 4538ed96 (DENG-863) */
     fx_teardown(&f);
 }
 

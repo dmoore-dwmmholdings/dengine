@@ -1,14 +1,15 @@
-/* editor_nav.c: world.nav (DENG-582; DIDE protocol 1.25, DIDE-128, DIDE-R174).
+/* editor_nav.c: world.nav (DENG-582; DIDE protocol 1.25, DIDE-128, DIDE-R174; DENG-863: 1.27).
  *
  * Methods nav.info, nav.configure, nav.bake, nav.cancelBake, nav.tiles, nav.tileMesh,
- * nav.testPath and nav.overlay, and the topic nav.bake. The service keeps one editor de_nav per
+ * nav.testPath, nav.testPath2d and nav.overlay, and the topic nav.bake. The service keeps one editor de_nav per
  * agent type, bound (not attached) to the engine's world, and bakes the protocol's tiles one
  * de_nav_rebuild_tiles call each on the nav's task system, a few in flight at a time. The
  * reflected components DeNavLink and DeNavModifier (src/gameplay/nav/nav_components.c) go into
  * every bake as off-mesh links and area or carve volumes. DeNavGrid2D is registered and
- * reflected here; the game runtime builds it with the `nav2d.grid` system (DENG-832,
- * de_nav2d_grid_attach). The service has no 2D test path or overlay yet (needs a DIDE IDL
- * change).
+ * reflected here and the service attaches the `nav2d.grid` system (DENG-832,
+ * de_nav2d_grid_attach) to the editor world, unless a game already did. nav.testPath2d runs
+ * de_nav2d_find_path on the built grid of a DeNavGrid2D entity; NavInfo.plane2d reports the
+ * system's plane (side_xz by default); NavOverlayParams.grids draws the cells (DENG-863).
  *
  * Axes: the engine is Z-up, so tile (x, y) covers bounds.min + [x, y] * tileSize along world X
  * and Y. Engine tiles lie on a world grid (the navmesh origin is on the 256 m grid), so
@@ -51,6 +52,7 @@
 #define NV_PATH_VALUES   3072u /* overlay path: 1024 points */
 #define NV_DRAW_TRIS     4096u /* triangles read per tile for the overlay */
 #define NV_DRAW_LINES    30000u
+#define NV_DRAW_CELLS    16384u /* grid cells drawn per frame (4 grids of 64 x 64) */
 #define NV_NAME_MAX      32u
 #define NV_AREA_NAME_MAX 63u
 
@@ -131,7 +133,7 @@ typedef struct nv_state {
     /* The overlay. */
     bool ov_has_agent;
     char ov_agent[NV_NAME_MAX + 1];
-    bool ov_navmesh, ov_tiles, ov_links;
+    bool ov_navmesh, ov_tiles, ov_links, ov_grids;
     bool ov_has_path;
     f64 ov_path[NV_PATH_VALUES];
     u32 ov_path_count;
@@ -719,8 +721,12 @@ static void sync_world(de__editor *ed) {
     drop_all();
     g_nv.world = w;
     g_nv.has_ids = false;
-    if (w != NULL)
+    if (w != NULL) {
         (void)ensure_ids(ed);
+        /* DENG-863: the 2D grids nav.testPath2d and the grid overlay read. A no-op when the
+         * world has the system already (a game that chose its own plane). */
+        (void)de_nav2d_grid_attach(w, NULL);
+    }
 }
 
 /* ---------- Defaults ---------- */
@@ -870,6 +876,14 @@ static bool f64_list(de_ep_arena *a, de_ep_list_f64 *out, const f64 *v, u32 n) {
     return true;
 }
 
+/* The plane of the world's nav2d.grid system; side_xz when it has none. */
+static de_plane_2d plane2d_of(de_world *w) {
+    de_plane_2d p = DE_PLANE_SIDE_XZ;
+    if (w != NULL)
+        (void)de_nav2d_grid_plane(w, &p);
+    return p;
+}
+
 static bool fill_info(de_ep_arena *a, de_ep_nav_info *o) {
     memset(o, 0, sizeof *o);
     static const f64 up[3] = {0, 0, 1};
@@ -920,9 +934,14 @@ static bool fill_info(de_ep_arena *a, de_ep_nav_info *o) {
     ov->navmesh = g_nv.ov_navmesh;
     ov->tiles = g_nv.ov_tiles;
     ov->links = g_nv.ov_links;
+    ov->has_grids = true;
+    ov->grids = g_nv.ov_grids;
     ov->has_path = g_nv.ov_has_path;
     if (ov->has_path && !f64_list(a, &ov->path, g_nv.ov_path, g_nv.ov_path_count))
         return false;
+    o->has_plane2d = true;
+    o->plane2d = plane2d_of(g_nv.world) == DE_PLANE_TOP_XY ? DE_EP_NAV_PLANE2D_TOP_XY
+                                                           : DE_EP_NAV_PLANE2D_SIDE_XZ;
     return true;
 }
 
@@ -1459,6 +1478,126 @@ static void on_test_path(de__editor *ed, const de_ep_request *req, de_ep_arena *
     de_ep_write_response_nav_test_path(w, req->id, &o);
 }
 
+/* ---------- nav.testPath2d ---------- */
+
+/* The cell of plane coordinate `p` on `g`: false when outside the grid. */
+static bool cell_of(const de_nav2d_grid *g, de_vec2 p, u32 *cx, u32 *cy) {
+    const f64 fx = floor(((f64)p.x - (f64)g->origin.x) / (f64)g->cell_size);
+    const f64 fy = floor(((f64)p.y - (f64)g->origin.y) / (f64)g->cell_size);
+    if (!(fx >= 0.0 && fx < (f64)g->width && fy >= 0.0 && fy < (f64)g->height))
+        return false;
+    *cx = (u32)fx;
+    *cy = (u32)fy;
+    return true;
+}
+
+/* The grid entity's coordinate across the plane: the points keep it (the protocol's "off-plane
+ * coordinate is the grid entity's"). Read as the system reads the origin: global, else local. */
+static f64 depth_of(de_world *w, de_entity e, de_plane_2d plane) {
+    const de_builtin_component_ids b = de_builtin_components(w);
+    const de_transform *t = NULL;
+    if (DE_HANDLE_VALID(b.global_transform))
+        t = (const de_transform *)de_entity_get_const(w, e, b.global_transform);
+    if (t == NULL && DE_HANDLE_VALID(b.transform))
+        t = (const de_transform *)de_entity_get_const(w, e, b.transform);
+    if (t == NULL)
+        return 0.0;
+    return plane == DE_PLANE_SIDE_XZ ? t->position.y : t->position.z;
+}
+
+/* The built grid of `e`. The system builds grids in PreUpdate; when the component is valid but
+ * has no grid yet (added since the last run, or the schedule is not running), build now. A flush
+ * builds every grid again, so it runs only for a valid grid that is missing. */
+static bool built_grid(de_world *w, de_entity e, de_nav2d_grid *out, u32 *revision) {
+    if (de_nav2d_grid_get(w, e, out, revision))
+        return true;
+    const DeNavGrid2D *c = g_nv.has_ids ? (const DeNavGrid2D *)de_entity_get_const(w, e, g_nv.ids.grid)
+                                         : NULL;
+    if (c == NULL || c->width < 1 || c->width > 64 || c->height < 1 || c->height > 64 ||
+        !(c->cell_size > 0.0f))
+        return false;
+    de_nav2d_grid_flush(w);
+    return de_nav2d_grid_get(w, e, out, revision);
+}
+
+static void on_test_path2d(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                           mpack_writer_t *w) {
+    DE__ED_PARAMS(nav_test_path2d, de_ep_nav_test_path2d_params, q);
+    sync_world(ed);
+    de_world *world = g_nv.world;
+    de_entity e;
+    e.bits = q.grid;
+    de_nav2d_grid grid;
+    u32 revision = 0;
+    const bool have = world != NULL && de_entity_alive(world, e) &&
+                      built_grid(world, e, &grid, &revision);
+    if (!have) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS,
+                     "nav.testPath2d: entity %llu has no valid DeNavGrid2D grid",
+                     (unsigned long long)q.grid);
+        return;
+    }
+    if (!finite3(&q.from) || !finite3(&q.to)) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS,
+                     "nav.testPath2d: %s needs 3 finite values", finite3(&q.from) ? "to" : "from");
+        return;
+    }
+    const de_plane_2d plane = plane2d_of(world);
+    const de_dvec3 fw = {q.from.items[0], q.from.items[1], q.from.items[2]};
+    const de_dvec3 tw = {q.to.items[0], q.to.items[1], q.to.items[2]};
+    const de_vec2 from = de_nav2d_from_world(plane, fw);
+    const de_vec2 to = de_nav2d_from_world(plane, tw);
+    const char *name[2] = {"from", "to"};
+    const de_vec2 ends[2] = {from, to};
+    for (u32 k = 0; k < 2; ++k) {
+        u32 cx, cy;
+        if (!cell_of(&grid, ends[k], &cx, &cy)) {
+            de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND,
+                         "nav.testPath2d: %s is outside the grid", name[k]);
+            return;
+        }
+        if (grid.walkable[cy * grid.width + cx] == 0) {
+            de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND,
+                         "nav.testPath2d: %s is on a blocked cell", name[k]);
+            return;
+        }
+    }
+    const bool jps = q.has_jps ? q.jps : true;
+    de_vec2 *pts = NULL;
+    u32 count = 0;
+    const de_result r = de_nav2d_find_path(&grid, from, to, jps, heap(), &pts, &count);
+    if (r != DE_OK) {
+        de__ed_error(w, req->id, r == DE_ERR_NOT_FOUND ? DE_EP_ERR_NOT_FOUND : DE_EP_ERR_INTERNAL,
+                     r == DE_ERR_NOT_FOUND ? "nav.testPath2d: from and to are not connected"
+                                           : "nav.testPath2d: the path search failed");
+        return;
+    }
+    de_ep_nav_path2d o;
+    memset(&o, 0, sizeof o);
+    o.points.items = count > 0 ? (double *)de__ed_alloc(a, sizeof(double) * 3 * count) : NULL;
+    if (count > 0 && o.points.items == NULL) {
+        de_nav2d_path_free(heap(), pts, count);
+        de__ed_error(w, req->id, DE_EP_ERR_BUSY, "nav.testPath2d: the response does not fit");
+        return;
+    }
+    const f64 depth = depth_of(world, e, plane);
+    for (u32 k = 0; k < count; ++k) {
+        const de_dvec3 p = de_nav2d_to_world(plane, pts[k], depth);
+        o.points.items[k * 3] = p.x;
+        o.points.items[k * 3 + 1] = p.y;
+        o.points.items[k * 3 + 2] = p.z;
+        if (k > 0) {
+            const f64 dx = (f64)pts[k].x - (f64)pts[k - 1].x;
+            const f64 dy = (f64)pts[k].y - (f64)pts[k - 1].y;
+            o.length += sqrt(dx * dx + dy * dy);
+        }
+    }
+    o.points.count = count * 3;
+    o.revision = revision;
+    de_nav2d_path_free(heap(), pts, count);
+    de_ep_write_response_nav_test_path2d(w, req->id, &o);
+}
+
 /* ---------- nav.overlay ---------- */
 
 static void on_overlay(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
@@ -1488,6 +1627,7 @@ static void on_overlay(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
     g_nv.ov_navmesh = q.navmesh;
     g_nv.ov_tiles = q.tiles;
     g_nv.ov_links = q.links;
+    g_nv.ov_grids = q.has_grids && q.grids;
     g_nv.ov_has_path = q.has_path;
     g_nv.ov_path_count = q.has_path ? q.path.count : 0;
     for (u32 i = 0; i < g_nv.ov_path_count; ++i)
@@ -1503,7 +1643,49 @@ static de_vec4 rgba(f32 r, f32 g, f32 b) {
     return c;
 }
 
+/* DENG-863: the cells of every DeNavGrid2D grid as flat boxes in the navigation category:
+ * walkable cells by area colour, blocked cells (255) dark. Cells of a grid the system has not
+ * built (an invalid grid) are skipped. */
+static void draw_grids(void) {
+    de_world *w = g_nv.world;
+    if (w == NULL || !g_nv.has_ids)
+        return;
+    scan(w, g_nv.ids.grid);
+    const de_plane_2d plane = plane2d_of(w);
+    const de_draw_category c = g_nv.cat;
+    u32 cells = 0;
+    for (u32 i = 0; i < g_scan.n && cells < NV_DRAW_CELLS; ++i) {
+        de_entity e;
+        e.bits = g_scan.bits[i];
+        de_nav2d_grid g;
+        const DeNavGrid2D *comp = (const DeNavGrid2D *)de_entity_get_const(w, e, g_nv.ids.grid);
+        if (comp == NULL || !built_grid(w, e, &g, NULL))
+            continue;
+        const f64 depth = depth_of(w, e, plane);
+        for (u32 y = 0; y < g.height && cells < NV_DRAW_CELLS; ++y)
+            for (u32 x = 0; x < g.width && cells < NV_DRAW_CELLS; ++x, ++cells) {
+                const u8 area = comp->cells[y * g.width + x];
+                const de_vec4 col = area == DE_NAV_GRID2D_BLOCKED
+                                        ? rgba(0.12f, 0.12f, 0.15f)
+                                        : rgba(0.2f + 0.05f * (f32)(area % 16), 0.7f,
+                                               0.9f - 0.05f * (f32)(area % 16));
+                const de_vec2 lo = {g.origin.x + (f32)x * g.cell_size,
+                                    g.origin.y + (f32)y * g.cell_size};
+                const de_vec2 hi = {lo.x + g.cell_size, lo.y + g.cell_size};
+                const de_dvec3 a = de_nav2d_to_world(plane, lo, depth);
+                const de_dvec3 b = de_nav2d_to_world(plane, hi, depth);
+                const de_dvec3 mn = {a.x < b.x ? a.x : b.x, a.y < b.y ? a.y : b.y,
+                                     a.z < b.z ? a.z : b.z};
+                const de_dvec3 mx = {a.x < b.x ? b.x : a.x, a.y < b.y ? b.y : a.y,
+                                     a.z < b.z ? b.z : a.z};
+                de_draw_box(c, mn, mx, col, 0.0f);
+            }
+    }
+}
+
 static void draw_overlay(void) {
+    if (g_nv.ov_grids)
+        draw_grids();
     if (!g_nv.ov_has_agent)
         return;
     const i32 ai = agent_index(de_ep_cstr(g_nv.ov_agent));
@@ -1594,7 +1776,7 @@ static void reset(de__editor *ed) {
     g_nv.ov_has_agent = false;
     g_nv.ov_has_path = false;
     g_nv.ov_path_count = 0;
-    g_nv.ov_navmesh = g_nv.ov_tiles = g_nv.ov_links = false;
+    g_nv.ov_navmesh = g_nv.ov_tiles = g_nv.ov_links = g_nv.ov_grids = false;
 }
 
 void de__ed_nav_register(de__editor *ed) {
@@ -1612,6 +1794,7 @@ void de__ed_nav_register(de__editor *ed) {
     de__ed_on(ed, DE_EP_METHOD_NAV_TILES, on_tiles);
     de__ed_on(ed, DE_EP_METHOD_NAV_TILE_MESH, on_tile_mesh);
     de__ed_on(ed, DE_EP_METHOD_NAV_TEST_PATH, on_test_path);
+    de__ed_on(ed, DE_EP_METHOD_NAV_TEST_PATH2D, on_test_path2d);
     de__ed_on(ed, DE_EP_METHOD_NAV_OVERLAY, on_overlay);
     de__ed_on_tick(ed, tick);
     de__ed_on_reset(ed, reset);
